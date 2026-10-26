@@ -1,41 +1,15 @@
 # amness
 
-**A terminal coding agent for any model, with guardrails.** One conversation in your terminal, streaming output, permission prompts with diffs, plan mode, undo, memory and MCP, built on a small reliability harness that works with OpenAI (Responses API), Claude, and local models.
+**A terminal coding agent for any model, with guardrails.** A full-screen terminal UI with cards, diffs, a session sidebar and mouse support; permission prompts with diffs, plan mode, undo, memory and MCP, built on a small reliability harness that works with OpenAI (Responses API), Claude, and local models.
 
 [![CI](https://github.com/amirsdream/amness/actions/workflows/ci.yml/badge.svg)](https://github.com/amirsdream/amness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933)
 ![Dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
 
-```
-╭─ welcome ────────────────────────────────────────────────────╮
-│  ▗▄▄▄▄▄▖   ▄▀█ █▀▄▀█ █▄ █ █▀▀ █▀ █▀                          │
-│  █ ◖ ◗ █   █▀█ █ ▀ █ █ ▀█ ██▄ ▄█ ▄█                          │
-│  ▝▀▀▀▀▀▘   v0.1.0 · reliable agents for any model            │
-│                                                              │
-│ model    ◈ gpt-6.1-sol                                       │
-│ project  ~/code/my-app  ⎇ main                               │
-╰──────────────────────────────────────────────────────────────╯
+<p align="center"><img src="docs/images/chat.png" alt="amness full-screen interface: cards, diff, sidebar, input panel" width="900"></p>
 
-❯ fix the off-by-one in paginate()
-
-● Search("paginate")
-  ⎿  3 matches in 2 files
-● Read(src/app.ts)
-  ⎿  Read 6 lines
-● Update(src/app.ts)
-  ⎿  Added 1 line, removed 1 line
-       3 -   for (let i = 0; i < n; i++) out.push(items[i]);
-       3 +   for (let i = 0; i <= n; i++) out.push(items[i]);
-
-✻ Working… (12s · ↓ 4.2k tokens ▂▄▆ · esc to interrupt)
-──────────────────────────────────────────────────────────────
-❯
-──────────────────────────────────────────────────────────────
- ? for shortcuts · ctrl+p commands      ◈ gpt-6.1-sol · ▰▰▱▱▱▱▱▱ 24% · $0.18
-```
-
-<sub>Abridged, illustrative session (the welcome card is the real layout).</sub>
+<sub>The full-screen interface (aurora theme): collapsible tool cards, a diff with word-level marks, the session sidebar and the input panel. Screenshots are rendered from the real UI by the test harness.</sub>
 
 ## Contents
 
@@ -76,6 +50,7 @@ To use it in your own project, run it from that project's folder (`node /path/to
 amness                              # start a conversation
 amness "fix the failing test"       # start with a prompt
 amness -c                           # continue the last conversation in this directory
+amness --inline                     # use the inline renderer (your terminal's scrollback)
 amness menu                         # classic menu: guided demo, evals, research agent, settings
 amness demo                         # guided demo, no API key needed
 ```
@@ -94,6 +69,13 @@ No API key yet? Run `amness demo`: a scripted model makes the mistakes real mode
 - **Modals** for approvals (with the diff, command or plan), the command palette (`Ctrl+P`), pickers and help.
 - **Themes**: `aurora` (default), `tokyo-night`, `catppuccin`, `gruvbox`, `nord`, `daylight` (light), `terminal` (transparent). `/theme` previews live, `Ctrl+T` cycles; truecolor with 256/16-colour fallback.
 - Other keys: `PgUp/PgDn`, `Ctrl+Home/End`, `Ctrl+O` expand all, `Ctrl+L` redraw. `/sidebar`, `/details`, `/diffmode`, `/mouse`, `/ui`.
+
+<table>
+<tr><td width="50%"><img src="docs/images/approval.png" alt="approval modal with diff"></td><td width="50%"><img src="docs/images/palette.png" alt="command palette"></td></tr>
+<tr><td align="center"><sub>Approval modal with the exact diff</sub></td><td align="center"><sub>Command palette (<code>Ctrl+P</code>)</sub></td></tr>
+<tr><td><img src="docs/images/welcome.png" alt="welcome screen"></td><td><img src="docs/images/daylight.png" alt="daylight light theme"></td></tr>
+<tr><td align="center"><sub>Welcome screen with quick actions</sub></td><td align="center"><sub>Light theme (<code>daylight</code>)</sub></td></tr>
+</table>
 
 Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inline"` in the config, or `AMNESS_UI=inline`, or `/ui inline`). It falls back to inline automatically on tiny or `TERM=dumb` terminals.
 
@@ -116,7 +98,9 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `Shift+Tab` | cycle permission mode |
 | `Esc` | interrupt at a safe point · close popup · `Esc Esc` opens rewind |
 | `Ctrl+C` | interrupt · clear input · exit (press twice) |
-| `Ctrl+O` | scrollable full transcript · `Ctrl+L` redraw · `?` shortcuts |
+| `Ctrl+O` | expand/collapse all tool details (inline: scrollable transcript) · `Ctrl+L` redraw · `?` shortcuts |
+| `Ctrl+B` · `Ctrl+T` | toggle sidebar · cycle theme (full-screen) |
+| `PgUp/PgDn` · `Ctrl+Home/End` | scroll the transcript · jump to the end |
 
 **Permission modes** (`Shift+Tab` or `/mode`):
 
@@ -137,6 +121,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
 | `/memory` · `/init` | list/forget/add memory notes · have the agent write `AGENTS.md` |
 | `/export` · `/import` · `/live` · `/mcp` | portable bundle, continue from one, browser live view, attach an MCP server |
+| `/theme` · `/sidebar` · `/details` · `/diffmode` · `/mouse` · `/ui` | appearance and interface: theme (live preview), sidebar, expand tool details, stacked/split diffs, mouse on/off, full-screen/inline |
 
 **Your own commands.** Put `review.md` in `.amness/commands/` (or `~/.amness/commands/`) and `/review <args>` runs it as a prompt (`$ARGUMENTS` is substituted; a `description:` front-matter line shows in the popup). Commit the folder to share it with your team.
 
@@ -158,7 +143,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 
 In Responses mode requests are stateless (`store: false`): nothing is retained server-side, and opaque reasoning items are replayed with each tool result so multi-step tool use keeps its reasoning. Reasoning summaries stream into the status area while the model thinks. A model switch never replays another model's reasoning.
 
-Environment variables: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `AMNESS_MODEL`, `TAVILY_API_KEY` (better web search for the research agent), `AMNESS_HOME` (config directory, default `~/.amness`), `NO_COLOR`.
+Environment variables: `AMNESS_UI` (`full` or `inline`), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `AMNESS_MODEL`, `TAVILY_API_KEY` (better web search for the research agent), `AMNESS_HOME` (config directory, default `~/.amness`), `NO_COLOR`.
 
 ## Headless and CI
 
@@ -217,19 +202,81 @@ Because the CLI relies on Node's built-in TypeScript support, amness is not publ
 
 ## Architecture
 
-```
-cli/amness.ts            entry: chat TUI (default), headless `run`, classic `menu`, `demo`
-cli/tui/                 the chat UI: full-screen renderer (canvas, cards, sidebar, modals, themes) and the inline renderer, editor, keys, markdown, commands
-src/harness.ts           agent loop and guards            src/openai.ts     Responses + Chat Completions adapter
-src/code.ts              coding agent and tools           src/anthropic.ts  Claude adapter
-src/deep.ts, web.ts      research agent                   src/memory.ts     notes, handoffs
-src/dynamic.ts           live tool registry, MCP          src/bundle.ts     portable sessions
-src/evals.ts             A/B evals with held-out checks   src/live.ts       browser live view (127.0.0.1 only)
+Three layers with one-way dependencies: the **UI** (`cli/`) drives the **agent** (`src/code.ts`, `src/deep.ts`) which is built on the **harness** (`src/harness.ts`); models are plain functions injected from outside. The harness and the agents have no dependency on the UI, so everything in `src/` is usable as a library.
+
+```mermaid
+flowchart TB
+  subgraph UI["cli/ : terminal interface"]
+    direction TB
+    entry["amness.ts<br/>chat · run · menu · demo"]
+    app["tui/app.ts<br/>App: input, modes, approvals,<br/>slash commands, sessions"]
+    full["Full-screen view<br/>full.ts · cards · sidebar · modal<br/>canvas · themes · blocks"]
+    inline["Inline view<br/>screen.ts · view.ts"]
+    entry --> app
+    app --> full
+    app --> inline
+  end
+  subgraph AGENT["src/ : agents"]
+    code["code.ts<br/>coding agent + file/shell tools"]
+    deep["deep.ts<br/>research agent + subagents"]
+  end
+  subgraph CORE["harness.ts : the loop"]
+    loop["run(): steer → budget → compact →<br/>model → schedule tools → verify"]
+    reg["Registry<br/>deferred tools · MCP"]
+  end
+  subgraph MODELS["model adapters"]
+    oa["openai.ts<br/>Responses + Chat Completions"]
+    an["anthropic.ts<br/>Claude"]
+    local["any (messages, tools) → message"]
+  end
+  subgraph STATE["state"]
+    mem["memory.ts<br/>notes + handoffs"]
+    bundle["bundle.ts<br/>portable sessions"]
+    sess["cli/tui/session.ts<br/>chats + checkpoints"]
+  end
+  app -->|"events up, prompts down"| code
+  code --> loop
+  deep --> loop
+  loop --> reg
+  loop -->|"model(messages, tools)"| oa
+  loop --> an
+  loop --> local
+  code --> mem
+  app --> sess
+  app --> bundle
 ```
 
-The runtime has no dependencies. The UI draws a small live region at the bottom of the terminal and prints everything else into normal scrollback, like most modern terminal agents, so there is no alternate screen except for the transcript pager.
+| Path | Role |
+|---|---|
+| `cli/amness.ts` | entry point: chat (default), headless `run`, classic `menu`, `demo`; chooses full-screen or inline |
+| `cli/tui/app.ts` | the `App`: key handling, permission modes, approvals, slash commands, queued steering, undo/rewind |
+| `cli/tui/full.ts` + `cards.ts`, `sidebar.ts`, `modal.ts`, `diffview.ts` | full-screen view: layout, transcript cards, sidebar, modals, diff renderer |
+| `cli/tui/blocks.ts` | retained transcript model (user, assistant, tool, thinking, notice blocks) that the full-screen view renders from |
+| `cli/tui/canvas.ts`, `ansi.ts`, `themes.ts`, `rich.ts` | cell grid with diffing flush, ANSI parsing, the seven themes, shared styling helpers |
+| `cli/tui/screen.ts`, `view.ts` | the inline renderer (live region plus native scrollback) |
+| `src/harness.ts` | the agent loop and guards (see below); `Registry`, `Budget`, `extract()` |
+| `src/code.ts`, `src/deep.ts` | coding agent (file and shell tools, subagent `task`, todos, plan mode) and research agent |
+| `src/openai.ts`, `src/anthropic.ts` | model adapters; a model is just `(messages, tools, opts) => Promise<Message>` |
+| `src/memory.ts`, `src/bundle.ts`, `src/dynamic.ts` | memory notes and handoffs, portable session bundles, live tool registry and MCP |
+| `src/evals.ts`, `src/live.ts` | A/B evals with held-out checks; browser live view (`127.0.0.1` only) |
+
+**How the full-screen UI draws.** Agent events are written into the block store; each block renders to rows of styled cells (cached by content signature); the view lays out header, transcript, sidebar, input and footer onto a `Canvas`, and `Canvas.flush()` writes only the cells that changed, wrapped in synchronized-output markers so frames never tear. Mouse (SGR 1006), bracketed paste and OSC 52 clipboard are enabled while it runs and restored on exit. The inline renderer shares the same `App` and agent events, so both interfaces behave identically.
+
+The runtime has no dependencies.
 
 ## The agent loop
+
+```mermaid
+flowchart LR
+  A["steer<br/>messages typed meanwhile"] --> B["budget<br/>check"] --> C["compact<br/>supersede · elide · handoff"] --> D["model call<br/>streaming"]
+  D -->|tool calls| E["validate · approve ·<br/>schedule: reads in parallel,<br/>writes one at a time"]
+  E --> F{"all failed?"}
+  F -->|"3×: reflect, 6×: stop"| A
+  F -->|no| A
+  D -->|finish| G{"verify gate<br/>npm test"}
+  G -->|rejected + feedback| A
+  G -->|passes| H(["done"])
+```
 
 Each turn: steer (messages you typed meanwhile) → budget check → compaction → model call → tool calls → verification gate. The details that keep long runs reliable:
 
@@ -252,7 +299,7 @@ Each turn: steer (messages you typed meanwhile) → budget check → compaction 
 ```bash
 npm install
 npm run typecheck      # tsc --noEmit over src, cli, tests and examples
-npm test               # unit and in-process UI tests (~160), run on Node's built-in test runner
+npm test               # unit and in-process UI tests (180+), run on Node's built-in test runner
 npm run test:pty       # the real binary in a pseudo-terminal against a mock streaming server (needs python3)
 ```
 
