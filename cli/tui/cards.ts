@@ -1,0 +1,141 @@
+// Card renderers for the full-screen transcript: each block becomes rows of styled cells exactly `ctx.width` wide.
+import type { Block } from "./blocks.ts";
+import { type Cell, mix, parseAnsi } from "./ansi.ts";
+import { langOf, renderDiffRows } from "./diffview.ts";
+import { highlightWith, renderMarkdown, type HlKind } from "./markdown.ts";
+import { B, BOLD, F, ITAL, chip, fit, split, themeSkin } from "./rich.ts";
+import { cellWidth, clipWidth, strip, wrapAnsi } from "./text.ts";
+import type { Theme } from "./themes.ts";
+import { toolLabel, argSummary } from "./view.ts";
+
+export type RenderCtx = {
+  theme: Theme; width: number; now: number; frame: number; expandAll: boolean; live: boolean;
+  brand: { icon: string; color: number }; diffMode: "auto" | "stacked" | "split";
+};
+export type Hit = { row: number; x0: number; x1: number; kind: "toggle" | "more"; id: number };
+export type Rendered = { rows: Cell[][]; hits: Hit[]; text: string[] };
+
+const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+const MARGIN = 2;
+const fmtMs = (ms: number) => (ms < 1000 ? `${Math.round(ms)}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`);
+
+/** Short, honest one-line summary of a tool result for the card header. */
+export function summarize(name: string, raw: string, result: string): string {
+  const lines = result.split("\n"), count = (re = /./) => lines.filter((l) => re.test(l)).length;
+  switch (name) {
+    case "read_file": return `${count()} line${count() === 1 ? "" : "s"}`;
+    case "list_files": return `${count()} file${count() === 1 ? "" : "s"}`;
+    case "grep": { if (/^no matches/.test(result)) return "no matches"; const hits = lines.filter(Boolean), files = new Set(hits.map((l) => l.split(":")[0])); return `${hits.length} match${hits.length === 1 ? "" : "es"} in ${files.size} file${files.size === 1 ? "" : "s"}`; }
+    case "sh": return (lines[0] ?? "").replace("exit=", "exit ");
+    case "web_search": return `${(result.match(/^\d+\./gm) ?? []).length} results`;
+    case "fetch_url": return `${result.length.toLocaleString()} chars`;
+    case "task": return "done";
+    case "memory_save": case "memory_forget": return strip(result).slice(0, 40);
+    default: return strip(lines.find(Boolean) ?? "").slice(0, 44);
+  }
+}
+
+export function renderBlock(b: Block, c: RenderCtx): Rendered {
+  const t = c.theme, bw = c.width - MARGIN * 2, rows: string[] = [], hits: Hit[] = [];
+  const blank = () => rows.push("");
+  const done = (): Rendered => {
+    const cells = rows.map((r) => padLeft(parseAnsi(" ".repeat(MARGIN) + r), c.width));
+    return { rows: cells, hits, text: cells.map((r) => r.map((x) => x.ch).join("").replace(/\s+$/, "")) };
+  };
+
+  if (b.kind === "user") {
+    blank();
+    const inner = bw - 4, bar = F(t.accent, "▎"), lines = b.text.split("\n").flatMap((l) => wrapAnsi(l, inner, 0));
+    rows.push(fit(bar, bw, t.surface2));
+    lines.forEach((l, i) => rows.push(i === 0 && b.queued ? split(`${bar} ${F(t.text, l)}`, chip("queued", t.onAccent, t.warn), bw, t.surface2) : fit(`${bar} ${F(t.text, l)}`, bw, t.surface2)));
+    if (b.note) rows.push(fit(`${bar} ${F(t.faint, ITAL(b.note))}`, bw, t.surface2));
+    rows.push(fit(bar, bw, t.surface2));
+    return done();
+  }
+
+  if (b.kind === "assistant") {
+    blank();
+    const md = renderMarkdown(b.text || " ", bw - 3, themeSkin(t));
+    const cursor = b.streaming && c.live && Math.floor(c.frame / 4) % 2 === 0 ? F(t.accent, "▍") : "";
+    (md.length ? md : [""]).forEach((l, i) => rows.push((i === 0 ? F(c.brand.color, BOLD(c.brand.icon)) + "  " : "   ") + l + (i === md.length - 1 || md.length === 0 ? cursor : "")));
+    return done();
+  }
+
+  if (b.kind === "summary") {
+    blank();
+    const md = renderMarkdown(b.text, bw - 6, themeSkin(t));
+    rows.push(fit(F(t.ok, "▎") + " " + chip("✓ done", t.onAccent, t.ok, true), bw, t.surface));
+    md.forEach((l) => rows.push(fit(F(t.ok, "▎") + "  " + l, bw, t.surface)));
+    rows.push(fit(F(t.ok, "▎"), bw, t.surface));
+    return done();
+  }
+
+  if (b.kind === "notice") {
+    const col = b.level === "error" ? t.err : b.level === "warn" ? t.warn : b.level === "ok" ? t.ok : t.dim, icon = b.level === "error" ? "✗" : b.level === "warn" ? "⚠" : b.level === "ok" ? "✓" : "·";
+    if (b.level === "info") rows.push("");
+    for (const l of wrapAnsi(b.text, bw - 4, 0)) rows.push(b.level === "error" ? fit(` ${F(col, icon)} ${F(col, l)}`, bw, mix(t.surface, t.err, 0.12)) : ` ${F(col, icon)} ${F(b.level === "info" ? t.dim : t.text, l)}`);
+    return done();
+  }
+
+  if (b.kind === "raw") { for (const l of b.lines) rows.push(l); return done(); }
+
+  if (b.kind === "thinking") {
+    const open = b.expanded ?? false, label = b.active ? `thinking${".".repeat(1 + (Math.floor(c.frame / 3) % 3))}` : `thought for ${fmtMs(b.ms ?? 0)}`;
+    rows.push(`${F(t.faint, open || b.active ? "▾" : "▸")} ${F(t.accent2, "✻")} ${F(t.faint, ITAL(label))}`);
+    if (b.active || open) for (const l of wrapAnsi(b.text.replace(/\s+/g, " ").trim(), bw - 6, 0).slice(b.active ? -3 : 0)) rows.push(`    ${F(t.faint, ITAL(l))}`);
+    hits.push({ row: 0, x0: MARGIN, x1: c.width - MARGIN, kind: "toggle", id: b.id });
+    return done();
+  }
+
+  // ---------------------------------------------------------------- tool card
+  const sub = !!b.agent && b.agent !== "lead", failed = b.status === "fail", edit = b.edit;
+  const hue = failed ? t.err : (({ read_file: t.tool.read, list_files: t.tool.read, grep: t.tool.read, write_file: t.tool.edit, edit_file: t.tool.edit, sh: t.tool.shell, web_search: t.tool.web, fetch_url: t.tool.web, memory_save: t.tool.memory, memory_forget: t.tool.memory, memory_search: t.tool.read, todo_write: t.tool.plan, exit_plan_mode: t.tool.plan, task: t.tool.explore }) as Record<string, number>)[b.name] ?? (b.name.includes("__") ? t.tool.web : t.tool.generic);
+  const expanded = c.expandAll ? true : b.expanded ?? (!!edit || failed);
+  const bg = failed ? mix(t.surface, t.err, 0.14) : t.surface, spinner = SPIN[c.frame % SPIN.length];
+  const label = BOLD(F(failed ? t.err : t.text, toolLabel(b.name))), args = F(t.dim, argSummary(b.name, b.args));
+  const status = b.status === "running"
+    ? F(t.accent2, spinner) + F(t.dim, ` ${fmtMs(c.now - b.t0)}`)
+    : edit ? (edit.created ? chip("new", t.onAccent, t.ok) + " " : "") + F(t.addFg, `+${edit.added}`) + " " + F(t.delFg, `−${edit.removed}`) + (b.ms !== undefined && b.ms >= 50 ? F(t.faint, ` · ${fmtMs(b.ms)}`) : "")
+    : F(failed ? t.err : t.ok, failed ? "✗ " : "✓ ") + F(failed ? t.err : t.dim, summarize(b.name, b.args, b.result ?? "")) + (b.ms !== undefined && b.ms >= 50 ? F(t.faint, ` · ${fmtMs(b.ms)}`) : "");
+  const hasBody = b.status !== "running" && !!(edit || (b.result && b.result.trim()));
+  const caret = F(t.faint, hasBody ? (expanded ? "▾" : "▸") : " ");
+  if (!sub) blank();
+  const head = `${caret} ${F(hue, "●")} ${label}  ${args}`;
+  rows.push(sub ? `   ${F(t.faint, "│")} ${F(hue, "●")} ${F(t.dim, toolLabel(b.name))} ${F(t.faint, argSummary(b.name, b.args))}` : split(" " + head, status + " ", bw, bg));
+  if (!sub && hasBody) hits.push({ row: rows.length - 1, x0: MARGIN, x1: c.width - MARGIN, kind: "toggle", id: b.id });
+
+  if (!sub && hasBody && expanded) {
+    const bar = F(hue, "▏"), body = (s: string) => rows.push(fit(bar + " " + s, bw, bg));
+    if (edit) {
+      const mode = c.diffMode === "auto" ? (bw >= 120 ? "split" : "stacked") : c.diffMode, max = b.more ? Infinity : 28;
+      const d = renderDiffRows(edit.diff, { width: bw - 2, theme: t, lang: langOf(edit.path), mode, maxRows: max });
+      for (const r of d.rows) rows.push(bar + " " + r);
+      if (d.hidden > 0) { rows.push(fit(`${bar}  ${F(t.accent2, `▾ show ${d.hidden} more line${d.hidden === 1 ? "" : "s"}`)}`, bw, t.surface2)); hits.push({ row: rows.length - 1, x0: MARGIN, x1: c.width - MARGIN, kind: "more", id: b.id }); }
+    } else {
+      const res = b.result ?? "", hl = (k: HlKind, s: string) => F(k === "plain" ? t.syn.plain : t.syn[k], s);
+      let lines = res.split("\n"), cap = c.expandAll ? 200 : 60;
+      if (b.name === "sh") {
+        let cmd = ""; try { cmd = JSON.parse(b.args).cmd; } catch { /* leave empty */ }
+        body(F(t.accent, "$ ") + F(t.text, clipWidth(cmd, bw - 8)));
+        lines = lines.slice(1);
+        if (!lines.some((l) => l.trim())) lines = [F(t.faint, "(no output)")];
+      }
+      const lang = b.name === "read_file" ? (() => { try { return langOf(JSON.parse(b.args).path); } catch { return ""; } })() : "";
+      for (const l of lines.slice(0, cap)) {
+        if (b.name === "read_file") { const m = l.match(/^(\d+)\t(.*)$/); body(m ? F(t.faint, m[1].padStart(4) + "  ") + highlightWith(clipWidth(m[2], bw - 10), lang, hl) : F(t.dim, l)); }
+        else for (const w of wrapAnsi(l.includes("\x1b") ? l : F(failed && /error|✖|fail|exception|assert|panic|traceback|denied/i.test(l) ? t.err : t.dim, l), bw - 4, 0)) body(w);   // only the lines that look like errors are red
+      }
+      if (lines.length > cap) body(F(t.faint, `… ${lines.length - cap} more lines (ctrl+o expands everything)`));
+    }
+  }
+  return done();
+}
+
+/** Pad or clip a cell row to exactly `width` cells (default-background padding, so the canvas background shows through). */
+function padLeft(cells: Cell[], width: number): Cell[] {
+  const out: Cell[] = []; let w = 0;
+  for (const c of cells) { if (w + c.w > width) break; out.push(c); w += c.w; }
+  while (w < width) { out.push({ ch: " ", w: 1, fg: -1, bg: -1, attr: 0 }); w++; }
+  return out;
+}
+void cellWidth;

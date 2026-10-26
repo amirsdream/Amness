@@ -11,7 +11,7 @@ export const PROVIDERS = {
 } as const;
 export type ProviderId = keyof typeof PROVIDERS;
 
-export type Config = { provider: ProviderId; baseUrl: string; model: string; apiKey?: string; tavilyKey?: string; maxTokens: number; effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; /** OpenAI wire API: auto (default) picks Responses for reasoning models and self-corrects */ api?: "auto" | "responses" | "chat" };
+export type Config = { provider: ProviderId; baseUrl: string; model: string; apiKey?: string; tavilyKey?: string; maxTokens: number; effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; /** OpenAI wire API: auto (default) picks Responses for reasoning models and self-corrects */ api?: "auto" | "responses" | "chat"; /** full-screen colour theme (see /theme) */ theme?: string; /** which UI to start in */ ui?: "full" | "inline" };
 export const home = () => process.env.AMNESS_HOME ?? join(homedir(), ".amness");
 const file = () => join(home(), "config.json");
 

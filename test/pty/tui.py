@@ -121,7 +121,7 @@ class Term:
         cwd = cwd or tempfile.mkdtemp()            # never run an agent inside the repo under test
         json.dump({"lastDir": proj or cwd, "verifyByDir": {}, "tasks": ["an old task"]}, open(os.path.join(self.home, "state.json"), "w"))
         json.dump({"provider": "custom", "baseUrl": mock.url, "model": model, "maxTokens": 100000}, open(os.path.join(self.home, "config.json"), "w"))
-        env = dict(os.environ, AMNESS_HOME=self.home, TERM="xterm-256color"); env.pop("NO_COLOR", None); env.pop("OPENAI_API_KEY", None)
+        env = dict(os.environ, AMNESS_HOME=self.home, TERM="xterm-256color", AMNESS_UI=os.environ.get("AMNESS_UI", "inline")); env.pop("NO_COLOR", None); env.pop("OPENAI_API_KEY", None)
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(cwd); os.execvpe("node", ["node", "--no-warnings", os.path.join(ROOT, "cli/amness.ts")] + args, env)

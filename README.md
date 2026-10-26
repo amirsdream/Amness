@@ -86,7 +86,18 @@ No API key yet? Run `amness demo`: a scripted model makes the mistakes real mode
 
 ## Using the chat
 
-One conversation, a pinned input box, streaming output. Finished output goes into your normal terminal scrollback, so native scrolling, selection and copy work; only the input and status area is redrawn in place.
+`amness` opens a **full-screen interface** by default: a header (project, branch, model, mode), a scrollable transcript of cards, a session sidebar, a rounded input panel and a status line.
+
+- **Cards.** Your prompts, assistant replies (themed markdown, code blocks with a copy button, tables), collapsible tool cards with status chips, and syntax-highlighted diffs with line numbers and word-level marks (split view on wide terminals).
+- **Sidebar** (`Ctrl+B`): session, context gauge with a per-request sparkline and breakdown, token usage, todos, changed files, workspace.
+- **Mouse.** Wheel scroll, click a card to collapse or expand it, click header chips (model, mode), click suggestions and modal options, drag to select and copy. A "Jump to bottom" pill and a sticky prompt appear while you are scrolled up.
+- **Modals** for approvals (with the diff, command or plan), the command palette (`Ctrl+P`), pickers and help.
+- **Themes**: `aurora` (default), `tokyo-night`, `catppuccin`, `gruvbox`, `nord`, `daylight` (light), `terminal` (transparent). `/theme` previews live, `Ctrl+T` cycles; truecolor with 256/16-colour fallback.
+- Other keys: `PgUp/PgDn`, `Ctrl+Home/End`, `Ctrl+O` expand all, `Ctrl+L` redraw. `/sidebar`, `/details`, `/diffmode`, `/mouse`, `/ui`.
+
+Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inline"` in the config, or `AMNESS_UI=inline`, or `/ui inline`). It falls back to inline automatically on tiny or `TERM=dumb` terminals.
+
+**Inline mode.** One conversation, a pinned input box, streaming output. Finished output goes into your normal terminal scrollback, so native scrolling, selection and copy work; only the input and status area is redrawn in place.
 
 **What you see.** Each tool call is `● Read(src/a.ts)` with a one-line result (long output is summarised; `Ctrl+O` shows everything). Every edit shows a line-numbered diff. A live todo checklist, a status line with elapsed time and tokens, and a footer with permission mode, git branch, model, context gauge and estimated cost. Tool bullets are coloured by kind (read, edit, shell, web, memory, plan) and red when they fail. Truecolor where available, falling back to 256/16 colours and plain text (`NO_COLOR=1`, or when piped).
 
@@ -208,7 +219,7 @@ Because the CLI relies on Node's built-in TypeScript support, amness is not publ
 
 ```
 cli/amness.ts            entry: chat TUI (default), headless `run`, classic `menu`, `demo`
-cli/tui/                 the chat UI: screen renderer, editor, key parser, markdown, overlays, commands, theme
+cli/tui/                 the chat UI: full-screen renderer (canvas, cards, sidebar, modals, themes) and the inline renderer, editor, keys, markdown, commands
 src/harness.ts           agent loop and guards            src/openai.ts     Responses + Chat Completions adapter
 src/code.ts              coding agent and tools           src/anthropic.ts  Claude adapter
 src/deep.ts, web.ts      research agent                   src/memory.ts     notes, handoffs

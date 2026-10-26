@@ -9,14 +9,16 @@ import { createHash } from "node:crypto";
 import { createModel } from "../model.ts";
 import { loadState, saveState } from "../state.ts";
 import { bold, cyan, dim, gray, green, magenta, red, yellow } from "../ui.ts";
+import { BlockStore } from "./blocks.ts";
 import { buildCommands, type Cmd } from "./commands.ts";
+import { FullView } from "./full.ts";
 import { loadCustomCommands } from "./custom.ts";
 import { FileIndex, applySuggestion, rankCommands, rankFiles, tokenAtCursor, type Suggestion, type Token } from "./complete.ts";
 import { Editor } from "./editor.ts";
 import { KeyParser, PASTE_OFF, PASTE_ON, type Key } from "./keys.ts";
 import { renderMarkdown, takeCompleteBlocks } from "./markdown.ts";
 import { expandMentions, attachedNote } from "./mentions.ts";
-import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, editKey, type Overlay, type PickItem } from "./overlays.ts";
+import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, editKey, type ChoiceDetail, type Overlay, type PickItem } from "./overlays.ts";
 import { Pager, transcriptLines } from "./pager.ts";
 import { TIPS, at, brandOf, fg, palette, shimmer, sparkline } from "./theme.ts";
 import { contextWindow, estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
@@ -33,6 +35,8 @@ export type AppOptions = {
   input?: any; output?: Out & { on?: (e: string, f: () => void) => void };
   makeModel?: (cfg: Config) => Model;
   resume?: "last" | string; prompt?: string; persist?: boolean;
+  /** "full" = the full-screen UI (alternate screen, mouse, sidebar); "inline" = the classic scrollback UI. */
+  ui?: "full" | "inline";
 };
 const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const GLYPHS = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];            // the status line "breathes"
@@ -65,14 +69,17 @@ export class App {
   branch: string | undefined; live: Awaited<ReturnType<typeof startLive>> | undefined;
   private out: string[] = [];
   private timer: ReturnType<typeof setInterval> | undefined; private flushT: ReturnType<typeof setTimeout> | undefined; private renderT: ReturnType<typeof setTimeout> | undefined;
-  private escAt = 0; private ctrlcAt = 0; private frame = 0; private stopped = false;
+  private escAt = 0; private ctrlcAt = 0; frame = 0; private stopped = false;
+  /** The structured transcript the full-screen UI draws (kept in both modes so switching never loses history). */
+  blocks = new BlockStore(); ui: "full" | "inline"; full?: FullView;
   private opts: AppOptions;
   done: Promise<number>; private resolveDone!: (n: number) => void;
 
   constructor(o: AppOptions) {
     this.opts = o; this.cfg = o.cfg; this.cwd = o.cwd; this.version = o.version; this.persist = o.persist ?? true;
     this.io = { input: o.input ?? process.stdin, output: o.output ?? (process.stdout as any) };
-    this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.cwd);
+    this.ui = o.ui ?? "inline"; this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.cwd);
+    if (this.ui === "full") this.full = new FullView(this);
     this.session = newSession(o.cwd, o.cfg.model);
     this.builtin = buildCommands();
     this.done = new Promise((r) => (this.resolveDone = r));
@@ -110,8 +117,9 @@ export class App {
     const { input, output } = this.io;
     input.setRawMode?.(true); input.setEncoding?.("utf8"); input.resume?.();
     output.write(PASTE_ON);
+    this.full?.enter();
     input.on("data", this.onData);
-    output.on?.("resize", () => this.render());
+    output.on?.("resize", () => { this.full?.invalidate(); this.render(); });
     process.once("exit", this.restore);
     this.files.ensure().catch(() => {});
     this.refreshBranch();
@@ -120,9 +128,9 @@ export class App {
       const s = this.opts.resume === "last" ? this.store.latest() : this.store.load(this.opts.resume);
       if (s) { this.session = s; resumed = `"${s.title}" · ${s.turns.length} turn${s.turns.length === 1 ? "" : "s"}`; this.recount(); }
     }
-    this.commit(welcome({ version: this.version, model: this.cfg.model, provider: this.cfg.provider, cwd: this.cwd, branch: this.branch, notes: this.agent.memory?.list().length ?? 0, verify: this.verify, mode: this.mode, resumed, tip: TIPS[Math.floor(Math.random() * TIPS.length)] }, this.width));
+    if (this.full) { if (resumed) this.blocks.loadMessages(this.session.messages); } else this.commit(welcome({ version: this.version, model: this.cfg.model, provider: this.cfg.provider, cwd: this.cwd, branch: this.branch, notes: this.agent.memory?.list().length ?? 0, verify: this.verify, mode: this.mode, resumed, tip: TIPS[Math.floor(Math.random() * TIPS.length)] }, this.width));
     this.setTitle(`amness · ${basename(this.cwd)}`);
-    if (resumed) this.replay();
+    if (resumed && !this.full) this.replay();
     this.render();
     if (this.opts.prompt) void this.dispatch(this.opts.prompt);
     return this.done;
@@ -137,7 +145,7 @@ export class App {
   restore = () => {
     if (this.stopped) return; this.stopped = true;
     clearInterval(this.timer);
-    try { this.screen.clear(); if (this.screen.alt) this.screen.leaveAlt(); this.io.output.write(PASTE_OFF + "\x1b[?25h"); this.io.input.setRawMode?.(false); this.io.input.pause?.(); this.io.input.off?.("data", this.onData); } catch { /* terminal already gone */ }
+    try { if (this.full) this.full.leave(); else { this.screen.clear(); if (this.screen.alt) this.screen.leaveAlt(); } this.io.output.write(PASTE_OFF + "\x1b[?25h"); this.io.input.setRawMode?.(false); this.io.input.pause?.(); this.io.input.off?.("data", this.onData); } catch { /* terminal already gone */ }
   };
   exit(code = 0) {
     if (this.running) this.ac?.abort();
@@ -149,17 +157,25 @@ export class App {
   }
 
   // ------------------------------------------------------------------ output
-  commit(lines: string[]) { this.out.push(...lines); }
+  /** Raw pre-styled lines: scrollback in the inline UI, a "raw" block in the full-screen UI. */
+  commit(lines: string[]) { this.blocks.raw(lines); if (!this.full) this.out.push(...lines); }
+  /** Scrollback-only output for things the full-screen UI draws from structured blocks instead. */
+  private inlineOnly(lines: string[]) { if (!this.full) this.out.push(...lines); }
+  private notify(level: "info" | "warn" | "error" | "ok", text: string, inline: string[]) { if (this.full) this.blocks.notice(level, text); else this.out.push(...inline); }
+  private addUser(text: string, note?: string, queued?: boolean) { this.blocks.addUser(text, note, queued); this.inlineOnly(userMessage(text, this.width, note ?? "")); }
   say(text: string | string[], paint: (s: string) => string = (s) => s) {
     for (const t of ([] as string[]).concat(text)) this.commit(["", ...t.split("\n").flatMap((p) => wrapAnsi(paint(p), this.width - 2)).map((l) => "  " + l)]);
   }
   note(text: string, ms = 3000) {
+    if (this.full && ms <= 5000) { this.full.toast(text, "info", ms); this.render(); setTimeout(() => this.render(), ms + 40); return; }
     this.notice = text; this.noticeUntil = Date.now() + ms; this.render();
     setTimeout(() => { if (Date.now() >= this.noticeUntil) this.render(); }, ms + 30);               // redraw when it expires so the footer returns to normal
   }
 
   render = () => {
-    if (this.stopped || this.pager) return;
+    if (this.stopped) return;
+    if (this.full) { clearTimeout(this.renderT); this.renderT = undefined; return this.full.draw(); }
+    if (this.pager) return;
     clearTimeout(this.renderT); this.renderT = undefined;
     const w = this.width, live: string[] = [];
     let cursor: { row: number; col: number } | undefined;
@@ -221,9 +237,17 @@ export class App {
   };
 
   handleKey(k: Key) {
+    if (k.name === "mouse" && k.mouse) { this.full?.mouse(k.mouse); return; }
     if (this.pager) return this.pager.key(k);
     if (this.overlay) { this.overlay.key(k); this.schedule(); return; }
     const ed = this.editor;
+    if (this.full) {                                                        // full-screen only keys (scrolling, sidebar, details, theme)
+      if (this.full.key(k.name, k.ctrl)) return;
+      if (k.ctrl && k.name === "b") { this.full.showSidebar = !this.full.showSidebar; this.full.invalidate(); return this.render(); }
+      if (k.ctrl && k.name === "o") { this.full.expandAll = !this.full.expandAll; this.full.toast(this.full.expandAll ? "all tool output expanded" : "tool output collapsed"); return this.render(); }
+      if (k.ctrl && k.name === "t") return void this.runCommand("/theme");
+      if (k.ctrl && k.name === "l") { this.full.invalidate(); return this.render(); }
+    }
     if (k.ctrl && k.name === "c") return this.ctrlC();
     if (k.ctrl && k.name === "d") { if (ed.empty) return this.exit(0); }
     if (k.ctrl && k.name === "o") return this.openTranscript();
@@ -244,6 +268,7 @@ export class App {
       return this.after(false);
     }
     if (k.name === "char" && k.text === "?" && ed.empty) return this.openPager(helpLines(this.cmds, this.screen.cols - 1), "help");
+    if (this.full && (k.name === "char" || k.name === "paste" || k.name === "backspace")) this.full.clearSelection();
     if (editKey(ed, k)) { this.escAt = 0; return this.after(); }
   }
   private after(suggest = true) { if (suggest) this.updateSugg(); this.render(); }
@@ -263,6 +288,7 @@ export class App {
     if (!this.sugg) return;
     this.schedule();
   }
+  acceptSuggPublic(fromEnter: boolean) { if (this.sugg) this.acceptSugg(fromEnter); }
   private acceptSugg(fromEnter: boolean) {
     const s = this.sugg!, r = applySuggestion(this.editor.text, s.token, s.items[s.sel]);
     this.editor.setText(r.text, r.cursor); this.sugg = null; this.suggOff = "";
@@ -271,6 +297,7 @@ export class App {
   }
 
   private escape() {
+    if (this.full?.clearSelection()) return this.render();
     if (this.sugg) { this.suggOff = `${this.sugg.token.kind}:${this.sugg.token.query}`; this.sugg = null; return this.render(); }
     if (this.running) { this.ac?.abort(); return this.note("interrupting after the current step…"); }
     const now = Date.now();
@@ -320,7 +347,7 @@ export class App {
   }
   private drainQueue(): string[] {
     const q = this.queued.splice(0);
-    for (const m of q) this.commit(userMessage(m.text, this.width, "sent while working"));
+    for (const m of q) this.addUser(m.text, "sent while working");
     this.schedule();
     return q.map((m) => m.full);
   }
@@ -328,9 +355,10 @@ export class App {
   async bash(cmd: string) {
     if (!cmd) return;
     const { runShell } = await import("../../src/index.ts");
-    this.commit(["", toolHeader("sh", JSON.stringify({ cmd }), null).replace("Bash", "Bash!")]); this.render();
+    const callId = "!" + Date.now();
+    this.blocks.toolStart(callId, "sh", JSON.stringify({ cmd })); this.inlineOnly(["", toolHeader("sh", JSON.stringify({ cmd }), null).replace("Bash", "Bash!")]); this.render();
     const out = await runShell(cmd, this.cwd, 120_000);
-    this.commit(toolResult("sh", "{}", out, this.width));
+    this.blocks.toolEnd(callId, out); this.inlineOnly(toolResult("sh", "{}", out, this.width));
     this.pendingContext.push(`I ran \`${cmd}\` in my terminal:\n${out.slice(0, 6000)}`);
     this.render();
   }
@@ -338,14 +366,15 @@ export class App {
     const mem = this.agent.memory;
     if (!note || !mem) return this.note("nothing to remember");
     const e = mem.save({ name: slugify(note.split(/\s+/).slice(0, 6).join(" ")), type: "project", description: one(note, 120), content: note });
-    this.commit(["", `  ${green("✓")} ${dim("remembered:")} ${note}`, `  ${dim(`saved to ${e.scope} memory as "${e.name}"`)}`]); this.render();
+    if (this.full) this.blocks.notice("ok", `remembered: ${note}  (saved to ${e.scope} memory as "${e.name}")`); else this.commit(["", `  ${green("✓")} ${dim("remembered:")} ${note}`, `  ${dim(`saved to ${e.scope} memory as "${e.name}"`)}`]);
+    this.render();
   }
 
   async turn(text: string) {
     const { text: expanded, attached } = expandMentions(text, this.cwd);
     const prefix = [this.modeNotice, ...this.pendingContext].filter(Boolean).join("\n\n"); this.modeNotice = ""; this.pendingContext = [];
     const full = prefix ? `${prefix}\n\n${expanded}` : expanded;
-    this.commit(userMessage(text, this.width, attachedNote(attached)));
+    this.addUser(text, attachedNote(attached) || undefined);
     if (!this.session.title) this.session.title = one(text, 60);
     const turn: Turn = { at: this.session.messages.length, text, t: Date.now(), snaps: {} };
     this.session.turns.push(turn);
@@ -357,17 +386,17 @@ export class App {
     try {
       const r = await this.agent.chat(this.session.messages, full);
       this.session.messages = r.messages; ok = true;
-      if (r.stopped === "budget") this.commit(["", `  ${red("$")} ${r.text}`]);
-      else if (r.stopped === "maxSteps") this.commit(["", `  ${yellow("!")} stopped after the maximum number of steps; send a message to continue`]);
+      if (r.stopped === "budget") this.notify("error", r.text, ["", `  ${red("$")} ${r.text}`]);
+      else if (r.stopped === "maxSteps") this.notify("warn", "stopped after the maximum number of steps; send a message to continue", ["", `  ${yellow("!")} stopped after the maximum number of steps; send a message to continue`]);
     } catch (e) {
       this.session.turns.pop();
       const msg = (e as Error).message;
-      this.commit(["", `  ${red("✗")} ${one(msg, this.width * 2)}`, ...(/40[13]|auth|api key|credential/i.test(msg) ? [`  ${dim("check your key with /provider")}`] : [])]);
+      this.notify("error", one(msg, 400) + (/40[13]|auth|api key|credential/i.test(msg) ? "  (check your key with /provider)" : ""), ["", `  ${red("✗")} ${one(msg, this.width * 2)}`, ...(/40[13]|auth|api key|credential/i.test(msg) ? [`  ${dim("check your key with /provider")}`] : [])]);
     }
-    this.flushStream(true);
+    this.flushStream(true); this.blocks.endAssistant(); this.blocks.endThinking();
     const secs = Date.now() - this.runStart;
-    if (ok && (secs > 4000 || this.runTokens > 2000)) this.commit([dim(`  ✻ Worked for ${fmtDuration(secs)} · ${fmtTokens(this.runTokens)} tokens`)]);
-    if (this.todos.length && this.todos.some((t) => t.status !== "done")) this.commit(todoList(this.todos, this.width));
+    if (ok && (secs > 4000 || this.runTokens > 2000)) this.inlineOnly([dim(`  ✻ Worked for ${fmtDuration(secs)} · ${fmtTokens(this.runTokens)} tokens`)]);
+    if (this.todos.length && this.todos.some((t) => t.status !== "done")) this.inlineOnly(todoList(this.todos, this.width));
     this.todos = []; this.inflight.clear(); this.running = false; this.ac = undefined; this.thinkBuf = "";
     this.setTitle(`${ok ? "✔" : "✗"} amness · ${basename(this.cwd)}`);
     if (secs > 20_000) this.io.output.write("\x07");                                  // a long turn finished: nudge the user, even if they switched tabs
@@ -380,37 +409,37 @@ export class App {
     this.live?.onEvent(e as any);
     const sub = e.agent && e.agent !== "lead" ? e.agent : undefined, w = this.width;
     switch (e.kind) {
-      case "thinking": if (!sub) { this.thinkBuf = (this.thinkBuf + e.delta).slice(-600); } break;
+      case "thinking": if (!sub) { this.thinkBuf = (this.thinkBuf + e.delta).slice(-600); this.blocks.streamThinking(e.delta); } break;
       case "turn": this.session.usage.prompt += e.prompt; this.session.usage.completion += e.completion; this.session.usage.calls++;
         this.session.usage.cached = (this.session.usage.cached ?? 0) + e.cached; this.session.usage.reasoning = (this.session.usage.reasoning ?? 0) + e.reasoning;
         this.session.usage.series = [...(this.session.usage.series ?? []), e.prompt].slice(-200); this.runSeries = [...this.runSeries, e.completion].slice(-40); if (!sub) { this.runTokens = e.tokens; this.lastPrompt = e.prompt; } else this.runTokens += e.completion; break;
-      case "text": if (!sub) { this.thinkBuf = ""; this.streamBuf += e.delta; this.streamedThisMsg = true; this.flushStream(false); } break;
-      case "assistant": if (!sub) { if (!this.streamedThisMsg || e.streamed === false) { this.streamBuf = e.text; this.streamedThisMsg = false; } this.flushStream(true); } break;
-      case "toolstart": this.inflight.set(e.id, { name: e.name, args: e.args, t0: Date.now(), agent: sub }); this.ensureTimer(); break;
+      case "text": if (!sub) { this.thinkBuf = ""; this.blocks.endThinking(); this.blocks.streamAssistant(e.delta); this.streamBuf += e.delta; this.streamedThisMsg = true; this.flushStream(false); } break;
+      case "assistant": if (!sub) { if (!this.streamedThisMsg || e.streamed === false) { this.blocks.setAssistant(e.text); this.streamBuf = e.text; this.streamedThisMsg = false; } this.blocks.endAssistant(); this.flushStream(true); } break;
+      case "toolstart": this.blocks.toolStart(e.id, e.name, e.args, sub); this.inflight.set(e.id, { name: e.name, args: e.args, t0: Date.now(), agent: sub }); this.ensureTimer(); break;
       case "edit": this.pendingEdits.set(e.path, e); this.edits.push(e); snapshot(this.session.turns.at(-1), e.path, e.before); break;
       case "tool": {
         const t = this.inflight.get(e.id ?? ""); this.inflight.delete(e.id ?? ""); this.idleTimer();
         const bad = isFailure(e.result);
-        if (sub) { this.commit([toolHeader(e.name, e.args, !bad, sub)]); break; }
+        let editPath = ""; if ((e.name === "write_file" || e.name === "edit_file") && !bad) { try { editPath = JSON.parse(e.args).path; } catch { /* keep empty */ } }
+        const ed = editPath ? this.pendingEdits.get(editPath) : undefined; if (editPath) this.pendingEdits.delete(editPath);
+        this.blocks.toolEnd(e.id ?? "", e.result, ed ? { path: ed.path, created: ed.created, added: ed.added, removed: ed.removed, diff: ed.diff } : undefined);
+        if (sub) { this.inlineOnly([toolHeader(e.name, e.args, !bad, sub)]); break; }
         if (e.name === "todo_write") break;
         const lines = ["", toolHeader(e.name, e.args, !bad)];
-        if ((e.name === "write_file" || e.name === "edit_file") && !bad) {
-          let path = ""; try { path = JSON.parse(e.args).path; } catch { /* keep empty */ }
-          const ed = this.pendingEdits.get(path); this.pendingEdits.delete(path);
-          if (ed) lines.push(`  ${gray("⎿")}  ${dim(editSummary(ed))}`, ...renderDiff(ed.diff, w));
-        } else lines.push(...toolResult(e.name, e.args, e.result, w));
-        void t; this.commit(lines); break;
+        if (ed) lines.push(`  ${gray("⎿")}  ${dim(editSummary(ed))}`, ...renderDiff(ed.diff, w));
+        else if (!editPath) lines.push(...toolResult(e.name, e.args, e.result, w));
+        void t; this.inlineOnly(lines); break;
       }
       case "todos": this.todos = e.todos; break;
-      case "finish": if (!sub) { this.flushStream(true); this.commit(["", ...renderMarkdown(e.summary, w - 4).map((l, i) => (i ? "    " : "  " + green("✔ ")) + l)]); } break;
-      case "rejected": this.commit(["", `  ${yellow("⛔")} ${dim("finish rejected by verification:")} ${one(e.detail, w - 10)}`]); break;
-      case "denied": this.commit(["", `  ${red("⊘")} ${dim("denied: " + one(e.detail, w - 14))}`]); break;
-      case "nudge": this.commit([dim("  ↻ nudged the model to act instead of describing")]); break;
-      case "repair": this.commit([dim(`  ⚒ repaired a malformed tool call: ${one(e.detail, w - 30)}`)]); break;
-      case "loop": this.commit([dim("  ∞ blocked a repeated identical call")]); break;
-      case "rollover": this.commit([magenta("  ⟳ ") + dim("context getting large: continued from a handoff note")]); break;
-      case "budget": this.commit(["", `  ${red("$")} ${e.detail}`]); break;
-      case "aborted": this.commit(["", `  ${yellow("⏹")} ${dim("interrupted. Your progress is kept; send a message to continue.")}`]); break;
+      case "finish": if (!sub) { this.flushStream(true); this.blocks.summary(e.summary); this.inlineOnly(["", ...renderMarkdown(e.summary, w - 4).map((l, i) => (i ? "    " : "  " + green("✔ ")) + l)]); } break;
+      case "rejected": this.notify("warn", `finish rejected by verification: ${one(e.detail, 300)}`, ["", `  ${yellow("⛔")} ${dim("finish rejected by verification:")} ${one(e.detail, w - 10)}`]); break;
+      case "denied": this.notify("warn", `denied: ${one(e.detail, 300)}`, ["", `  ${red("⊘")} ${dim("denied: " + one(e.detail, w - 14))}`]); break;
+      case "nudge": this.notify("info", "nudged the model to act instead of describing", [dim("  ↻ nudged the model to act instead of describing")]); break;
+      case "repair": this.notify("info", `repaired a malformed tool call: ${one(e.detail, 200)}`, [dim(`  ⚒ repaired a malformed tool call: ${one(e.detail, w - 30)}`)]); break;
+      case "loop": this.notify("info", "blocked a repeated identical call", [dim("  ∞ blocked a repeated identical call")]); break;
+      case "rollover": this.notify("info", "context getting large: continued from a handoff note", [magenta("  ⟳ ") + dim("context getting large: continued from a handoff note")]); break;
+      case "budget": this.notify("error", e.detail, ["", `  ${red("$")} ${e.detail}`]); break;
+      case "aborted": this.notify("warn", "interrupted. Your progress is kept; send a message to continue.", ["", `  ${yellow("⏹")} ${dim("interrupted. Your progress is kept; send a message to continue.")}`]); break;
       case "steer": case "tools": break;
     }
     this.schedule();
@@ -419,6 +448,7 @@ export class App {
   /** Stream assistant text: complete paragraphs are committed to scrollback immediately; the unfinished tail stays in the live region. */
   flushStream(final: boolean) {
     const w = this.width;
+    if (this.full) { if (final) { this.streamBuf = ""; this.msgOpen = false; this.streamedThisMsg = false; } return; }          // the full-screen UI draws the block store
     if (final) { const rest = this.streamBuf; this.streamBuf = ""; if (rest.trim()) { this.commit(assistantBlock(rest, w, !this.msgOpen).map((l, i) => (i === 0 && !this.msgOpen ? ["", l] : [l])).flat()); this.msgOpen = true; } this.msgOpen = false; this.streamedThisMsg = false; return; }
     const { done, rest } = takeCompleteBlocks(this.streamBuf);
     if (done.trim()) { this.commit(assistantBlock(done, w, !this.msgOpen).map((l, i) => (i === 0 && !this.msgOpen ? ["", l] : [l])).flat()); this.msgOpen = true; }
@@ -431,25 +461,25 @@ export class App {
     if (name === "sh" && this.shAllowed(String(args.cmd))) return true;
     if (this.toolRules.has(name)) return true;
     let title = "Permission", body: string[] = [], question = "Allow this?", options: { label: string; hint?: string }[];
-    let paint: ((s: string) => string) | undefined;
+    let paint: ((s: string) => string) | undefined, detail: ChoiceDetail | undefined;
     if (name === "exit_plan_mode") {
-      title = "Ready to code?"; body = renderMarkdown(String(args.plan ?? preview ?? ""), w - 6); question = "Would you like to proceed?";
+      title = "Ready to code?"; body = renderMarkdown(String(args.plan ?? preview ?? ""), w - 6); question = "Would you like to proceed?"; detail = { kind: "plan", md: String(args.plan ?? preview ?? "") };
       options = [{ label: "Yes, and accept edits automatically" }, { label: "Yes, and ask before each edit" }, { label: "No, keep planning", hint: "tell it what to change" }];
     } else if (name === "write_file" || name === "edit_file") {
       title = `${name === "write_file" ? "Write" : "Edit"} ${args.path}`; body = preview ? renderDiff(preview, w - 4, 18).map((l) => l.slice(5)) : [String(args.path)];
-      question = "Apply this change?";
+      question = "Apply this change?"; if (preview) detail = { kind: "diff", path: String(args.path), diff: preview };
       options = [{ label: "Yes" }, { label: "Yes, and accept all edits this session", hint: "shift+tab" }, { label: "No, and tell amness what to do instead", hint: "esc" }];
     } else if (name === "sh") {
       const danger = riskOf(String(args.cmd)); paint = danger ? yellow : undefined;
-      title = "Run command"; body = [bold(String(args.cmd)), ...(danger ? ["", yellow(`⚠ ${danger}`)] : [])]; question = "Run this command?";
+      title = "Run command"; body = [bold(String(args.cmd)), ...(danger ? ["", yellow(`⚠ ${danger}`)] : [])]; question = "Run this command?"; detail = { kind: "command", cmd: String(args.cmd), danger: danger || undefined };
       const prefix = shPrefix(String(args.cmd));
       options = [{ label: "Yes" }, ...(danger || /[;&|<>`$()]/.test(String(args.cmd)) ? [] : [{ label: `Yes, and don't ask again for ${bold(prefix)} commands`, hint: "this session" }]), { label: "No, and tell amness what to do instead", hint: "esc" }];
     } else {
-      title = name; body = [reason ?? "requires approval", ...(preview ? ["", preview] : []), "", dim(one(JSON.stringify(args), w - 8))];
+      title = name; detail = { kind: "text", text: `${reason ?? "requires approval"}\n${JSON.stringify(args)}` }; body = [reason ?? "requires approval", ...(preview ? ["", preview] : []), "", dim(one(JSON.stringify(args), w - 8))];
       options = [{ label: "Yes" }, { label: `Yes, and don't ask again for ${bold(name)}`, hint: "this session" }, { label: "No, and tell amness what to do instead", hint: "esc" }];
     }
     this.ensureTimer();
-    const idx = await new Promise<number | undefined>((res) => { this.overlay = new ChoiceOverlay(title, body, question, options, res, paint); this.render(); });
+    const idx = await new Promise<number | undefined>((res) => { this.overlay = new ChoiceOverlay(title, body, question, options, res, paint, detail); this.render(); });
     this.overlay = null; this.render();
     if (idx === undefined) return "the user declined this action; take a different approach or ask what they want";
     const last = idx === options.length - 1;
@@ -466,14 +496,15 @@ export class App {
   }
 
   // ------------------------------------------------------------------ helpers used by commands
-  pick<T>(title: string, items: PickItem<T>[], initial = 0): Promise<T | undefined> {
-    return new Promise((res) => { this.overlay = new PickerOverlay(title, items, (v) => { this.overlay = null; this.render(); res(v); }, initial); this.render(); });
+  pick<T>(title: string, items: PickItem<T>[], initial = 0, onMove?: (v: T | undefined) => void): Promise<T | undefined> {
+    return new Promise((res) => { const p = new PickerOverlay(title, items, (v) => { this.overlay = null; this.render(); res(v); }, initial); if (onMove) p.onMove = onMove; this.overlay = p; this.render(); });
   }
   askText(prompt: string, o: { secret?: boolean; initial?: string } = {}): Promise<string | undefined> {
     return new Promise((res) => { this.overlay = new InputOverlay(prompt, (v) => { this.overlay = null; this.render(); res(v); }, o); this.render(); });
   }
   showText(lines: string[]) { return new Promise<void>((res) => { this.overlay = new TextOverlay(lines, () => { this.overlay = null; this.render(); res(); }); this.render(); }); }
   openPager(lines: string[], title = "transcript", start: "top" | "bottom" = title === "transcript" ? "bottom" : "top") {
+    if (this.full) { void this.showText(lines); return; }                       // the full-screen UI shows these as a scrollable modal
     this.screen.enterAlt();
     this.pager = new Pager(lines, this.io.output, () => { this.pager = null; this.screen.leaveAlt(); this.render(); }, title, start);
   }
@@ -492,11 +523,23 @@ export class App {
   }
   rewindTo(idx: number) {
     const r = rewind(this.session, this.cwd, idx);
-    this.pendingEdits.clear(); this.recount(); this.saveSession();
+    this.pendingEdits.clear(); this.recount(); this.saveSession(); this.rebuildBlocks();
     this.commit(["", `  ${green("↩")} ${dim(`rewound the conversation to before turn ${idx + 1}`)}${r.restored.length || r.removed.length ? dim(` · restored ${r.restored.length} file(s), removed ${r.removed.length}`) : ""}`]);
     this.render();
   }
-  newConversation() { this.saveSession(); this.session = newSession(this.cwd, this.cfg.model); this.edits = []; this.lastPrompt = 0; this.todos = []; this.pendingContext = []; this.buildAgent(); }
+  /** Switch UI mode live. History is kept in the block store, so nothing is lost either way. */
+  switchUi(to: "full" | "inline") {
+    if (to === this.ui) return;
+    if (this.full) { this.full.leave(); this.full = undefined; } else this.screen.clear();
+    this.ui = to; this.screen.height = 0;
+    if (to === "full") { this.full = new FullView(this); this.full.enter(); this.rebuildBlocksIfEmpty(); }
+    else this.out.push(...welcome({ version: this.version, model: this.cfg.model, provider: this.cfg.provider, cwd: this.cwd, branch: this.branch, notes: this.agent.memory?.list().length ?? 0, verify: this.verify, mode: this.mode, tip: "use /ui full to go back to the full-screen UI" }, this.width), ...(this.session.turns.length ? [dim("  (earlier messages are kept; /ui full shows them)")] : []));
+    this.render();
+  }
+  private rebuildBlocksIfEmpty() { if (!this.blocks.blocks.length && this.session.messages.length) this.blocks.loadMessages(this.session.messages); }
+  rebuildBlocks() { this.blocks.loadMessages(this.session.messages); this.full?.invalidate(); }
+  async resumeById(id: string) { const s = this.store.load(id); if (!s) return; this.loadSession(s); this.rebuildBlocks(); this.render(); }
+  newConversation() { this.saveSession(); this.session = newSession(this.cwd, this.cfg.model); this.edits = []; this.lastPrompt = 0; this.todos = []; this.pendingContext = []; this.blocks.clear(); this.full?.invalidate(); this.buildAgent(); }
   loadSession(s: SessionData) { this.saveSession(); this.session = s; this.recount(); this.edits = []; }
   saveSession() { if (this.persist && this.session.turns.length) try { this.session.model = this.cfg.model; this.store.save(this.session); } catch { /* read-only dir */ } }
   saveHistory() { if (!this.persist) return; try { mkdirSync(home(), { recursive: true }); writeFileSync(join(home(), "history.json"), JSON.stringify(this.editor.history.slice(0, 200))); } catch { /* ignore */ } }

@@ -1,6 +1,20 @@
 // Markdown -> ANSI lines for assistant messages, plus block splitting so streamed text can be rendered as it arrives.
+// All styling goes through a Skin, so the same parser serves the inline UI (defaultSkin) and the themed full-screen UI.
 import { bold, cyan, dim, gray, green, magenta, yellow } from "../ui.ts";
 import { cellWidth, clipWidth, strip, wrapAnsi } from "./text.ts";
+
+export type HlKind = "keyword" | "string" | "number" | "comment" | "plain";
+export type Skin = {
+  bold(s: string): string; italic(s: string): string; strike(s: string): string; code(s: string): string; link(text: string, url: string): string; dim(s: string): string;
+  /** styled lines for a heading (may include an underline rule) */
+  heading(level: number, text: string, width: number): string[];
+  quote(inner: string): string; bullet(marker: string): string; hr(width: number): string;
+  /** a whole fenced code block, already framed and highlighted */
+  codeBlock(lines: string[], lang: string, width: number): string[];
+  table(rows: string[][], width: number): string[];
+  /** hook for `inline` text in table cells etc. */
+  hl(kind: HlKind, text: string): string;
+};
 
 const KW = {
   js: "const let var function return if else for while do import export from as class new async await try catch finally throw type interface extends implements default switch case break continue null undefined true false this typeof instanceof of in void static public private readonly enum",
@@ -10,43 +24,73 @@ const KW = {
   go: "func var const type struct interface package import return if else for range switch case default go defer chan map nil true false select break continue",
   json: "true false null",
 };
-const FAMILY: Record<string, keyof typeof KW> = { js: "js", javascript: "js", jsx: "js", ts: "js", tsx: "js", typescript: "js", java: "js", c: "js", cpp: "js", cs: "js", kt: "js", swift: "js",
+const FAMILY: Record<string, keyof typeof KW> = { js: "js", javascript: "js", jsx: "js", ts: "js", tsx: "js", typescript: "js", mjs: "js", cjs: "js", java: "js", c: "js", cpp: "js", cs: "js", kt: "js", swift: "js",
   py: "py", python: "py", rb: "py", ruby: "py", sh: "sh", bash: "sh", zsh: "sh", shell: "sh", rs: "rs", rust: "rs", go: "go", json: "json", jsonc: "json" };
 const HASH = new Set(["py", "sh", "rb", "yaml", "yml", "toml", "python", "bash", "zsh", "ruby", "shell", "conf", "dockerfile"]);
 
-/** Tiny line-based highlighter: comments, strings, numbers, keywords. Good enough to read code; not a parser. */
-export function highlight(line: string, lang: string): string {
+/** Tiny line-based highlighter: comments, strings, numbers, keywords. `paint` decides how each kind looks. */
+export function highlightWith(line: string, lang: string, paint: (k: HlKind, s: string) => string): string {
   const fam = FAMILY[lang.toLowerCase()], kw = fam ? new Set(KW[fam].split(" ")) : new Set<string>();
   const comment = HASH.has(lang.toLowerCase()) ? "#.*$" : fam || !lang ? "\\/\\/.*$" : "$^";
   const re = new RegExp(`(${comment})|("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\`(?:\\\\.|[^\`\\\\])*\`)|(\\b\\d[\\d_.]*\\b)|(\\b[A-Za-z_$][\\w$]*\\b)`, "g");
-  return line.replace(re, (m, c, s, n, w) => (c ? gray(m) : s ? green(m) : n ? yellow(m) : w && kw.has(w) ? magenta(m) : m));
+  let out = "", last = 0;
+  for (let m; (m = re.exec(line)); ) {
+    out += paint("plain", line.slice(last, m.index));
+    out += m[1] ? paint("comment", m[0]) : m[2] ? paint("string", m[0]) : m[3] ? paint("number", m[0]) : kw.has(m[4]) ? paint("keyword", m[0]) : paint("plain", m[0]);
+    last = m.index + m[0].length;
+    if (m[0] === "") re.lastIndex++;
+  }
+  return out + paint("plain", line.slice(last));
 }
 
+const red2 = (s: string) => `\x1b[31m${s}\x1b[0m`;
+export const defaultSkin: Skin = {
+  bold, dim, italic: (s) => `\x1b[3m${s}\x1b[23m`, strike: (s) => `\x1b[9m${s}\x1b[29m`, code: cyan, link: (t, u) => `${t} ${dim("(" + u + ")")}`,
+  heading(level, text, width) {
+    const t = text, out = [level === 1 ? bold(cyan(t)) : level === 2 ? bold(cyan(t)) : bold(t)];
+    if (level <= 2) out.push(gray("─".repeat(Math.min(width, Math.max(8, cellWidth(strip(t)))))));
+    return out;
+  },
+  quote: (inner) => gray("▎ ") + dim(inner), bullet: (m) => cyan(m), hr: (w) => gray("─".repeat(Math.min(w, 60))),
+  hl: (k, s) => (k === "comment" ? gray(s) : k === "string" ? green(s) : k === "number" ? yellow(s) : k === "keyword" ? magenta(s) : s),
+  codeBlock(body, lang, width) {
+    const out: string[] = [];
+    if (lang) out.push(gray("  ╭─ ") + dim(lang));
+    for (const b of body) {
+      const styled = lang === "diff" ? (b.startsWith("+") ? green(b) : b.startsWith("-") ? red2(b) : b.startsWith("@@") ? cyan(b) : gray(b)) : highlightWith(b, lang, defaultSkin.hl);
+      for (const r of wrapAnsi(styled, width - 4, 2)) out.push(gray("  │ ") + r);
+    }
+    if (lang || body.length) out.push(gray("  ╰─"));
+    return out;
+  },
+  table(rows, width) {
+    const n = Math.max(...rows.map((r) => r.length)), widths = Array.from({ length: n }, (_, i) => Math.max(...rows.map((r) => cellWidth(inline(r[i] ?? "", defaultSkin)))));
+    const total = widths.reduce((a, b) => a + b, 0) + 3 * n + 1;
+    if (total > width) return rows.map((r, i) => (i === 0 ? bold(r.join(" | ")) : r.join(" | ")));          // too wide: fall back to plain rows
+    const line = (r: string[], head: boolean) => "│ " + widths.map((w, i) => { const c = inline(r[i] ?? "", defaultSkin); return (head ? bold(c) : c) + " ".repeat(w - cellWidth(c)); }).join(" │ ") + " │";
+    const rule = (l: string, m: string, r: string) => gray(l + widths.map((w) => "─".repeat(w + 2)).join(m) + r);
+    return [rule("┌", "┬", "┐"), line(rows[0], true), rule("├", "┼", "┤"), ...rows.slice(1).map((r) => line(r, false)), rule("└", "┴", "┘")].map((l) => (l.startsWith("│") ? gray("│") + l.slice(1) : l));
+  },
+};
+
+/** Back-compat: highlight with the default skin's colours. */
+export const highlight = (line: string, lang: string) => highlightWith(line, lang, defaultSkin.hl);
+
 /** Inline spans: `code`, **bold**, *italic*, ~~strike~~, [text](url). Code is protected first so nothing inside it is reformatted. */
-export function inline(s: string): string {
+export function inline(s: string, skin: Skin = defaultSkin): string {
   const codes: string[] = [];
-  s = s.replace(/`([^`\n]+)`/g, (_m, c) => `\x00${codes.push(cyan(c)) - 1}\x00`);
-  s = s.replace(/\[([^\[\]\n]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => `${t} ${dim("(" + u + ")")}`);
-  s = s.replace(/\*\*([^*\n]+)\*\*|__([^_\n]+)__/g, (_m, a, b) => bold(a ?? b));
-  s = s.replace(/(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])|(?<![\w_])_([^_\s][^_\n]*?)_(?![\w_])/g, (_m, a, b) => `\x1b[3m${a ?? b}\x1b[23m`);
-  s = s.replace(/~~([^~\n]+)~~/g, (_m, t) => `\x1b[9m${t}\x1b[29m`);
-  s = s.replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => `${t} ${dim("(" + u + ")")}`);
+  s = s.replace(/`([^`\n]+)`/g, (_m, c) => `\x00${codes.push(skin.code(c)) - 1}\x00`);
+  s = s.replace(/\[([^\[\]\n]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => skin.link(t, u));
+  s = s.replace(/\*\*([^*\n]+)\*\*|__([^_\n]+)__/g, (_m, a, b) => skin.bold(a ?? b));
+  s = s.replace(/(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])|(?<![\w_])_([^_\s][^_\n]*?)_(?![\w_])/g, (_m, a, b) => skin.italic(a ?? b));
+  s = s.replace(/~~([^~\n]+)~~/g, (_m, t) => skin.strike(t));
   return s.replace(/\x00(\d+)\x00/g, (_m, i) => codes[Number(i)]);
 }
 
 const isTableSep = (l: string) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l) && l.includes("-") && l.includes("|");
 const cells = (l: string) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
 
-function renderTable(rows: string[][], width: number): string[] {
-  const n = Math.max(...rows.map((r) => r.length)), widths = Array.from({ length: n }, (_, i) => Math.max(...rows.map((r) => cellWidth(inline(r[i] ?? "")))));
-  const total = widths.reduce((a, b) => a + b, 0) + 3 * n + 1;
-  if (total > width) return rows.map((r, i) => (i === 0 ? bold(r.join(" | ")) : r.join(" | ")));          // too wide: fall back to plain rows
-  const line = (r: string[], head: boolean) => "│ " + widths.map((w, i) => { const c = inline(r[i] ?? ""); return (head ? bold(c) : c) + " ".repeat(w - cellWidth(c)); }).join(" │ ") + " │";
-  const rule = (l: string, m: string, r: string) => gray(l + widths.map((w) => "─".repeat(w + 2)).join(m) + r);
-  return [rule("┌", "┬", "┐"), line(rows[0], true), rule("├", "┼", "┤"), ...rows.slice(1).map((r) => line(r, false)), rule("└", "┴", "┘")].map((l) => (l.startsWith("│") ? gray("│") + l.slice(1) : l));
-}
-
-export function renderMarkdown(src: string, width: number): string[] {
+export function renderMarkdown(src: string, width: number, skin: Skin = defaultSkin): string[] {
   const out: string[] = [], L = src.replace(/\r\n?/g, "\n").split("\n");
   const push = (line: string, indent = 0) => out.push(...wrapAnsi(line, width, indent));
   let blank = false;
@@ -56,39 +100,32 @@ export function renderMarkdown(src: string, width: number): string[] {
     if (fence) {
       const lang = fence[3], body: string[] = [];
       for (i++; i < L.length && !/^\s*(`{3,}|~{3,})\s*$/.test(L[i]); i++) body.push(L[i].slice(Math.min(fence[1].length, L[i].length - L[i].trimStart().length)));
-      if (lang) out.push(gray("  ╭─ ") + dim(lang));
-      for (const b of body) {
-        const styled = lang === "diff" ? (b.startsWith("+") ? green(b) : b.startsWith("-") ? red2(b) : b.startsWith("@@") ? cyan(b) : gray(b)) : highlight(b, lang);
-        const rows = wrapAnsi(styled, width - 4, 2);
-        rows.forEach((r) => out.push(gray("  │ ") + r));
-      }
-      if (lang || body.length) out.push(gray("  ╰─"));
+      out.push(...skin.codeBlock(body, lang, width));
       blank = false; continue;
     }
     if (!line.trim()) { if (!blank && out.length) out.push(""); blank = true; continue; }
     blank = false;
     const h = line.match(/^(#{1,6})\s+(.*?)\s*#*$/);
-    if (h) { const t = inline(h[2]); push(h[1].length === 1 ? bold(cyan(strip(t).toUpperCase() === strip(t) ? t : t)) : h[1].length === 2 ? bold(cyan(t)) : bold(t)); if (h[1].length <= 2) out.push(gray("─".repeat(Math.min(width, Math.max(8, cellWidth(strip(t))))))); continue; }
-    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { out.push(gray("─".repeat(Math.min(width, 60)))); continue; }
+    if (h) { for (const r of skin.heading(h[1].length, inline(h[2], skin), width)) push(r); continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { out.push(skin.hr(width)); continue; }
     if (line.includes("|") && i + 1 < L.length && isTableSep(L[i + 1])) {
       const rows = [cells(line)]; i += 2;
       for (; i < L.length && L[i].includes("|") && L[i].trim(); i++) rows.push(cells(L[i]));
-      i--; out.push(...renderTable(rows, width)); continue;
+      i--; out.push(...skin.table(rows, width)); continue;
     }
     const q = line.match(/^\s*>\s?(.*)$/);
-    if (q) { push(gray("▎ ") + dim(inline(q[1])), 2); continue; }
+    if (q) { push(skin.quote(inline(q[1], skin)), 2); continue; }
     const li = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
     if (li) {
       const depth = Math.floor(li[1].length / 2), marker = /\d/.test(li[2]) ? li[2] : depth % 2 ? "◦" : "•";
       const pad = "  ".repeat(depth);
-      push(`${pad}${cyan(marker)} ${inline(li[3])}`, pad.length + cellWidth(marker) + 1); continue;
+      push(`${pad}${skin.bullet(marker)} ${inline(li[3], skin)}`, pad.length + cellWidth(marker) + 1); continue;
     }
-    push(inline(line));
+    push(inline(line, skin));
   }
   while (out.length && out[out.length - 1] === "") out.pop();
   return out;
 }
-const red2 = (s: string) => `\x1b[31m${s}\x1b[0m`;
 
 /**
  * Split streamed markdown into blocks that are safe to render now (everything up to the last blank line that is not

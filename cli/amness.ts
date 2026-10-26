@@ -367,6 +367,7 @@ const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
   amness -p "task" [flags]     one-shot, non-interactive (same as: amness run)
   amness run [flags] "task"    headless mode for CI/scripts (amness run --help)
   amness menu                  the classic menu (demo, evals, research, settings…)
+  amness --inline | --full     choose the interface (default: full-screen; AMNESS_UI or /ui also work)
   amness demo                  guided demo, no API key needed
 
   inside the chat: /help for commands · @file to mention files · shift+tab to change permissions`;
@@ -375,13 +376,19 @@ async function startChat(argv: string[]) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) { console.error("amness chat needs an interactive terminal. For scripts use: amness run [flags] \"task\""); process.exitCode = 2; return; }
   let resume: string | undefined;
   const rest: string[] = [];
+  const envUi = process.env.AMNESS_UI === "inline" || process.env.AMNESS_UI === "full" ? process.env.AMNESS_UI : undefined;
+  let ui: "full" | "inline" | undefined = envUi ?? cfg.ui;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "-c" || argv[i] === "--continue") resume = "last";
     else if (argv[i] === "--resume") resume = argv[++i] ?? "last";
+    else if (argv[i] === "--inline") ui = "inline";
+    else if (argv[i] === "--full") ui = "full";
     else rest.push(argv[i]);
   }
   if (!(await ensureReady())) return;
-  const app = new App({ cfg, cwd: process.cwd(), version: VERSION, resume, prompt: rest.join(" ").trim() || undefined });
+  const tiny = (process.stdout.columns ?? 80) < 60 || (process.stdout.rows ?? 24) < 14;
+  if (process.env.TERM === "dumb" || tiny) ui = "inline";
+  const app = new App({ cfg, cwd: process.cwd(), version: VERSION, resume, ui: ui ?? "full", prompt: rest.join(" ").trim() || undefined });
   process.exitCode = await app.start();
 }
 

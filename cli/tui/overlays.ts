@@ -8,6 +8,13 @@ import { framed, helpLines, optionList, type Option } from "./view.ts";
 export type Drawn = { lines: string[]; cursor?: { row: number; col: number } };
 export interface Overlay { render(width: number): Drawn; key(k: Key): void; }
 
+/** What a permission prompt is about, in a form the full-screen UI can draw properly (the inline UI uses `body`). */
+export type ChoiceDetail =
+  | { kind: "diff"; path: string; diff: string }
+  | { kind: "command"; cmd: string; danger?: string }
+  | { kind: "plan"; md: string }
+  | { kind: "text"; text: string };
+
 /** Standard text-editing keys, shared by the main input and text overlays. Returns true if the key was consumed. */
 export function editKey(ed: Editor, k: Key): boolean {
   if (k.name === "paste") { ed.paste(k.text ?? ""); return true; }
@@ -38,9 +45,9 @@ export function editKey(ed: Editor, k: Key): boolean {
 /** Numbered choices inside a titled box (permission prompts). Resolves with the chosen index, or undefined on Esc. */
 export class ChoiceOverlay implements Overlay {
   sel = 0;
-  title: string; body: string[]; question: string; options: Option[]; done: (i: number | undefined) => void;
-  constructor(title: string, body: string[], question: string, options: Option[], done: (i: number | undefined) => void, paint?: (s: string) => string) {
-    this.title = title; this.body = body; this.question = question; this.options = options; this.done = done; this.paint = paint;
+  title: string; body: string[]; question: string; options: Option[]; done: (i: number | undefined) => void; detail?: ChoiceDetail;
+  constructor(title: string, body: string[], question: string, options: Option[], done: (i: number | undefined) => void, paint?: (s: string) => string, detail?: ChoiceDetail) {
+    this.title = title; this.body = body; this.question = question; this.options = options; this.done = done; this.paint = paint; this.detail = detail;
   }
   paint?: (s: string) => string;
   render(width: number): Drawn {
@@ -61,7 +68,12 @@ export class PickerOverlay<T> implements Overlay {
   sel = 0; filter = "";
   title: string; items: PickItem<T>[]; done: (v: T | undefined) => void; max: number;
   constructor(title: string, items: PickItem<T>[], done: (v: T | undefined) => void, initial = 0, max = 10) { this.title = title; this.items = items; this.done = done; this.sel = initial; this.max = max; }
-  private visible() { const f = this.filter.toLowerCase(); return f ? this.items.filter((i) => `${i.label} ${i.hint ?? ""}`.toLowerCase().includes(f)) : this.items; }
+  visible() { const f = this.filter.toLowerCase(); return f ? this.items.filter((i) => `${i.label} ${i.hint ?? ""}`.toLowerCase().includes(f)) : this.items; }
+  /** Called whenever the highlighted item changes (live theme preview). */
+  onMove?: (v: T | undefined) => void;
+  /** Choose the i-th visible item (mouse click). */
+  pick(i: number) { const it = this.visible()[i]; if (it) this.done(it.value); }
+  private moved() { this.onMove?.(this.visible()[this.sel]?.value); }
   render(width: number): Drawn {
     const list = this.visible(); this.sel = Math.max(0, Math.min(this.sel, list.length - 1));
     const top = Math.max(0, Math.min(this.sel - Math.floor(this.max / 2), list.length - this.max)), slice = list.slice(top, top + this.max);
@@ -76,8 +88,8 @@ export class PickerOverlay<T> implements Overlay {
   }
   key(k: Key) {
     const list = this.visible();
-    if (k.name === "up") this.sel = (this.sel + list.length - 1) % Math.max(1, list.length);
-    else if (k.name === "down") this.sel = (this.sel + 1) % Math.max(1, list.length);
+    if (k.name === "up") { this.sel = (this.sel + list.length - 1) % Math.max(1, list.length); this.moved(); }
+    else if (k.name === "down") { this.sel = (this.sel + 1) % Math.max(1, list.length); this.moved(); }
     else if (k.name === "enter") { if (list.length) this.done(list[this.sel].value); }
     else if (k.name === "escape" || (k.ctrl && k.name === "c")) this.done(undefined);
     else if (k.name === "backspace") { this.filter = this.filter.slice(0, -1); this.sel = 0; }
@@ -108,10 +120,13 @@ export class InputOverlay implements Overlay {
 
 /** Static text (help) closed by any key. */
 export class TextOverlay implements Overlay {
-  lines: string[]; done: () => void;
+  lines: string[]; done: () => void; scroll = 0;
   constructor(lines: string[], done: () => void) { this.lines = lines; this.done = done; }
   render(): Drawn { return { lines: [...this.lines, dim("  press any key to close")] }; }
-  key() { this.done(); }
+  key(k?: Key) {
+    const step = k?.name === "up" ? -1 : k?.name === "down" ? 1 : k?.name === "pageup" ? -10 : k?.name === "pagedown" ? 10 : k?.name === "home" ? -1e6 : k?.name === "end" ? 1e6 : 0;
+    if (step) this.scroll = Math.max(0, this.scroll + step); else this.done();         // arrows scroll long text; anything else closes it
+  }
 }
 
 export const helpOverlay = (cmds: { name: string; help: string }[], done: () => void, width: number) => new TextOverlay(helpLines(cmds, width), done);

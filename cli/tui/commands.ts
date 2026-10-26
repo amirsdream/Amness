@@ -6,6 +6,7 @@ import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
 import { fmtDuration } from "./pricing.ts";
 import { tokenReport } from "./tokens.ts";
+import { THEMES, getTheme, themeNames } from "./themes.ts";
 import { helpLines, renderDiff, todoList } from "./view.ts";
 
 export type Cmd = { name: string; help: string; alias?: string; args?: string; /** safe to run while the agent is working */ live?: boolean; run(app: App, args: string): Promise<void> | void };
@@ -15,7 +16,7 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export function buildCommands(): Cmd[] {
   return [
-    { name: "help", alias: "?", help: "keys and commands", live: true, run: (a) => a.openPager(helpLines(a.cmds, a.screen.cols - 1), "help") },
+    { name: "help", alias: "?", help: "keys and commands", live: true, run: (a) => a.openPager(helpLines(a.cmds, (a.io.output.columns || 80) - 1), "help") },
     { name: "model", help: "switch model", args: "[id]", run: async (a, arg) => {
       let id: string | undefined = arg;
       if (!id) {
@@ -72,7 +73,7 @@ export function buildCommands(): Cmd[] {
       if (!a.session.messages.length) return void a.say("nothing to compact yet", dim);
       a.note("compacting…", 60_000);
       const r = await a.agent.compact(a.session.messages);
-      a.session.messages = r.messages; a.lastPrompt = 0; a.saveSession(); a.noticeUntil = 0;
+      a.session.messages = r.messages; a.lastPrompt = 0; a.saveSession(); a.noticeUntil = 0; a.rebuildBlocks();
       a.commit(["", `  ${green("✓")} ${dim("conversation compacted into a handoff note")}`, ...r.note.split("\n").slice(0, 8).map((l) => "    " + dim(l))]);
     } },
     { name: "memory", help: "list notes · /memory forget <name> · /memory add <text>", args: "[forget|add]", run: async (a, arg) => {
@@ -89,7 +90,7 @@ export function buildCommands(): Cmd[] {
       if (!list.length) return void a.say("no earlier conversations in this project", dim);
       const id = await a.pick("Resume", list.map((s) => ({ label: s.title || "(untitled)", value: s.id, hint: `${s.turns} turns · ${s.updated.slice(0, 16).replace("T", " ")} · ${s.model}` })));
       const s = id && a.store.load(id); if (!s) return;
-      a.loadSession(s); a.commit(["", `  ${green("↻")} ${dim(`resumed "${s.title}" (${s.turns.length} turns)`)}`]);
+      a.loadSession(s); a.rebuildBlocks(); a.commit(["", `  ${green("↻")} ${dim(`resumed "${s.title}" (${s.turns.length} turns)`)}`]);
     } },
     { name: "export", help: "save a portable session bundle", args: "[file]", run: async (a, arg) => {
       if (!a.session.turns.length) return void a.say("nothing to export yet", dim);
@@ -148,6 +149,31 @@ export function buildCommands(): Cmd[] {
     { name: "status", help: "model, mode, project, session", live: true, run: (a) => {
       a.commit(["", bold("  Status"), `  ${dim("model")}     ${a.cfg.model} ${dim("via " + a.providerInfo().label + (a.model.api ? ` · ${a.model.api()} API` : ""))}`, ...(a.cfg.effort ? [`  ${dim("effort")}    ${a.cfg.effort}`] : []), `  ${dim("mode")}      ${a.mode}`, `  ${dim("project")}   ${a.cwd}${a.branch ? dim("  ⎇ " + a.branch) : ""}`,
         `  ${dim("verify")}    ${a.verify ?? "none"}`, `  ${dim("session")}   ${a.session.id} ${dim(`(${a.session.turns.length} turns)`)}`, `  ${dim("memory")}    ${a.memory?.list().length ?? 0} notes`, `  ${dim("running")}   ${a.running ? "yes, " + fmtDuration(Date.now() - a.runStart) : "no"}`]);
+    } },
+    { name: "theme", help: "colour theme (live preview)", args: "[name]", run: async (a, arg) => {
+      const prev = a.cfg.theme;
+      const choose = (n: string | undefined) => { a.cfg.theme = n ?? prev; a.full?.invalidate(); a.render(); };
+      let name: string | undefined = arg;
+      if (!name) {
+        name = await a.pick("Theme", themeNames().map((n) => ({ label: THEMES[n].label, value: n, hint: THEMES[n].dark ? "dark" : "light" })), Math.max(0, themeNames().indexOf(getTheme(prev).name)), (v) => choose(v));
+        if (!name) { choose(prev); return; }
+      }
+      if (!THEMES[name]) { choose(prev); return void a.say(`unknown theme "${name}". Try: ${themeNames().join(", ")}`, red); }
+      choose(name); a.saveConfig(); a.say(`theme → ${cyan(THEMES[name].label)}${a.full ? "" : dim("  (themes apply to the full-screen UI; try /ui full)")}`, dim);
+    } },
+    { name: "sidebar", help: "show or hide the side panel", alias: "side", live: true, run: (a) => { if (!a.full) return void a.say("the side panel is part of the full-screen UI (/ui full)", dim); a.full.showSidebar = !a.full.showSidebar; a.full.invalidate(); } },
+    { name: "details", help: "expand or collapse all tool output", live: true, run: (a) => { if (!a.full) return void a.say("full-screen UI only (/ui full)", dim); a.full.expandAll = !a.full.expandAll; a.full.toast(a.full.expandAll ? "all tool output expanded" : "tool output collapsed"); } },
+    { name: "diffmode", help: "diff layout: auto · stacked · split", args: "[mode]", live: true, run: (a, arg) => {
+      if (!a.full) return void a.say("full-screen UI only (/ui full)", dim);
+      if (!["auto", "stacked", "split"].includes(arg)) return void a.say(`diff layout is ${cyan(a.full.diffMode)}. Choose: auto, stacked, split`, dim);
+      a.full.diffMode = arg as "auto"; a.full.invalidate(); a.say(`diff layout → ${cyan(arg)}`, dim);
+    } },
+    { name: "mouse", help: "mouse on/off (off restores native text selection)", args: "[on|off]", live: true, run: (a, arg) => { if (!a.full) return void a.say("full-screen UI only (/ui full)", dim); a.full.setMouse(arg ? arg !== "off" : !a.full.mouseOn); } },
+    { name: "ui", help: "switch between the full-screen and inline UI", args: "[full|inline]", run: (a, arg) => {
+      const to = arg === "full" || arg === "inline" ? arg : a.ui === "full" ? "inline" : "full";
+      a.cfg.ui = to; a.saveConfig();
+      if (to === a.ui) return void a.say(`already using the ${to} UI`, dim);
+      a.switchUi(to);
     } },
     { name: "exit", alias: "quit", help: "leave", live: true, run: (a) => a.exit(0) },
   ];

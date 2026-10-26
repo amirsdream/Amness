@@ -1,7 +1,21 @@
 // Raw terminal input -> key events. Handles CSI/SS3 sequences, modifiers, alt-combos, kitty "CSI u", and bracketed paste.
-export type Key = { name: string; text?: string; ctrl?: boolean; alt?: boolean; shift?: boolean };
+export type MouseEv = { x: number; y: number; button: "left" | "middle" | "right" | "none"; action: "press" | "release" | "drag" | "move" | "wheelup" | "wheeldown"; shift?: boolean; alt?: boolean; ctrl?: boolean };
+export type Key = { name: string; text?: string; ctrl?: boolean; alt?: boolean; shift?: boolean; mouse?: MouseEv };
 
 export const PASTE_ON = "\x1b[?2004h", PASTE_OFF = "\x1b[?2004l";
+/** Mouse reporting: button events + drag motion, SGR encoding (so coordinates beyond 223 work). */
+export const MOUSE_ON = "\x1b[?1000h\x1b[?1002h\x1b[?1006h", MOUSE_OFF = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
+/** SGR mouse report `ESC [ < b ; x ; y (M|m)` -> event. Coordinates are 0-based cells. */
+function mouseFrom(params: string, fin: string): MouseEv | undefined {
+  const [b, x, y] = params.slice(1).split(";").map(Number);
+  if (![b, x, y].every(Number.isFinite)) return undefined;
+  const base: { x: number; y: number; shift?: boolean; alt?: boolean; ctrl?: boolean } = { x: x - 1, y: y - 1 };
+  if (b & 4) base.shift = true; if (b & 8) base.alt = true; if (b & 16) base.ctrl = true;
+  if (b & 64) return { ...base, button: "none", action: (b & 1) === 0 ? "wheelup" : "wheeldown" };
+  const button = (["left", "middle", "right", "none"] as const)[b & 3];
+  return { ...base, button, action: fin === "m" ? "release" : b & 32 ? (button === "none" ? "move" : "drag") : "press" };
+}
 const mods = (m: number): Pick<Key, "ctrl" | "alt" | "shift"> => ({ shift: !!((m - 1) & 1) || undefined, alt: !!((m - 1) & 2) || undefined, ctrl: !!((m - 1) & 4) || undefined });
 const clean = (k: Key): Key => Object.fromEntries(Object.entries(k).filter(([, v]) => v !== undefined)) as Key;
 const FINAL: Record<string, string> = { A: "up", B: "down", C: "right", D: "left", H: "home", F: "end", Z: "backtab", P: "f1", Q: "f2", R: "f3", S: "f4" };
@@ -48,6 +62,7 @@ export class KeyParser {
         if (!m) return b.length < 24 ? null : { len: 1, key: { name: "escape" } };
         const len = 2 + m[0].length, [p0 = "", p1 = ""] = m[1].split(";"), fin = m[2];
         if (m[1] === "200" && fin === "~") { this.pasting = ""; return { len }; }
+        if (m[1].startsWith("<") && (fin === "M" || fin === "m")) { const mouse = mouseFrom(m[1], fin); return { len, key: mouse ? { name: "mouse", mouse } : undefined }; }
         const mod = p1 ? Number(p1.split(":")[0]) : 1;
         if (fin === "u") {                                   // kitty keyboard protocol
           const code = Number(p0), name = code === 13 ? "enter" : code === 9 ? "tab" : code === 27 ? "escape" : code === 127 ? "backspace" : "char";
