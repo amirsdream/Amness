@@ -1,0 +1,516 @@
+// The chat TUI: one persistent conversation with a live input box, streaming output, permission prompts and slash commands.
+import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { Budget, MemoryStore, createCodeAgent, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
+import { detectVerify } from "../detect.ts";
+import { createHash } from "node:crypto";
+import { createModel } from "../model.ts";
+import { loadState, saveState } from "../state.ts";
+import { bold, cyan, dim, gray, green, magenta, red, yellow } from "../ui.ts";
+import { buildCommands, type Cmd } from "./commands.ts";
+import { loadCustomCommands } from "./custom.ts";
+import { FileIndex, applySuggestion, rankCommands, rankFiles, tokenAtCursor, type Suggestion, type Token } from "./complete.ts";
+import { Editor } from "./editor.ts";
+import { KeyParser, PASTE_OFF, PASTE_ON, type Key } from "./keys.ts";
+import { renderMarkdown, takeCompleteBlocks } from "./markdown.ts";
+import { expandMentions, attachedNote } from "./mentions.ts";
+import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, editKey, type Overlay, type PickItem } from "./overlays.ts";
+import { Pager, transcriptLines } from "./pager.ts";
+import { TIPS, at, brandOf, fg, palette, shimmer, sparkline } from "./theme.ts";
+import { contextWindow, estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
+import { Screen, type Out } from "./screen.ts";
+import { SessionStore, newSession, rewind, snapshot, type SessionData, type Turn } from "./session.ts";
+import { basename } from "node:path";
+import { cellWidth, clipWidth, wrapAnsi } from "./text.ts";
+import { assistantBlock, editSummary, footer, helpLines, isFailure, renderDiff, todoList, toolCall, toolHeader, toolResult, userMessage, welcome } from "./view.ts";
+
+type Ev = Event & { agent?: string };
+type EditEv = Extract<Event, { kind: "edit" }>;
+export type AppOptions = {
+  cfg: Config; cwd: string; version: string;
+  input?: any; output?: Out & { on?: (e: string, f: () => void) => void };
+  makeModel?: (cfg: Config) => Model;
+  resume?: "last" | string; prompt?: string; persist?: boolean;
+};
+const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+const GLYPHS = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];            // the status line "breathes"
+const MODES: PermMode[] = ["default", "acceptEdits", "plan"];
+const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "note";
+const one = (s: string, n: number) => { const l = s.replace(/\s+/g, " ").trim(); return cellWidth(l) > n ? clipWidth(l, n - 1) + "…" : l; };
+
+export class App {
+  cfg: Config; cwd: string; version: string; persist: boolean;
+  io: { input: any; output: Out & { on?: (e: string, f: () => void) => void } };
+  screen: Screen; keys = new KeyParser(); editor = new Editor(); files: FileIndex;
+  mode: PermMode = "default";
+  shRules = new Set<string>(); toolRules = new Set<string>();
+  model!: Model; agent!: ReturnType<typeof createCodeAgent>; budget = new Budget();
+  store: SessionStore; session: SessionData; edits: EditEv[] = [];
+  verify: string | undefined;
+  runSeries: number[] = []; thinkBuf = "";
+  running = false; ac: AbortController | undefined; runStart = 0; runTokens = 0; lastPrompt = 0;
+  inflight = new Map<string, { name: string; args: string; t0: number; agent?: string }>();
+  pendingEdits = new Map<string, EditEv>();
+  streamBuf = ""; msgOpen = false; streamedThisMsg = false;
+  todos: { content: string; status: string }[] = [];
+  queued: { text: string; full: string }[] = [];
+  overlay: Overlay | null = null; pager: Pager | null = null;
+  sugg: { items: Suggestion[]; sel: number; token: Token; kind: Token["kind"] } | null = null; suggOff = "";
+  private builtin: Cmd[]; private customAt = 0; private customCmds: Cmd[] = [];
+  mcp: { cmd: string; tools: Tool[]; close: () => void }[] = [];
+  notice = ""; noticeUntil = 0;
+  pendingContext: string[] = []; modeNotice = "";
+  branch: string | undefined; live: Awaited<ReturnType<typeof startLive>> | undefined;
+  private out: string[] = [];
+  private timer: ReturnType<typeof setInterval> | undefined; private flushT: ReturnType<typeof setTimeout> | undefined; private renderT: ReturnType<typeof setTimeout> | undefined;
+  private escAt = 0; private ctrlcAt = 0; private frame = 0; private stopped = false;
+  private opts: AppOptions;
+  done: Promise<number>; private resolveDone!: (n: number) => void;
+
+  constructor(o: AppOptions) {
+    this.opts = o; this.cfg = o.cfg; this.cwd = o.cwd; this.version = o.version; this.persist = o.persist ?? true;
+    this.io = { input: o.input ?? process.stdin, output: o.output ?? (process.stdout as any) };
+    this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.cwd);
+    this.session = newSession(o.cwd, o.cfg.model);
+    this.builtin = buildCommands();
+    this.done = new Promise((r) => (this.resolveDone = r));
+    const st = loadState(); this.verify = st.verifyByDir[o.cwd] ?? (detectVerify(o.cwd) || undefined);
+    if (this.persist) try { this.editor.history = JSON.parse(readFileSync(join(home(), "history.json"), "utf8")).slice(0, 200); } catch { /* first run */ }
+    this.buildAgent();
+  }
+
+  /** Built-in commands plus the user's own (.amness/commands/*.md). Built-ins win name clashes. */
+  get cmds(): Cmd[] {
+    if (Date.now() - this.customAt > 2000) {
+      this.customAt = Date.now();
+      this.customCmds = loadCustomCommands([{ dir: join(this.cwd, ".amness", "commands"), scope: "project" }, { dir: join(home(), "commands"), scope: "user" }]);
+    }
+    const names = new Set(this.builtin.flatMap((c) => [c.name, c.alias ?? ""]));
+    return [...this.builtin, ...this.customCmds.filter((c) => !names.has(c.name))];
+  }
+
+  // ------------------------------------------------------------------ agent plumbing
+  buildAgent() {
+    const cacheKey = "amness-" + createHash("sha1").update(this.cwd).digest("hex").slice(0, 12);          // stable per project: better prompt-cache hits
+    this.model = (this.opts.makeModel ?? ((c) => createModel(c, undefined, { cacheKey })))(this.cfg);
+    this.agent = createCodeAgent({
+      model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+    });
+    for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
+  }
+  get width() { return Math.max(24, this.screen.cols - 1); }
+  get ctxPct() { return this.lastPrompt ? Math.min(99, Math.round((this.lastPrompt / contextWindow(this.cfg.model)) * 100)) : null; }
+  get cost() { const u = this.session.usage; return fmtCost(estimateCost(this.cfg.model, u.prompt, u.completion, u.cached ?? 0)); }
+
+  // ------------------------------------------------------------------ lifecycle
+  async start() {
+    const { input, output } = this.io;
+    input.setRawMode?.(true); input.setEncoding?.("utf8"); input.resume?.();
+    output.write(PASTE_ON);
+    input.on("data", this.onData);
+    output.on?.("resize", () => this.render());
+    process.once("exit", this.restore);
+    this.files.ensure().catch(() => {});
+    this.refreshBranch();
+    let resumed: string | undefined;
+    if (this.opts.resume) {
+      const s = this.opts.resume === "last" ? this.store.latest() : this.store.load(this.opts.resume);
+      if (s) { this.session = s; resumed = `"${s.title}" · ${s.turns.length} turn${s.turns.length === 1 ? "" : "s"}`; this.recount(); }
+    }
+    this.commit(welcome({ version: this.version, model: this.cfg.model, provider: this.cfg.provider, cwd: this.cwd, branch: this.branch, notes: this.agent.memory?.list().length ?? 0, verify: this.verify, mode: this.mode, resumed, tip: TIPS[Math.floor(Math.random() * TIPS.length)] }, this.width));
+    this.setTitle(`amness · ${basename(this.cwd)}`);
+    if (resumed) this.replay();
+    this.render();
+    if (this.opts.prompt) void this.dispatch(this.opts.prompt);
+    return this.done;
+  }
+  private recount() { const l = [...this.session.messages].reverse().find((m) => m.role === "assistant" && m.usage?.prompt_tokens); this.lastPrompt = l?.usage?.prompt_tokens ?? 0; }
+  private replay() {
+    const tail = this.session.messages.filter((m) => (m.role === "user" || (m.role === "assistant" && m.content?.trim()))).slice(-6);
+    this.commit([dim("  ── earlier in this conversation ──")]);
+    for (const m of tail) this.commit(m.role === "user" ? userMessage(one((m.content ?? "").split("\n\n<attached>")[0].split("\n\n## ")[0], this.width - 4), this.width) : assistantBlock(one(m.content ?? "", this.width * 3), this.width, true));
+    this.commit([dim("  ── continue below ──"), ""]);
+  }
+  restore = () => {
+    if (this.stopped) return; this.stopped = true;
+    clearInterval(this.timer);
+    try { this.screen.clear(); if (this.screen.alt) this.screen.leaveAlt(); this.io.output.write(PASTE_OFF + "\x1b[?25h"); this.io.input.setRawMode?.(false); this.io.input.pause?.(); this.io.input.off?.("data", this.onData); } catch { /* terminal already gone */ }
+  };
+  exit(code = 0) {
+    if (this.running) this.ac?.abort();
+    this.saveSession(); this.restore();
+    const hint = this.session.turns.length ? dim(`Resume this conversation with: amness -c   (session ${this.session.id})`) : "";
+    this.io.output.write(`\r\n${dim("bye 👋")}${hint ? "\r\n" + hint : ""}\r\n`);
+    this.mcp.splice(0).forEach((m) => m.close());
+    void this.live?.close(); this.resolveDone(code);
+  }
+
+  // ------------------------------------------------------------------ output
+  commit(lines: string[]) { this.out.push(...lines); }
+  say(text: string | string[], paint: (s: string) => string = (s) => s) {
+    for (const t of ([] as string[]).concat(text)) this.commit(["", ...t.split("\n").flatMap((p) => wrapAnsi(paint(p), this.width - 2)).map((l) => "  " + l)]);
+  }
+  note(text: string, ms = 3000) {
+    this.notice = text; this.noticeUntil = Date.now() + ms; this.render();
+    setTimeout(() => { if (Date.now() >= this.noticeUntil) this.render(); }, ms + 30);               // redraw when it expires so the footer returns to normal
+  }
+
+  render = () => {
+    if (this.stopped || this.pager) return;
+    clearTimeout(this.renderT); this.renderT = undefined;
+    const w = this.width, live: string[] = [];
+    let cursor: { row: number; col: number } | undefined;
+    if (this.streamBuf.trim()) { const r = renderMarkdown(this.streamBuf, w - 2).slice(-6); live.push(...r.map((l, i) => (this.msgOpen || i ? "  " : bold("● ")) + l)); }
+    const now = Date.now();
+    for (const t of this.inflight.values()) live.push(`${t.agent && t.agent !== "lead" ? dim("  │ ") : ""}${cyan(SPIN[this.frame % SPIN.length])} ${toolCall(t.name, t.args)} ${dim(fmtDuration(now - t.t0))}`);
+    if (this.running && this.todos.length) live.push(...todoList(this.todos, w));
+    if (this.running && this.thinkBuf.trim() && !this.streamBuf.trim()) {                      // the model's reasoning summary, as it forms (OpenAI Responses)
+      const last = this.thinkBuf.replace(/\s+/g, " ").trim().slice(-(w - 8));
+      live.push(dim(`  ✻ ${last.replace(/^\S*\s/, (m) => (cellWidth(last) >= w - 8 ? "" : m))}`));
+    }
+    if (this.running) {
+      const glyph = fg(at(palette.brand, (this.frame % 30) / 30), GLYPHS[this.frame % GLYPHS.length]), spark = this.runSeries.length > 1 ? " " + sparkline(this.runSeries, 10) : "";
+      live.push(`${glyph} ${shimmer((this.mode === "plan" ? "Planning" : "Working") + "…", this.frame)}${dim(` (${fmtDuration(now - this.runStart)} · ↓ ${fmtTokens(this.runTokens)} tokens`)}${spark}${dim(" · esc to interrupt)")}`);
+    }
+    for (const q of this.queued) live.push(dim(`  ▸ queued: ${one(q.text, w - 14)}`));
+    if (live.length) live.unshift("");
+    if (this.overlay) {
+      const d = this.overlay.render(w), at = live.length;
+      live.push(...d.lines); if (d.cursor) cursor = { row: at + d.cursor.row, col: d.cursor.col };
+    } else {
+      live.push("");                                                              // breathing room above the input box
+      if (this.sugg) live.push(...this.suggLines(w));
+      live.push(gray("─".repeat(w)));
+      const r = this.editor.render(w), prompt = this.editor.text.startsWith("!") ? yellow("! ") : this.editor.text.startsWith("#") ? green("# ") : bold(cyan("❯ "));
+      const at = live.length;
+      live.push(...r.lines.map((l, i) => (i === 0 ? prompt + this.styleInput(l.slice(2)) : "  " + this.styleInput(l.slice(2)))));
+      cursor = { row: at + r.cursor.row, col: r.cursor.col };
+      live.push(gray("─".repeat(w)));
+    }
+    live.push(footer({ mode: this.mode, model: this.cfg.model, provider: this.cfg.provider, ctxPct: this.ctxPct, cost: this.cost, branch: this.branch, queued: this.queued.length, hint: this.overlay ? undefined : this.hint(), quiet: !!this.overlay, notice: this.notice && now < this.noticeUntil ? this.notice : undefined }, w));
+    this.screen.frame(this.out.splice(0), live, cursor);
+  };
+  schedule() { if (!this.renderT) this.renderT = setTimeout(this.render, 12); }
+  private styleInput(l: string) { return l.replace(/(@[^\s]+)/g, (m) => cyan(m)).replace(/\[Pasted text #\d+ \+\d+ lines?\]/g, (m) => magenta(m)); }
+  private hint() {
+    if (!this.editor.empty) return this.running ? "enter queues your message" : undefined;
+    if (this.running) return "type to steer · esc to interrupt";
+    const p = this.ctxPct;
+    return p !== null && p >= 75 ? (p >= 90 ? "context almost full · /compact" : "context filling up · /compact") : "? for shortcuts · ctrl+p commands";
+  }
+  setTitle(t: string) { if (this.io.output.isTTY !== false) this.io.output.write(`\x1b]0;${t}\x07`); }
+  private suggLines(w: number): string[] {
+    const s = this.sugg!, win = 8, top = Math.max(0, Math.min(s.sel - 3, s.items.length - win));
+    return s.items.slice(top, top + win).map((it, i) => {
+      const on = top + i === s.sel, label = s.kind === "file" ? it.label : it.label.padEnd(12);
+      return (on ? cyan("❯ ") + bold(cyan(label)) : "  " + label) + (it.detail ? "  " + (on ? gray(it.detail) : dim(it.detail)) : "");
+    }).map((l) => (cellWidth(l) > w ? l.slice(0, w + 12) : l));
+  }
+  private tick = () => { this.frame++; this.render(); };
+  private ensureTimer() { if (!this.timer) this.timer = setInterval(this.tick, 100); }
+  private idleTimer() { if (!this.running && !this.inflight.size && this.timer) { clearInterval(this.timer); this.timer = undefined; } }
+
+  // ------------------------------------------------------------------ input
+  onData = (d: Buffer | string) => {
+    for (const k of this.keys.feed(typeof d === "string" ? d : d.toString("utf8"))) this.handleKey(k);
+    clearTimeout(this.flushT);
+    if (this.keys.pending) this.flushT = setTimeout(() => { for (const k of this.keys.flush()) this.handleKey(k); }, 35);
+  };
+
+  handleKey(k: Key) {
+    if (this.pager) return this.pager.key(k);
+    if (this.overlay) { this.overlay.key(k); this.schedule(); return; }
+    const ed = this.editor;
+    if (k.ctrl && k.name === "c") return this.ctrlC();
+    if (k.ctrl && k.name === "d") { if (ed.empty) return this.exit(0); }
+    if (k.ctrl && k.name === "o") return this.openTranscript();
+    if (k.ctrl && k.name === "p") return void this.openPalette();
+    if (k.alt && k.name === "char" && k.text === "m") return void this.runCommand("/model");
+    if (k.ctrl && k.name === "l") { this.io.output.write("\x1b[2J\x1b[3J\x1b[H"); this.screen.height = 0; return this.render(); }
+    if (k.name === "backtab") return this.cycleMode();
+    if (k.name === "escape") return this.escape();
+    if (k.name === "tab" && this.sugg) return this.acceptSugg(false);
+    if (k.name === "enter" && !k.alt && !k.shift) {
+      if (this.sugg && this.sugg.items.length) { const it = this.sugg.items[this.sugg.sel]; if (!(this.sugg.kind === "slash" && ed.text.trim() === it.label)) return this.acceptSugg(true); }
+      if (ed.text.slice(0, ed.cursorIndex).endsWith("\\")) { ed.backspace(); ed.newline(); return this.after(); }
+      return void this.submit();
+    }
+    if (k.name === "up" || k.name === "down") {
+      if (this.sugg) { const n = this.sugg.items.length; this.sugg.sel = (this.sugg.sel + (k.name === "up" ? n - 1 : 1)) % n; return this.render(); }
+      if (!ed.vertical(k.name === "up" ? -1 : 1)) k.name === "up" ? ed.historyPrev() : ed.historyNext();
+      return this.after(false);
+    }
+    if (k.name === "char" && k.text === "?" && ed.empty) return this.openPager(helpLines(this.cmds, this.screen.cols - 1), "help");
+    if (editKey(ed, k)) { this.escAt = 0; return this.after(); }
+  }
+  private after(suggest = true) { if (suggest) this.updateSugg(); this.render(); }
+
+  private updateSugg() {
+    const text = this.editor.text, tok = tokenAtCursor(text, this.editor.cursorIndex), key = tok ? `${tok.kind}:${tok.query}` : "";
+    if (!tok || key === this.suggOff) { this.sugg = null; return; }
+    this.suggOff = "";
+    let items: Suggestion[] = [];
+    if (tok.kind === "slash") items = rankCommands(tok.query, this.cmds);
+    else {
+      if (!this.files.fresh()) void this.files.ensure().then(() => this.updateSugg(), () => {});    // list still loading: fill the popup in once it arrives
+      items = rankFiles(tok.query, this.files.files);
+    }
+    const keep = this.sugg && this.sugg.kind === tok.kind && this.sugg.token.query === tok.query ? this.sugg.sel : 0;
+    this.sugg = items.length ? { items, sel: Math.min(keep, items.length - 1), token: tok, kind: tok.kind } : null;
+    if (!this.sugg) return;
+    this.schedule();
+  }
+  private acceptSugg(fromEnter: boolean) {
+    const s = this.sugg!, r = applySuggestion(this.editor.text, s.token, s.items[s.sel]);
+    this.editor.setText(r.text, r.cursor); this.sugg = null; this.suggOff = "";
+    if (fromEnter && s.kind === "slash" && !this.cmds.find((c) => "/" + c.name === s.items[s.sel].label)?.args) return void this.submit();
+    this.updateSugg(); this.render();
+  }
+
+  private escape() {
+    if (this.sugg) { this.suggOff = `${this.sugg.token.kind}:${this.sugg.token.query}`; this.sugg = null; return this.render(); }
+    if (this.running) { this.ac?.abort(); return this.note("interrupting after the current step…"); }
+    const now = Date.now();
+    if (now - this.escAt < 700) { this.escAt = 0; if (!this.editor.empty) { this.editor.clear(); return this.render(); } return void this.openRewind(); }
+    this.escAt = now; if (!this.editor.empty) this.note("press esc again to clear"); else if (this.session.turns.length) this.note("press esc again to rewind");
+  }
+  private ctrlC() {
+    const now = Date.now();
+    if (this.running) { this.ac?.abort(); this.ctrlcAt = 0; return this.note("interrupting after the current step…"); }
+    if (!this.editor.empty) { this.editor.clear(); this.sugg = null; return this.render(); }
+    if (now - this.ctrlcAt < 2000) return this.exit(0);
+    this.ctrlcAt = now; this.note("press ctrl-c again to exit");
+  }
+  cycleMode() { this.setMode(MODES[(MODES.indexOf(this.mode) + 1) % MODES.length]); }
+  setMode(m: PermMode) {
+    if (m === this.mode) return;
+    this.mode = m;
+    this.modeNotice = m === "plan" ? "[mode: plan mode is ON. You are read-only. Investigate, then present your plan with exit_plan_mode.]" : this.mode === "yolo" ? "" : `[mode: permission mode is now "${m}"; plan mode is off.]`;
+    if (m === "default") this.note("default mode: asks before edits and commands"); else this.render();    // other modes announce themselves in the footer label
+  }
+
+  // ------------------------------------------------------------------ submitting
+  async submit() {
+    const text = this.editor.submit(); this.sugg = null; this.suggOff = "";
+    if (!text) return this.render();
+    this.saveHistory();
+    if (this.running) {
+      if (text.startsWith("/")) { const n = text.slice(1).split(/\s+/)[0]; const c = this.cmds.find((x) => x.name === n); if (c?.live) return void (await this.runCommand(text)); this.note("finish or interrupt (esc) before running commands"); return; }
+      const { text: full, attached } = expandMentions(text, this.cwd);
+      this.queued.push({ text, full }); void attached; return this.render();
+    }
+    await this.dispatch(text);
+  }
+  async dispatch(text: string) {
+    if (text.startsWith("/")) return this.runCommand(text);
+    if (text.startsWith("!")) return this.bash(text.slice(1).trim());
+    if (text.startsWith("#")) return this.remember(text.slice(1).trim());
+    await this.turn(text);
+  }
+  async runCommand(text: string) {
+    const [name, ...rest] = text.slice(1).split(/\s+/), args = text.slice(1).slice(name.length).trim();
+    const c = this.cmds.find((x) => x.name === name || x.alias === name);
+    if (!c) { this.commit(["", `  ${red("✗")} unknown command /${name}. Type /help.`]); return this.render(); }
+    void rest;
+    try { await c.run(this, args); } catch (e) { this.commit(["", `  ${red("✗")} /${name}: ${(e as Error).message}`]); }
+    this.render();
+  }
+  private drainQueue(): string[] {
+    const q = this.queued.splice(0);
+    for (const m of q) this.commit(userMessage(m.text, this.width, "sent while working"));
+    this.schedule();
+    return q.map((m) => m.full);
+  }
+
+  async bash(cmd: string) {
+    if (!cmd) return;
+    const { runShell } = await import("../../src/index.ts");
+    this.commit(["", toolHeader("sh", JSON.stringify({ cmd }), null).replace("Bash", "Bash!")]); this.render();
+    const out = await runShell(cmd, this.cwd, 120_000);
+    this.commit(toolResult("sh", "{}", out, this.width));
+    this.pendingContext.push(`I ran \`${cmd}\` in my terminal:\n${out.slice(0, 6000)}`);
+    this.render();
+  }
+  remember(note: string) {
+    const mem = this.agent.memory;
+    if (!note || !mem) return this.note("nothing to remember");
+    const e = mem.save({ name: slugify(note.split(/\s+/).slice(0, 6).join(" ")), type: "project", description: one(note, 120), content: note });
+    this.commit(["", `  ${green("✓")} ${dim("remembered:")} ${note}`, `  ${dim(`saved to ${e.scope} memory as "${e.name}"`)}`]); this.render();
+  }
+
+  async turn(text: string) {
+    const { text: expanded, attached } = expandMentions(text, this.cwd);
+    const prefix = [this.modeNotice, ...this.pendingContext].filter(Boolean).join("\n\n"); this.modeNotice = ""; this.pendingContext = [];
+    const full = prefix ? `${prefix}\n\n${expanded}` : expanded;
+    this.commit(userMessage(text, this.width, attachedNote(attached)));
+    if (!this.session.title) this.session.title = one(text, 60);
+    const turn: Turn = { at: this.session.messages.length, text, t: Date.now(), snaps: {} };
+    this.session.turns.push(turn);
+    this.running = true; this.ac = new AbortController(); this.runStart = Date.now(); this.runTokens = 0; this.todos = []; this.runSeries = [];
+    this.setTitle(`● working · ${basename(this.cwd)}`);
+    Object.assign(this.budget, { tokens: 0, calls: 0, t0: Date.now(), maxTokens: this.cfg.maxTokens, maxMs: 60 * 60_000 });
+    this.ensureTimer(); this.render();
+    let ok = false;
+    try {
+      const r = await this.agent.chat(this.session.messages, full);
+      this.session.messages = r.messages; ok = true;
+      if (r.stopped === "budget") this.commit(["", `  ${red("$")} ${r.text}`]);
+      else if (r.stopped === "maxSteps") this.commit(["", `  ${yellow("!")} stopped after the maximum number of steps; send a message to continue`]);
+    } catch (e) {
+      this.session.turns.pop();
+      const msg = (e as Error).message;
+      this.commit(["", `  ${red("✗")} ${one(msg, this.width * 2)}`, ...(/40[13]|auth|api key|credential/i.test(msg) ? [`  ${dim("check your key with /provider")}`] : [])]);
+    }
+    this.flushStream(true);
+    const secs = Date.now() - this.runStart;
+    if (ok && (secs > 4000 || this.runTokens > 2000)) this.commit([dim(`  ✻ Worked for ${fmtDuration(secs)} · ${fmtTokens(this.runTokens)} tokens`)]);
+    if (this.todos.length && this.todos.some((t) => t.status !== "done")) this.commit(todoList(this.todos, this.width));
+    this.todos = []; this.inflight.clear(); this.running = false; this.ac = undefined; this.thinkBuf = "";
+    this.setTitle(`${ok ? "✔" : "✗"} amness · ${basename(this.cwd)}`);
+    if (secs > 20_000) this.io.output.write("\x07");                                  // a long turn finished: nudge the user, even if they switched tabs
+    this.saveSession(); this.refreshBranch(); this.idleTimer(); this.render();
+    if (this.queued.length) { const q = this.queued.splice(0); await this.dispatch(q.map((m) => m.text).join("\n\n")); }
+  }
+
+  // ------------------------------------------------------------------ events from the agent
+  onEvent(e: Ev) {
+    this.live?.onEvent(e as any);
+    const sub = e.agent && e.agent !== "lead" ? e.agent : undefined, w = this.width;
+    switch (e.kind) {
+      case "thinking": if (!sub) { this.thinkBuf = (this.thinkBuf + e.delta).slice(-600); } break;
+      case "turn": this.session.usage.prompt += e.prompt; this.session.usage.completion += e.completion; this.session.usage.calls++;
+        this.session.usage.cached = (this.session.usage.cached ?? 0) + e.cached; this.session.usage.reasoning = (this.session.usage.reasoning ?? 0) + e.reasoning;
+        this.session.usage.series = [...(this.session.usage.series ?? []), e.prompt].slice(-200); this.runSeries = [...this.runSeries, e.completion].slice(-40); if (!sub) { this.runTokens = e.tokens; this.lastPrompt = e.prompt; } else this.runTokens += e.completion; break;
+      case "text": if (!sub) { this.thinkBuf = ""; this.streamBuf += e.delta; this.streamedThisMsg = true; this.flushStream(false); } break;
+      case "assistant": if (!sub) { if (!this.streamedThisMsg || e.streamed === false) { this.streamBuf = e.text; this.streamedThisMsg = false; } this.flushStream(true); } break;
+      case "toolstart": this.inflight.set(e.id, { name: e.name, args: e.args, t0: Date.now(), agent: sub }); this.ensureTimer(); break;
+      case "edit": this.pendingEdits.set(e.path, e); this.edits.push(e); snapshot(this.session.turns.at(-1), e.path, e.before); break;
+      case "tool": {
+        const t = this.inflight.get(e.id ?? ""); this.inflight.delete(e.id ?? ""); this.idleTimer();
+        const bad = isFailure(e.result);
+        if (sub) { this.commit([toolHeader(e.name, e.args, !bad, sub)]); break; }
+        if (e.name === "todo_write") break;
+        const lines = ["", toolHeader(e.name, e.args, !bad)];
+        if ((e.name === "write_file" || e.name === "edit_file") && !bad) {
+          let path = ""; try { path = JSON.parse(e.args).path; } catch { /* keep empty */ }
+          const ed = this.pendingEdits.get(path); this.pendingEdits.delete(path);
+          if (ed) lines.push(`  ${gray("⎿")}  ${dim(editSummary(ed))}`, ...renderDiff(ed.diff, w));
+        } else lines.push(...toolResult(e.name, e.args, e.result, w));
+        void t; this.commit(lines); break;
+      }
+      case "todos": this.todos = e.todos; break;
+      case "finish": if (!sub) { this.flushStream(true); this.commit(["", ...renderMarkdown(e.summary, w - 4).map((l, i) => (i ? "    " : "  " + green("✔ ")) + l)]); } break;
+      case "rejected": this.commit(["", `  ${yellow("⛔")} ${dim("finish rejected by verification:")} ${one(e.detail, w - 10)}`]); break;
+      case "denied": this.commit(["", `  ${red("⊘")} ${dim("denied: " + one(e.detail, w - 14))}`]); break;
+      case "nudge": this.commit([dim("  ↻ nudged the model to act instead of describing")]); break;
+      case "repair": this.commit([dim(`  ⚒ repaired a malformed tool call: ${one(e.detail, w - 30)}`)]); break;
+      case "loop": this.commit([dim("  ∞ blocked a repeated identical call")]); break;
+      case "rollover": this.commit([magenta("  ⟳ ") + dim("context getting large: continued from a handoff note")]); break;
+      case "budget": this.commit(["", `  ${red("$")} ${e.detail}`]); break;
+      case "aborted": this.commit(["", `  ${yellow("⏹")} ${dim("interrupted. Your progress is kept; send a message to continue.")}`]); break;
+      case "steer": case "tools": break;
+    }
+    this.schedule();
+  }
+
+  /** Stream assistant text: complete paragraphs are committed to scrollback immediately; the unfinished tail stays in the live region. */
+  flushStream(final: boolean) {
+    const w = this.width;
+    if (final) { const rest = this.streamBuf; this.streamBuf = ""; if (rest.trim()) { this.commit(assistantBlock(rest, w, !this.msgOpen).map((l, i) => (i === 0 && !this.msgOpen ? ["", l] : [l])).flat()); this.msgOpen = true; } this.msgOpen = false; this.streamedThisMsg = false; return; }
+    const { done, rest } = takeCompleteBlocks(this.streamBuf);
+    if (done.trim()) { this.commit(assistantBlock(done, w, !this.msgOpen).map((l, i) => (i === 0 && !this.msgOpen ? ["", l] : [l])).flat()); this.msgOpen = true; }
+    this.streamBuf = rest;
+  }
+
+  // ------------------------------------------------------------------ permission prompts
+  approve: Approve = async (req) => {
+    const { name, args, preview, reason } = req, w = this.width;
+    if (name === "sh" && this.shAllowed(String(args.cmd))) return true;
+    if (this.toolRules.has(name)) return true;
+    let title = "Permission", body: string[] = [], question = "Allow this?", options: { label: string; hint?: string }[];
+    let paint: ((s: string) => string) | undefined;
+    if (name === "exit_plan_mode") {
+      title = "Ready to code?"; body = renderMarkdown(String(args.plan ?? preview ?? ""), w - 6); question = "Would you like to proceed?";
+      options = [{ label: "Yes, and accept edits automatically" }, { label: "Yes, and ask before each edit" }, { label: "No, keep planning", hint: "tell it what to change" }];
+    } else if (name === "write_file" || name === "edit_file") {
+      title = `${name === "write_file" ? "Write" : "Edit"} ${args.path}`; body = preview ? renderDiff(preview, w - 4, 18).map((l) => l.slice(5)) : [String(args.path)];
+      question = "Apply this change?";
+      options = [{ label: "Yes" }, { label: "Yes, and accept all edits this session", hint: "shift+tab" }, { label: "No, and tell amness what to do instead", hint: "esc" }];
+    } else if (name === "sh") {
+      const danger = riskOf(String(args.cmd)); paint = danger ? yellow : undefined;
+      title = "Run command"; body = [bold(String(args.cmd)), ...(danger ? ["", yellow(`⚠ ${danger}`)] : [])]; question = "Run this command?";
+      const prefix = shPrefix(String(args.cmd));
+      options = [{ label: "Yes" }, ...(danger || /[;&|<>`$()]/.test(String(args.cmd)) ? [] : [{ label: `Yes, and don't ask again for ${bold(prefix)} commands`, hint: "this session" }]), { label: "No, and tell amness what to do instead", hint: "esc" }];
+    } else {
+      title = name; body = [reason ?? "requires approval", ...(preview ? ["", preview] : []), "", dim(one(JSON.stringify(args), w - 8))];
+      options = [{ label: "Yes" }, { label: `Yes, and don't ask again for ${bold(name)}`, hint: "this session" }, { label: "No, and tell amness what to do instead", hint: "esc" }];
+    }
+    this.ensureTimer();
+    const idx = await new Promise<number | undefined>((res) => { this.overlay = new ChoiceOverlay(title, body, question, options, res, paint); this.render(); });
+    this.overlay = null; this.render();
+    if (idx === undefined) return "the user declined this action; take a different approach or ask what they want";
+    const last = idx === options.length - 1;
+    if (last) { const note = await this.askText("What should amness do instead?"); return note || "the user declined this action"; }
+    if (name === "exit_plan_mode") this.setMode(idx === 0 ? "acceptEdits" : "default");
+    else if (idx === 1 && (name === "write_file" || name === "edit_file")) this.setMode("acceptEdits");
+    else if (idx === 1 && name === "sh") this.shRules.add(shPrefix(String(args.cmd)));
+    else if (idx === 1) this.toolRules.add(name);
+    return true;
+  };
+  private shAllowed(cmd: string) {
+    if (/[;&|<>`$()]/.test(cmd) || riskOf(cmd)) return false;
+    return [...this.shRules].some((p) => cmd === p || cmd.startsWith(p + " "));
+  }
+
+  // ------------------------------------------------------------------ helpers used by commands
+  pick<T>(title: string, items: PickItem<T>[], initial = 0): Promise<T | undefined> {
+    return new Promise((res) => { this.overlay = new PickerOverlay(title, items, (v) => { this.overlay = null; this.render(); res(v); }, initial); this.render(); });
+  }
+  askText(prompt: string, o: { secret?: boolean; initial?: string } = {}): Promise<string | undefined> {
+    return new Promise((res) => { this.overlay = new InputOverlay(prompt, (v) => { this.overlay = null; this.render(); res(v); }, o); this.render(); });
+  }
+  showText(lines: string[]) { return new Promise<void>((res) => { this.overlay = new TextOverlay(lines, () => { this.overlay = null; this.render(); res(); }); this.render(); }); }
+  openPager(lines: string[], title = "transcript", start: "top" | "bottom" = title === "transcript" ? "bottom" : "top") {
+    this.screen.enterAlt();
+    this.pager = new Pager(lines, this.io.output, () => { this.pager = null; this.screen.leaveAlt(); this.render(); }, title, start);
+  }
+  openTranscript() { this.openPager(transcriptLines(this.session.messages, this.screen.cols - 1)); }
+  /** Ctrl+P: every command in a filterable list. Commands that need an argument are typed into the input instead of run. */
+  async openPalette() {
+    if (this.overlay) return;
+    const pick = await this.pick("Commands", this.cmds.map((c) => ({ label: "/" + c.name, value: c, hint: c.help })));
+    if (!pick) return;
+    if (pick.args) { this.editor.setText(`/${pick.name} `); this.render(); } else await this.runCommand("/" + pick.name);
+  }
+  async openRewind() {
+    if (this.running || !this.session.turns.length) return;
+    const idx = await this.pick("Rewind to before…", this.session.turns.map((t, i) => ({ label: `${i + 1}. ${one(t.text, 60)}`, value: i, hint: `${Object.keys(t.snaps).length} file(s) changed` })).reverse());
+    if (idx !== undefined) this.rewindTo(idx);
+  }
+  rewindTo(idx: number) {
+    const r = rewind(this.session, this.cwd, idx);
+    this.pendingEdits.clear(); this.recount(); this.saveSession();
+    this.commit(["", `  ${green("↩")} ${dim(`rewound the conversation to before turn ${idx + 1}`)}${r.restored.length || r.removed.length ? dim(` · restored ${r.restored.length} file(s), removed ${r.removed.length}`) : ""}`]);
+    this.render();
+  }
+  newConversation() { this.saveSession(); this.session = newSession(this.cwd, this.cfg.model); this.edits = []; this.lastPrompt = 0; this.todos = []; this.pendingContext = []; this.buildAgent(); }
+  loadSession(s: SessionData) { this.saveSession(); this.session = s; this.recount(); this.edits = []; }
+  saveSession() { if (this.persist && this.session.turns.length) try { this.session.model = this.cfg.model; this.store.save(this.session); } catch { /* read-only dir */ } }
+  saveHistory() { if (!this.persist) return; try { mkdirSync(home(), { recursive: true }); writeFileSync(join(home(), "history.json"), JSON.stringify(this.editor.history.slice(0, 200))); } catch { /* ignore */ } }
+  saveConfig() { if (this.persist) saveConfig(this.cfg); }
+  setVerify(cmd: string | undefined) { this.verify = cmd; if (this.persist) { const st = loadState(); if (cmd) st.verifyByDir[this.cwd] = cmd; else delete st.verifyByDir[this.cwd]; saveState(st); } this.buildAgent(); }
+  async ensureLive() { if (!this.live) this.live = await startLive({ title: "amness" }); return this.live; }
+  providerInfo() { return PROVIDERS[this.cfg.provider]; }
+  refreshBranch() { execFile("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: this.cwd }, (e, out) => { const b = e ? undefined : out.trim(); if (b !== this.branch) { this.branch = b; this.schedule(); } }); }
+  get memory(): MemoryStore | undefined { return this.agent.memory; }
+  get messagesForExport(): Message[] { return this.session.messages; }
+  get hasFile() { return (p: string) => existsSync(join(this.cwd, p)); }
+}
+
+export function shPrefix(cmd: string): string {
+  const t = cmd.trim().split(/\s+/);
+  return /^(npm|pnpm|yarn|git|cargo|go|make|docker|kubectl|pip|pip3|python|python3|node|npx|bun|deno|pytest|uv|poetry)$/.test(t[0]) && t[1] && !t[1].startsWith("-") ? `${t[0]} ${t[1]}` : t[0];
+}

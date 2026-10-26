@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# amness's own per-project state (chats, checkpoints, handoffs, memory, sessions, tools).
+# In *your* projects you may want to commit .amness/memory and .amness/commands to share them; for this repo, none of it belongs here.
+.amness/
+
+# secrets and local config: keys live in env vars or ~/.amness/config.json, never in the repo
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# logs and temp
+*.log
+npm-debug.log*
+.tmp/
+tmp/
+
+# test artefacts
+coverage/
+.nyc_output/
+__pycache__/
+*.pyc
+
+# editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
