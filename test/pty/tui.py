@@ -143,6 +143,13 @@ class Term:
             if not self.pump(): break
         return bool(re.search(pat, self.text()[since:]))
     def send(self, s): os.write(self.fd, s.encode()); self.pump(0.15)
+    def wait_screen(self, pat, timeout=15):
+        """Wait until the *current screen* (not the byte history) matches; used to be sure a turn has fully finished."""
+        end = time.time() + timeout
+        while time.time() < end:
+            if re.search(pat, self.screen()): return True
+            self.pump(0.1)
+        return False
     def mark(self): return len(self.text())
     def exited(self, timeout=5):
         end = time.time() + timeout
@@ -279,6 +286,7 @@ def scenario_gpt56_luna_responses_api():
     kinds = [i.get("type") or i.get("role") for i in r2["input"]]
     check("reasoning + function_call are replayed with the function_call_output", kinds == ["user", "reasoning", "function_call", "function_call_output"] and r2["input"][1]["encrypted_content"].startswith("ENC-"), t)
     check("request is stateless and flat-tool shaped", r2["store"] is False and r2["tools"][0]["type"] == "function" and "function" not in r2["tools"][0] and "messages" not in r2, t)
+    t.wait_screen(r"\? for shortcuts")                     # the turn must be fully over (idle footer) before running commands
     m = t.mark(); t.send("/status" + ENTER)
     check("/status reports the Responses API", t.wait(r"responses API", since=m), t)
     m = t.mark(); t.send("/tokens" + ENTER)
@@ -297,6 +305,7 @@ def scenario_chat_slash_and_files():
     t.send(TAB); t.send(ENTER)
     check("reply arrives and the attachment is noted", t.wait(r"Port is 8080") and t.wait(r"attached config\.yml \(1 line\)"), t)
     check("file contents were sent to the model", "port: 8080" in json.dumps(mock.requests[0]["messages"][-1]["content"]))
+    t.wait_screen(r"\? for shortcuts")                     # the turn must be fully over (idle footer) before running commands
     m = t.mark(); t.send("/tokens" + ENTER)
     check("/tokens prints the context gauge and usage", t.wait(r"context window", since=m) and t.wait(r"what fills it", since=m) and t.wait(r"1 request", since=m), t)
     t.send(CTRL_D); t.exited()
