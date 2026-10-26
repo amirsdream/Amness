@@ -130,7 +130,7 @@ export function createDeepAgent(o: DeepOptions) {
   for (const s of o.subagents ?? []) subs.set(s.name, { ...s, system: s.system + "\n\n" + SUB });
 
   const task = defineTool<{ agent?: string; description: string }>({
-    name: "task",
+    name: "task", parallel: true,
     description: `Delegate a self-contained job to a subagent with fresh context; returns only its summary. Agents: ${[...subs.values()].map((s) => `${s.name} (${s.description})`).join("; ")}.`,
     schema: { type: "object", required: ["description"], properties: { agent: { type: "string" }, description: { type: "string", description: "Complete brief: goal, scope, what to return. The subagent sees nothing else." } } },
     run: async ({ agent, description }) => {

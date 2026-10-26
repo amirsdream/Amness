@@ -28,6 +28,8 @@ export type Tool<A = any> = {
   preview?: (args: A) => string | undefined;
   /** Never changes anything (safe in plan mode, safe to run in a read-only subagent). */
   readOnly?: boolean;
+  /** Safe to run at the same time as other calls even though it is not read-only (e.g. a subagent working in its own context). Everything else runs one at a time, in call order. */
+  parallel?: boolean;
 };
 export const defineTool = <A = any>(t: Tool<A>) => t;
 
@@ -79,7 +81,7 @@ export class Budget {
 
 export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
-export type Guard = "nudge" | "loop" | "compact";
+export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup";
 
 export type Options = {
   model: Model;
@@ -126,7 +128,7 @@ export async function makeHandoff(model: Model, specs: ToolSpec[], msgs: Message
 }
 const HANDOFF_MARK = "\n\n## Handoff from your earlier context";
 
-export type RunResult = { text: string; finished: boolean; steps: number; messages: Message[]; stopped?: "budget" | "maxSteps" | "aborted"; tokens: number };
+export type RunResult = { text: string; finished: boolean; steps: number; messages: Message[]; stopped?: "budget" | "maxSteps" | "aborted" | "stuck"; tokens: number };
 
 export const DEFAULT_SYSTEM = `You are an autonomous agent. Work until the task is DONE, then call \`finish\`.
 - Act, don't narrate. If you say you will do something, do it in the same turn with a tool call.
@@ -146,6 +148,16 @@ const INTENT = /\b(i'll|i will|let me(?! know)|next,? i|now i|i am going to|i'm 
 export const clip = (s: string, n = 6000) =>
   s.length <= n ? s : `${s.slice(0, (n * 2) / 3)}\n...[${s.length - n} chars cut]...\n${s.slice(-n / 3)}`;
 
+/** Same call repeated later in the transcript: the older output is stale, so drop it first (cheapest compaction, loses nothing current). */
+export function supersede(msgs: Message[], keep = 6) {
+  const calls = new Map<string, string>(), latest = new Map<string, string>();
+  for (const m of msgs) for (const c of m.tool_calls ?? []) { const k = c.function.name + c.function.arguments; calls.set(c.id, k); latest.set(k, c.id); }
+  for (const m of msgs.slice(0, -keep)) {
+    const k = m.role === "tool" && m.tool_call_id ? calls.get(m.tool_call_id) : undefined;
+    if (k && latest.get(k) !== m.tool_call_id && (m.content?.length ?? 0) > 200 && !m.content!.startsWith("[")) m.content = "[superseded: this call was repeated later; see the newer result]";
+  }
+}
+
 /** Elide old tool outputs once the transcript passes `budget` chars; the last `keep` messages stay intact. */
 export function compact(msgs: Message[], budget = 60_000, keep = 6) {
   let total = msgs.reduce((n, m) => n + (m.content?.length ?? 0), 0);
@@ -157,6 +169,15 @@ export function compact(msgs: Message[], budget = 60_000, keep = 6) {
       total -= old - m.content.length;
     }
   }
+}
+
+const MAX_PARALLEL = 5;
+const isErr = (r: string) => /^(ERROR|DENIED|REJECTED)\b/.test(r);
+/** Run `fns` with at most `n` in flight; results keep input order. */
+async function pool<T>(fns: (() => Promise<T>)[], n: number): Promise<T[]> {
+  const out = new Array<T>(fns.length); let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, fns.length) }, async () => { while (next < fns.length) { const i = next++; out[i] = await fns[i](); } }));
+  return out;
 }
 
 const feedback = (v: Awaited<ReturnType<NonNullable<Options["verify"]>>>): string | null =>
@@ -184,7 +205,7 @@ export function createHarness(o: Options) {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
     const seen = new Map<string, number>();
     const max = o.maxSteps ?? 30;
-    let nudges = 0, tokens = 0, shown = "", lastPrompt = 0;
+    let nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     for (let step = 0; step < max; step++) {
@@ -203,8 +224,12 @@ export function createHarness(o: Options) {
         seen.clear(); nudges = 0; lastPrompt = 0;
         o.onHandoff?.(note); emit({ kind: "rollover", detail: note.slice(0, 200) });
       }
+      if (!off.has("wrapup") && !warned && max > 6 && step === max - 3) {
+        warned = true; emit({ kind: "nudge", detail: "step limit near" });
+        msgs.push({ role: "user", content: `You have 3 steps left. Stop exploring: finish the most important remaining work, verify it, and call \`finish\` with what is done and what is not.` });
+      }
       o.checkpoint?.(msgs);
-      if (!off.has("compact") && !o.model.appendOnly) compact(msgs, o.contextBudget);
+      if (!off.has("compact") && !o.model.appendOnly) { supersede(msgs); compact(msgs, o.contextBudget); }
       const key = [...names].sort().join(",");
       if (step > 0 && key !== shown) emit({ kind: "tools", detail: key });
       shown = key;
@@ -229,9 +254,10 @@ export function createHarness(o: Options) {
         }
         return end(text, false, step + 1);
       }
-      // Calls in one assistant turn run concurrently (so parallel subagents work); results keep call order.
+      // Scheduling: runs of read-only / parallel-safe calls (reads, searches, subagents) go concurrently, up to MAX_PARALLEL;
+      // anything that may change state runs alone, in the order the model issued it. Results keep call order.
       let done: string | undefined;
-      const results = await Promise.all(m.tool_calls.map(async (c): Promise<string> => {
+      const exec = async (c: ToolCall): Promise<string> => {
         const { name, arguments: raw } = c.function;
         let args: any;
         try { args = JSON.parse(raw || "{}"); } catch (e) { return `ERROR: arguments were not valid JSON (${(e as Error).message}). Resend strict JSON.`; }
@@ -272,9 +298,25 @@ export function createHarness(o: Options) {
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
         emit({ kind: "tool", id: c.id, name, args: raw, result });
         return result;
-      }));
+      };
+      const safe = (c: ToolCall) => { const t = reg.get(c.function.name); return !t || t.readOnly === true || t.parallel === true; };
+      const results: string[] = [];
+      for (let i = 0; i < m.tool_calls.length; ) {
+        let j = i; while (j < m.tool_calls.length && safe(m.tool_calls[j]) === safe(m.tool_calls[i])) j++;
+        const batch = m.tool_calls.slice(i, j);
+        results.push(...(safe(batch[0]) ? await pool(batch.map((c) => () => exec(c)), MAX_PARALLEL) : await pool(batch.map((c) => () => exec(c)), 1)));
+        i = j;
+      }
       m.tool_calls.forEach((c, i) => msgs.push({ role: "tool", tool_call_id: c.id, content: results[i] }));
       if (done !== undefined) return end(done, true, step + 1);
+      // No-progress detection: every call this turn failed. Reflect once, then stop instead of burning the budget.
+      if (!off.has("stuck")) {
+        failStreak = results.every(isErr) ? failStreak + 1 : 0;
+        if (failStreak >= 3 && !reflected) {
+          reflected = true; emit({ kind: "nudge", detail: "stuck: reflecting" });
+          msgs.push({ role: "user", content: "Your last 3 turns all failed. Stop and reflect: what is the actual cause? Re-read the errors, check your assumptions with a read-only tool, and take a different approach, or call `finish` and explain what blocks you." });
+        } else if (failStreak >= 6) { emit({ kind: "loop", detail: "no progress: 6 failing turns in a row" }); o.checkpoint?.(msgs); return end("stopped: no progress (6 failing turns in a row)", false, step + 1, "stuck"); }
+      }
     }
     return end("stopped: maxSteps reached", false, max, "maxSteps");
   }

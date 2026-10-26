@@ -229,6 +229,15 @@ src/evals.ts             A/B evals with held-out checks   src/live.ts       brow
 
 The runtime has no dependencies. The UI draws a small live region at the bottom of the terminal and prints everything else into normal scrollback, like most modern terminal agents, so there is no alternate screen except for the transcript pager.
 
+## The agent loop
+
+Each turn: steer (messages you typed meanwhile) → budget check → compaction → model call → tool calls → verification gate. The details that keep long runs reliable:
+
+- **Scheduling.** Read-only and subagent calls in one turn run concurrently (up to 5); anything that can change state runs alone, in the order issued. Mark your own tools `readOnly` or `parallel` to opt in.
+- **Compaction in stages.** Repeated identical calls drop their stale older output first, then old tool output is elided, and on very long runs the model writes a handoff note and continues in a fresh context.
+- **Guards.** Repeat-call detection, a nudge when the model announces an action instead of taking it, a wrap-up warning three steps before the step cap, and no-progress detection (a reflection prompt after 3 all-failing turns, a clean stop after 6).
+- **Done means verified.** `finish` passes through your `verify` gate (tests, build) and is rejected with feedback until it holds.
+
 ## Safety and privacy
 
 - **Data leaves your machine only to the provider you configure** (plus web search/fetch if you use the research agent). There is no telemetry. OpenAI requests are stateless by default (`store: false`).

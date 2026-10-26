@@ -387,6 +387,7 @@ export class App {
       const r = await this.agent.chat(this.session.messages, full);
       this.session.messages = r.messages; ok = true;
       if (r.stopped === "budget") this.notify("error", r.text, ["", `  ${red("$")} ${r.text}`]);
+      else if (r.stopped === "stuck") this.notify("warn", r.text + "; tell it what to try next", ["", `  ${yellow("!")} ${r.text}; tell it what to try next`]);
       else if (r.stopped === "maxSteps") this.notify("warn", "stopped after the maximum number of steps; send a message to continue", ["", `  ${yellow("!")} stopped after the maximum number of steps; send a message to continue`]);
     } catch (e) {
       this.session.turns.pop();

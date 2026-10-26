@@ -178,7 +178,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
         run: ({ todos: t }, ctx) => { todos = t; ctx.emit?.({ kind: "todos", todos: t }); return "todo list updated"; },
       }),
       defineTool<{ description: string }>({
-        name: "task", readOnly: true,
+        name: "task", readOnly: true, parallel: true,
         description: "Delegate an investigation to a read-only explorer subagent with its own fresh context. Give it a complete brief (it sees nothing else). Use for broad searches or questions that need reading many files; you get back only its summary. Several calls in one turn run in parallel.",
         schema: { type: "object", required: ["description"], properties: { description: { type: "string", description: "complete brief: the question, where to look, what to report" } } },
         run: async ({ description }, ctx) => {
