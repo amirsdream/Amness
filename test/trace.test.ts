@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,7 +45,8 @@ test("tracer: OTLP export posts spans with GenAI attributes, a root span and par
 });
 
 test("tracer: an unreachable collector or an unwritable file never breaks the run", async () => {
-  const tr = new Tracer({ otlp: "http://127.0.0.1:1", file: "/proc/nope/x.jsonl", sessionId: "s3" });
+  const notADir = join(dir(), "plain-file"); writeFileSync(notADir, "x");                       // a path under a regular file can never be created (not /proc: recursive mkdir there hangs on Linux)
+  const tr = new Tracer({ otlp: "http://127.0.0.1:1", file: join(notADir, "sub", "x.jsonl"), sessionId: "s3" });
   await scriptedRun(tr); await tr.close();
 });
 
