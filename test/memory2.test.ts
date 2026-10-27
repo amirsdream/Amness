@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemoryStore, createCodeAgent, firstCacheBreak, prefixSignature, createHarness, defineTool, type Message, type Model } from "../src/index.ts";
+import { MemoryStore, openaiEmbedder, utility, createCodeAgent, firstCacheBreak, prefixSignature, createHarness, defineTool, type Message, type Model } from "../src/index.ts";
 
 const store = () => { const d = mkdtempSync(join(tmpdir(), "amness-mem-")); return new MemoryStore({ project: join(d, "p"), global: join(d, "g") }); };
 const note = (name: string, description: string, content: string, type: any = "project") => ({ name, type, description, content });
@@ -131,4 +131,68 @@ test("cache keep-alive: warm() re-sends the same tool list with a tiny output ca
   assert.deepEqual(w, { prompt: 100, cached: 80 });
   const last = calls.at(-1)!, before = calls.at(-2)!;
   assert.equal(last.max, 16); assert.equal(last.specs, before.specs);       // identical tool definitions: the warm request hits the same cache entry
+});
+
+// A toy embedder: words from the same group land on the same axis, so "automobile" and "car" are close without sharing a letter.
+const GROUPS = [["car", "automobile", "vehicle"], ["database", "postgres", "sql"], ["deploy", "release", "ship"]];
+const toy = (calls?: string[][]) => async (texts: string[]) => { calls?.push(texts); return texts.map((t) => { const v = GROUPS.map(() => 0); for (const w of t.toLowerCase().split(/\W+/)) GROUPS.forEach((g, i) => { if (g.includes(w)) v[i] += 1; }); return v; }); };
+
+test("semantic memory: a note with no shared words is found through its embedding; vectors are cached on disk and only recomputed for changed notes", async () => {
+  const m = store(), calls: string[][] = []; m.embedder = toy(calls);
+  m.save(note("rides", "how we travel", "Pick any automobile from the lot")); m.save(note("storage", "persistence", "Use postgres for everything")); m.save(note("misc", "other", "nothing relevant here"));
+  assert.equal(m.rank("car").length, 0);                                  // keyword search alone finds nothing
+  await m.index(); await m.warmQuery("car");
+  assert.equal(m.rank("car")[0].e.name, "rides");                         // meaning-level match
+  assert.ok(m.rank("car").every((x) => x.e.name !== "misc"));
+  const first = calls.flat().length; await m.index(); assert.equal(calls.flat().length, first);   // nothing new to embed
+  m.save(note("misc", "other", "we deploy on fridays")); assert.equal(await m.index(), 1);        // only the changed note
+  const fresh = store(); fresh.dirs = m.dirs; fresh.embedder = toy(); assert.equal(await fresh.index(), 0);   // reloaded from embeddings.json
+  await fresh.warmQuery("ship it"); assert.equal(fresh.rank("ship it")[0].e.name, "misc");
+});
+
+test("semantic memory: a failing embedder falls back to keyword search silently", async () => {
+  const m = store(); m.embedder = async () => { throw new Error("offline"); };
+  m.save(note("tests", "how to run tests", "npm test"));
+  await m.index().catch(() => {}); await m.warmQuery("run tests");
+  assert.equal(m.rank("run tests")[0].e.name, "tests");
+});
+
+test("learning from outcomes: notes from good runs rise, notes from failed runs sink and become prune candidates; chat replies change nothing", () => {
+  const m = store();
+  m.save(note("helpful", "build tips", "build the project with make all")); m.save(note("misleading", "compile pointers", "invoke gcc manually over every source file listing"));
+  const get = (n: string) => m.list().find((e) => e.name === n)!;
+  assert.equal(utility(get("helpful")), 0.5);
+  const both = () => m.touch(m.list());
+  both(); m.endTurn(undefined); assert.equal(get("helpful").wins, 0);             // inconclusive: nothing learned
+  for (let i = 0; i < 4; i++) { m.touch([get("helpful")]); m.endTurn(true); m.touch([get("misleading")]); m.endTurn(false); }
+  assert.ok(utility(get("helpful")) > 0.8 && utility(get("misleading")) < 0.2);
+  assert.equal(m.rank("build the project")[0].e.name, "helpful");
+  assert.deepEqual(m.stale().map((e) => e.name), ["misleading"]);               // 4 failed runs, none good: suggested for archiving
+});
+
+test("openaiEmbedder posts to /embeddings in order and reports errors", async () => {
+  const { createServer } = await import("node:http");
+  const seen: any[] = [];
+  const srv = createServer((req, res) => { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
+    const body = JSON.parse(b); seen.push({ url: req.url, auth: req.headers.authorization, body });
+    if (seen.length === 2) { res.statusCode = 401; return void res.end("bad key"); }
+    res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: body.input.map((_: string, i: number) => ({ index: i, embedding: [i, 1] })).reverse() }));   // out of order on purpose
+  }); });
+  await new Promise<void>((r) => srv.listen(0, r)); const base = `http://127.0.0.1:${(srv.address() as any).port}/v1`;
+  const emb = openaiEmbedder({ baseUrl: base, apiKey: "k", model: "m" });
+  assert.deepEqual(await emb(["a", "b"]), [[0, 1], [1, 1]]);
+  assert.equal(seen[0].url, "/v1/embeddings"); assert.equal(seen[0].auth, "Bearer k"); assert.equal(seen[0].body.model, "m");
+  await assert.rejects(emb(["x"]), /HTTP 401/);
+  srv.closeAllConnections(); srv.close();
+});
+
+test("agent: a finished run credits the notes it saw; a stuck run counts against them; a plain reply changes nothing", async () => {
+  const mk = (replies: Message[]) => { const dir = mkdtempSync(join(tmpdir(), "amness-learn-")), m = new MemoryStore({ project: join(dir, ".amness", "memory") }); m.save(note("test-command", "how to run tests", "Run npm test")); return { m, dir, model: (async () => replies.shift() ?? { role: "assistant", content: "ok" }) as Model }; };
+  const call = (n: string, a: object): Message => ({ role: "assistant", content: null, tool_calls: [{ id: "x" + Math.random(), function: { name: n, arguments: JSON.stringify(a) } }] });
+  let s = mk([call("finish", { summary: "done" })]);
+  await createCodeAgent({ model: s.model, cwd: s.dir, memory: s.m, chat: true }).chat([], "how to run the tests"); assert.equal(s.m.list()[0].wins, 1);
+  s = mk([{ role: "assistant", content: "Use npm test." }]);
+  await createCodeAgent({ model: s.model, cwd: s.dir, memory: s.m, chat: true }).chat([], "how to run the tests"); assert.deepEqual([s.m.list()[0].wins, s.m.list()[0].losses], [0, 0]);
+  s = mk(Array.from({ length: 8 }, (_, i) => call("read_file", { path: "missing" + i })));
+  await createCodeAgent({ model: s.model, cwd: s.dir, memory: s.m, chat: true, maxSteps: 12 }).chat([], "how to run the tests"); assert.equal(s.m.list()[0].losses, 1);
 });

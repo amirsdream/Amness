@@ -13,3 +13,4 @@ export * from "./bundle.ts";
 export * from "./live.ts";
 export * from "./stats.ts";
 export * from "./evalcases.ts";
+export * from "./embed.ts";

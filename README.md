@@ -1,6 +1,6 @@
 # Amness
 
-**A terminal coding agent for any model, with guardrails.** A full-screen terminal UI with cards, diffs, a session sidebar and mouse support; permission prompts with diffs, plan mode, undo, memory and MCP, built on a small reliability harness that works with OpenAI (Responses API), Claude, and local models.
+**A terminal coding agent for any model, with guardrails.** A full-screen terminal UI (cards, diffs, a live run view, a session sidebar, mouse and copy support), permission prompts with diffs, plan mode, undo, MCP, and a memory that learns what helps, all on a small reliability harness for OpenAI (Responses API), Claude and local models. The loop is cache-aware and every guard can be measured with a built-in statistical eval runner.
 
 [![CI](https://github.com/amirsdream/Amness/actions/workflows/ci.yml/badge.svg)](https://github.com/amirsdream/Amness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -27,9 +27,14 @@ Most agent failures are not "the model is dumb"; they are mechanical: malformed 
 | Stops early or only narrates | Nudges it to act; plain answers are still accepted |
 | "Done!" without proof | A `verify` command (for example `npm test`) must actually pass before it may finish |
 | Edits files it never read | Read-before-edit is enforced; edits need a unique match |
-| Dangerous commands | `rm -rf`, `git push`, installs, `curl \| sh` and similar always need a human |
+| Dangerous commands | `rm -rf`, `git push`, installs, `curl \| sh` and similar always need a human (except in `yolo` mode, which never asks) |
 | Context fills silently | Live context gauge, a map of what fills it, automatic handoff to a fresh context |
 | Reasoning lost between tool calls | Reasoning items are replayed with tool results (OpenAI Responses, Claude thinking blocks) |
+| Stuck in a failing loop | Reflection prompt after 3 all-failing turns, a clean stop after 6, a wrap-up warning before the step cap |
+| Noisy, stale tool output eating the window | Output condensed on arrival; repeated and expired reads dropped; old output elided in one cut |
+| Paying full price for the same prefix | Append-only history, stable tool order, cache-break detection, optional Claude keep-alive |
+| Memory that grows noisy | Ranked retrieval, duplicate merging, learning from run outcomes, reversible forgetting |
+| "Does this guard actually help?" | `amness eval`: paired, task-level statistics with cost per solved task |
 
 ## Quick start
 
@@ -37,7 +42,7 @@ Requirements: **Node 22.18 or newer** (it runs the TypeScript sources directly, 
 
 ```bash
 git clone https://github.com/amirsdream/Amness.git
-cd amness
+cd Amness
 npm install
 
 export OPENAI_API_KEY=sk-...        # or: export ANTHROPIC_API_KEY=sk-ant-...
@@ -115,7 +120,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 - **default**: asks before edits (showing the diff) and before non-trivial shell commands. Read-only commands (`ls`, `git status`, `grep`…) never ask. "Don't ask again for `npm test`" (or for that tool) is remembered for the session.
 - **acceptEdits**: edits apply automatically; shell commands still ask.
 - **plan**: read-only. The agent investigates, then presents a plan you approve before it may change anything.
-- **yolo**: never asks. Use deliberately.
+- **yolo**: never asks, not even for destructive shell commands (`rm -rf`, `git push`). File tools stay inside the workspace and read-before-edit still applies, but the shell is not sandboxed. Use it in a container or a throwaway checkout, with your work committed.
 
 **Slash commands.**
 
@@ -129,15 +134,26 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/check <cmd>` | fast command run after every edit; only failures reach the model |
 | `/loop` (alias `/trace`) | step-by-step trace of the agent loop: each model turn, its tools and timings, and any guard that fired |
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
-| `/memory` · `/init` | list/forget/add memory notes · have the agent write `AGENTS.md` |
+| `/memory` · `/init` | list notes · `forget` `add` `stale` `prune` `consolidate` `graph` `embeddings` · have the agent write `AGENTS.md` |
+| `/copy` | copy the last reply (`/copy code`, `/copy all`) |
+| `/keepwarm [on\|off]` | keep the Claude prompt cache alive while you are away (opt-in) |
 | `/export` · `/import` · `/live` · `/mcp` | portable bundle, continue from one, browser live view, attach an MCP server |
 | `/theme` · `/sidebar` · `/details` · `/diffmode` · `/mouse` · `/ui` | appearance and interface: theme (live preview), sidebar, expand tool details, stacked/split diffs, mouse on/off, full-screen/inline |
 
 **Your own commands.** Put `review.md` in `.amness/commands/` (or `~/.amness/commands/`) and `/review <args>` runs it as a prompt (`$ARGUMENTS` is substituted; a `description:` front-matter line shows in the popup). Commit the folder to share it with your team.
 
-**Memory.** Plain markdown notes in `<project>/.amness/memory` and `~/.amness/memory`, indexed by `MEMORY.md`. At the start of a conversation the agent sees a short index (the 25 most relevant or most useful notes) plus the notes that best match your request, framed as hints to verify; later messages add only *new* relevant notes, at the end, so the earlier conversation never changes. Retrieval is BM25 over name, description and content, nudged by how often a note proved useful. Saving a near-duplicate updates the existing note instead of piling up copies (newer wording wins). Notes that were never useful can be archived, reversibly: `/memory stale` lists them, `/memory prune` moves them to `memory/archive/`. Notes form a small graph: `[[other-note]]` mentions and notes that keep being retrieved together become neighbours, and a match pulls its neighbours in at lower rank (`/memory graph`). `/memory consolidate` asks the model to propose merges and archives, shows you the plan, and applies it only if you agree (nothing is deleted). The agent saves durable lessons itself (the real test command, your corrections). Edit the files like any other.
+**Memory.** Plain markdown notes in `<project>/.amness/memory` and `~/.amness/memory`, indexed by `MEMORY.md`; edit them like any file. What makes it more than a notebook:
 
-**Long sessions.** When the context grows past a threshold the model writes a handoff note and the run continues in a fresh context seeded with the task and that note. History is never edited, which keeps Claude's thinking blocks and prompt caches valid, and it works the same on every provider. `/compact` does it on demand.
+- **Cache-friendly injection.** At the start of a conversation the agent sees a short index (the 25 most relevant or useful notes) plus the notes that best match your request, framed as hints to verify. Later messages add only *new* relevant notes, at the end, so the earlier conversation never changes.
+- **Ranked retrieval.** BM25 over name, description and content, with light stemming, blended with how often a note proved useful. Optional **semantic search** (`/memory embeddings on`, OpenAI-compatible providers) adds embedding similarity so a note can match without sharing a word; vectors are cached in `memory/embeddings.json` and recomputed only for changed notes. If the embeddings call fails, keyword search carries on.
+- **Learning from outcomes.** Notes that were in front of the model during runs that finished (passed `verify`) rank higher; notes from runs that got stuck or ran out of steps rank lower. A note with 4+ bad runs and under 25% good is suggested for archiving. A plain chat reply changes nothing.
+- **Duplicates merge.** Saving a note that says nearly the same as an existing one (same type) updates it instead; the newer wording wins.
+- **A small graph.** `[[other-note]]` mentions, and notes that keep being retrieved together, become neighbours; a match pulls its neighbours in at lower rank (`/memory graph`).
+- **Forgetting you can undo.** `/memory stale` lists notes never useful (or consistently unhelpful); `/memory prune` moves them to `memory/archive/`. `/memory consolidate` has the model propose merges and archives, shows the plan, and applies it only if you agree. Nothing is deleted.
+
+The agent saves durable lessons itself (the real test command, your corrections).
+
+**Long sessions.** Context is managed in stages (see [the agent loop](#the-agent-loop)): noisy output is condensed on arrival, stale output is trimmed in one batch only when the window needs it, and past a threshold the model writes a handoff note and the run continues in a fresh context seeded with the task and that note. For Claude, history is never edited (that keeps its thinking blocks and cache valid), so only the handoff applies. `/compact` does the handoff on demand.
 
 **Portability.** `/export` (or `--export`) writes a provider-neutral bundle: the task, a model-written handoff note, the files the agent changed, and your memory. It deliberately contains no raw transcript, so you can continue on another machine, in another checkout, or with a different model: `amness run --bundle f.json "carry on"`.
 
@@ -153,7 +169,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 
 In Responses mode requests are stateless (`store: false`): nothing is retained server-side, and opaque reasoning items are replayed with each tool result so multi-step tool use keeps its reasoning. Reasoning summaries stream into the status area while the model thinks. A model switch never replays another model's reasoning.
 
-Environment variables: `AMNESS_UI` (`full` or `inline`), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `AMNESS_MODEL`, `TAVILY_API_KEY` (better web search for the research agent), `AMNESS_HOME` (config directory, default `~/.amness`), `NO_COLOR`.
+Environment variables: `AMNESS_UI` (`full` or `inline`), `AMNESS_EMBED_MODEL` (embedding model for semantic memory, default `text-embedding-3-small`), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `AMNESS_MODEL`, `TAVILY_API_KEY` (better web search for the research agent), `AMNESS_HOME` (config directory, default `~/.amness`), `NO_COLOR`.
 
 ## Headless and CI
 
@@ -172,6 +188,8 @@ amness run --verify "npm test" --json "fix the failing test"      # one-shot, no
 | `--bundle <file>` / `--export <file>` | continue from / write a portable session bundle |
 | `--live [port]` | serve the browser live view |
 | `--max-tokens <n>` · `--no-memory` | hard token cap · disable memory |
+
+`amness eval` has its own flags (see [Evaluating the harness](#evaluating-the-harness)).
 
 Exit codes: `0` finished, `1` not finished, `2` usage or configuration error.
 
@@ -194,7 +212,7 @@ const result = await agent.run("fix the failing test");
 console.log(result.finished, result.text);
 ```
 
-Building blocks: `createHarness` (the loop: validation and repair, finish gate, nudges, loop guard, budgets, steering, checkpoint/resume, `extract()` for validated JSON), `Registry` (tools that change mid-run, deferred tool search, MCP via `loadMcp`), `createCodeAgent`, `createDeepAgent` (planning, parallel context-isolated subagents, web search, citation checking), `MemoryStore`, `evaluate`/`codeVariants` (A/B your guards on held-out checks), and the `openai`/`anthropic` model adapters. A model is just `(messages, tools, opts) => Promise<Message>`, so adding a provider is one function.
+Building blocks: `createHarness` (the loop: validation and repair, finish gate, nudges, loop guard, budgets, steering, checkpoint/resume, `extract()` for validated JSON), `Registry` (tools that change mid-run, deferred tool search, MCP via `loadMcp`), `createCodeAgent`, `createDeepAgent` (planning, parallel context-isolated subagents, web search, citation checking), `MemoryStore` (ranked, learning memory; plug in an `Embedder` such as `openaiEmbedder` for semantic search), `evaluate`/`harnessVariant`/`analyze` (compare harness variants statistically on held-out checks), `warm()` (cache keep-alive), and the `openai`/`anthropic` model adapters. A model is just `(messages, tools, opts) => Promise<Message>`, so adding a provider is one function.
 
 ```ts
 import { createHarness, defineTool, openai } from "amness";
@@ -241,7 +259,7 @@ flowchart TB
     local["any (messages, tools) → message"]
   end
   subgraph STATE["state"]
-    mem["memory.ts<br/>notes + handoffs"]
+    mem["memory.ts<br/>ranked, learning notes<br/>embed.ts: optional vectors"]
     bundle["bundle.ts<br/>portable sessions"]
     sess["cli/tui/session.ts<br/>chats + checkpoints"]
   end
@@ -255,6 +273,8 @@ flowchart TB
   code --> mem
   app --> sess
   app --> bundle
+  ev["evals.ts + stats.ts<br/>variants, bootstrap, sign test"] --> code
+  evcli["cli/evalcli.ts<br/>amness eval"] --> ev
 ```
 
 | Path | Role |
@@ -268,8 +288,11 @@ flowchart TB
 | `src/harness.ts` | the agent loop and guards (see below); `Registry`, `Budget`, `extract()` |
 | `src/code.ts`, `src/deep.ts` | coding agent (file and shell tools, subagent `task`, todos, plan mode) and research agent |
 | `src/openai.ts`, `src/anthropic.ts` | model adapters; a model is just `(messages, tools, opts) => Promise<Message>` |
-| `src/memory.ts`, `src/bundle.ts`, `src/dynamic.ts` | memory notes and handoffs, portable session bundles, live tool registry and MCP |
-| `src/evals.ts`, `src/live.ts` | A/B evals with held-out checks; browser live view (`127.0.0.1` only) |
+| `src/memory.ts`, `src/embed.ts` | memory: ranking, merging, graph, outcome learning, archive; optional embeddings |
+| `src/bundle.ts`, `src/dynamic.ts` | portable session bundles; live tool registry and MCP |
+| `src/evals.ts`, `src/stats.ts`, `src/evalcases.ts`, `cli/evalcli.ts` | the eval runner: variants and ablations, task-level statistics, built-in tasks, `amness eval` |
+| `cli/tui/clipboard.ts` | clipboard (OSC 52 plus the platform tool) |
+| `src/live.ts` | browser live view (`127.0.0.1` only) |
 
 **How the full-screen UI draws.** Agent events are written into the block store; each block renders to rows of styled cells (cached by content signature); the view lays out header, transcript, sidebar, input and footer onto a `Canvas`, and `Canvas.flush()` writes only the cells that changed, wrapped in synchronized-output markers so frames never tear. Mouse (SGR 1006), bracketed paste and OSC 52 clipboard are enabled while it runs and restored on exit. The inline renderer shares the same `App` and agent events, so both interfaces behave identically.
 
@@ -313,8 +336,8 @@ Recent work on coding-agent loops points the same way, and the loop follows it w
 - [An Empirical Study of Harness Design for Coding Agents](https://arxiv.org/abs/2609.20804) (2026): cheap rule-based elision before any LLM summarisation gave the lowest cost; a recall tool for elided content was almost never used, so there isn't one; stuck detection and lightweight post-edit checks are cheap ways to stop wasted turns.
 - [AgentDiet](https://arxiv.org/abs/2509.23586) (trajectory reduction): removing useless, redundant and *expired* information cut input tokens 40-60% with unchanged results. This is the source of the expired-read and repeated-call rules.
 - [CoACT](https://arxiv.org/abs/2607.02911) and [SWE-Pruner](https://arxiv.org/abs/2601.16746): reads dominate token use, and compression must preserve what the next action needs, and leave earlier messages untouched to keep the cache valid. Amness uses rules for this; the papers use trained compressors, which would add a dependency.
-- [Don't Break the Cache](https://arxiv.org/abs/2601.06007) (prompt caching for long-horizon agents): caching cut API cost by 41-80% across OpenAI, Anthropic and Google, but naive full-context caching can hurt; put dynamic content at the end, avoid dynamic tool lists, keep dynamic tool results out of the cached prefix. [Keeping the Cache Warm Pays](https://arxiv.org/abs/2607.19214) motivates the longer OpenAI retention;
-- Memory: [Infini Memory](https://arxiv.org/abs/2606.10677) (plain-text topic documents, lexical retrieval, merge/split maintenance, recency resolves contradictions; its structural maintenance mattered most in its ablations), [REALM](https://arxiv.org/abs/2609.16053) (retrieval feeds back into how memory is organised, which is why Amness records use and ranks by it) and the strategic-forgetting work ([SF-AMS](https://arxiv.org/abs/2607.22562), [FSFM](https://arxiv.org/abs/2604.20300)). Amness implements the ideas that fit plain files: lexical retrieval, merge maintenance (`/memory consolidate`), a light note graph with use-driven links, and reversible forgetting. It does not use embeddings, a graph database or learned forgetting.
+- [Don't Break the Cache](https://arxiv.org/abs/2601.06007) (prompt caching for long-horizon agents): caching cut API cost by 41-80% across OpenAI, Anthropic and Google, but naive full-context caching can hurt; put dynamic content at the end, avoid dynamic tool lists, keep dynamic tool results out of the cached prefix. [Keeping the Cache Warm Pays](https://arxiv.org/abs/2607.19214) motivates the longer OpenAI retention and the opt-in Claude keep-alive.
+- Memory: [Infini Memory](https://arxiv.org/abs/2606.10677) (plain-text topic documents, lexical retrieval, merge/split maintenance, recency resolves contradictions; its structural maintenance mattered most in its ablations), [REALM](https://arxiv.org/abs/2609.16053) (retrieval feeds back into how memory is organised, which is why Amness records use and ranks by it) and the strategic-forgetting work ([SF-AMS](https://arxiv.org/abs/2607.22562), [FSFM](https://arxiv.org/abs/2604.20300)). Amness implements these with plain files: lexical plus optional embedding retrieval, merge maintenance (`/memory consolidate`), a light note graph with use-driven links, outcome-based ranking and reversible forgetting. "Learning" here means simple statistics (wins and losses per note), not a trained model, and there is no graph database.
 - A [source-code study of eleven coding agents](https://arxiv.org/html/2609.00006v1): read-only tools run concurrently, mutating tools one at a time.
 
 The percentages above are the papers' results on their own benchmarks, not measurements of Amness; use the eval runner (`evaluate`) with the guards switched on and off to measure them on your tasks.
@@ -358,7 +381,7 @@ The method follows recent evaluation practice: harness choice can change cost pe
 ```bash
 npm install
 npm run typecheck      # tsc --noEmit over src, cli, tests and examples
-npm test               # unit and in-process UI tests (180+), run on Node's built-in test runner
+npm test               # unit and in-process UI tests (210+), run on Node's built-in test runner
 npm run test:pty       # the real binary in a pseudo-terminal against a mock streaming server (needs python3)
 ```
 
@@ -369,6 +392,8 @@ The UI tests drive the real `App` with simulated keystrokes and read the screen 
 - Developed and tested on macOS and Linux terminals; Windows is untested.
 - Automated tests use scripted models and mock servers. Behaviour against live provider APIs has been checked by hand only, and provider APIs change; if one breaks, open an issue with the error text.
 - Cost figures are estimates (no invoices, cached input assumed at about 10% of the input price, and some models have no price listed).
+- Newer features (cache keep-alive, semantic memory, `amness eval` against a real model) are covered by tests with scripted models and mock servers, but have not been run against live provider APIs. The efficiency numbers quoted from papers are theirs, not measurements of Amness.
+- Semantic memory sends note text and your messages to your provider's embeddings endpoint, and needs an OpenAI-compatible provider (Claude has none).
 - Not on npm yet (see above), and the Docker image is untested.
 - Tool-calling quality with small local models varies widely.
 

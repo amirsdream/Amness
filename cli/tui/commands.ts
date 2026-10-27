@@ -77,11 +77,17 @@ export function buildCommands(): Cmd[] {
       a.session.messages = r.messages; a.lastPrompt = 0; a.saveSession(); a.noticeUntil = 0; a.rebuildBlocks();
       a.commit(["", `  ${green("✓")} ${dim("conversation compacted into a handoff note")}`, ...r.note.split("\n").slice(0, 8).map((l) => "    " + dim(l))]);
     } },
-    { name: "memory", help: "list notes · forget <name> · add <text> · stale · prune · consolidate · graph", args: "[forget|add|stale|prune|consolidate|graph]", run: async (a, arg) => {
+    { name: "memory", help: "list notes · forget <name> · add <text> · stale · prune · consolidate · graph · embeddings", args: "[forget|add|stale|prune|consolidate|graph|embeddings]", run: async (a, arg) => {
       const m = a.memory; if (!m) return void a.say("memory is disabled", yellow);
       const [sub, ...rest] = arg.split(/\s+/), tail = rest.join(" ");
       if (sub === "forget" && tail) return void a.say(m.forget(tail) ? `forgot ${tail}` : `no note named ${tail}`, dim);
       if (sub === "add" && tail) return a.remember(tail);
+      if (sub === "embeddings") {
+        if (tail !== "on" && tail !== "off") return void a.say(`semantic memory search is ${a.cfg.embeddings ? "on" : "off"}. /memory embeddings on|off`, dim);
+        if (tail === "on" && a.cfg.provider === "anthropic") return void a.say("Claude has no embeddings endpoint. Switch the provider to an OpenAI-compatible one (/provider), or keep keyword search.", yellow);
+        a.cfg.embeddings = tail === "on"; a.saveConfig(); a.buildAgent();
+        return void a.say(tail === "on" ? "semantic memory search on: note text and your messages are sent to your provider's /embeddings endpoint (stored vectors live in memory/embeddings.json)" : "semantic memory search off", dim);
+      }
       if (sub === "graph") { const all = m.list(), rows = all.map((e) => [e, m.neighbors(e, all)] as const).filter(([, n]) => n.length); return void a.commit(rows.length ? ["", bold("  Related notes"), ...rows.map(([e, n]) => `  ${cyan(e.name.padEnd(24))} ${dim("↔")} ${n.map((x) => x.name).join(", ")}`), dim("  links come from [[name]] mentions and from notes that keep being retrieved together")] : ["", dim("  no links yet. Mention [[other-note]] in a note, or keep using memory: notes retrieved together get linked.")]); }
       if (sub === "consolidate") {
         a.say("asking the model to tidy memory (merge duplicates, archive obsolete notes)…", dim);

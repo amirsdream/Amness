@@ -6,6 +6,7 @@ import { unifiedDiff } from "./diff.ts";
 import { createToolTool, loadSavedTools } from "./dynamic.ts";
 import { createHarness, defineTool, clip, makeHandoff, Registry, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, memoryTools } from "./memory.ts";
+import type { Embedder } from "./embed.ts";
 
 const RISKY: [RegExp, string][] = [
   [/\brm\s+(-\w*[rf]|--recursive|--force)/, "recursive/forced delete"], [/\bsudo\b/, "sudo"],
@@ -153,6 +154,8 @@ export type CodeAgentOptions = {
   checkpointFile?: string;
   /** Durable memory across sessions (markdown files in <cwd>/.amness/memory + ~/.amness/memory). Default on. */
   memory?: boolean | MemoryStore;
+  /** Turns on semantic memory retrieval (blended with keyword ranking). See `openaiEmbedder`. */
+  embedder?: Embedder;
   /** Start a fresh context with a handoff note when the transcript gets big. Default: at 120k prompt tokens / 500k chars. */
   rollover?: { afterTokens?: number; afterChars?: number } | false;
   /** Interrupt a running agent (e.g. Ctrl-C). It stops at a safe point with the checkpoint written, so it can be resumed. */
@@ -167,6 +170,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>();
   const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
+  if (memory && o.embedder) memory.embedder = o.embedder;
   const mode = o.permissions?.mode;
   const registry = new Registry([...codeTools(o.cwd, { onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
   const shown = new Set<string>();   // memory notes already in this conversation
@@ -226,14 +230,18 @@ ${note}
     warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },
     /** One conversational turn: `history` is everything so far (empty to start); returns the updated transcript in `messages`. */
-    chat(history: Message[], userText: string) {
+    async chat(history: Message[], userText: string) {
       task ||= userText;
       let text = userText;
+      if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
       if (!history.length && memory) { shown.clear(); const ctx = memory.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
       else if (memory) { const d = memory.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const msgs: Message[] = history.length ? [...history, { role: "user", content: text }]
         : [{ role: "system", content: o.chat ? CHAT_SYSTEM : CODE_SYSTEM }, { role: "user", content: text }];
-      return h.run(text, { resume: msgs });
+      const res = await h.run(text, { resume: msgs });
+      // Learning from outcomes: a finished (verified) run credits the notes that were in front of the model, a run that gave up or got stuck counts against them.
+      memory?.endTurn(res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined);
+      return res;
     },
     async run(t: string, opts: RunOptions = {}) {
       task = t;

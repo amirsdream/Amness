@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { cosine, type Embedder } from "./embed.ts";
 import { createHarness, defineTool, type Model, type Tool } from "./harness.ts";
 
 export type MemoryType = "user" | "project" | "feedback" | "reference";
 export type Scope = "project" | "global";
-export type MemoryEntry = { name: string; type: MemoryType; description: string; content: string; scope: Scope; updated: string; /** how often it was surfaced to the model */ hits?: number; /** last time it was surfaced (YYYY-MM-DD) */ used?: string };
+export type MemoryEntry = { name: string; type: MemoryType; description: string; content: string; scope: Scope; updated: string; /** how often it was surfaced to the model */ hits?: number; /** last time it was surfaced (YYYY-MM-DD) */ used?: string; /** runs that used this note and ended well / badly: the evidence behind its ranking */ wins?: number; losses?: number };
 
 const TYPES: MemoryType[] = ["user", "project", "feedback", "reference"];
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -14,6 +15,9 @@ const words = (s: string) => s.toLowerCase().split(/\W+/).filter((w) => w.length
 /** Light stemming (plurals, -ing, -ed) so "tests", "testing" and "tested" meet. */
 const stem = (w: string) => w.replace(/(ies)$/, "y").replace(/(ing|ed|es|s)$/, (m, _x, off) => (off >= 3 ? "" : m));
 const terms = (s: string) => words(s).map(stem);
+/** Chance a note helps, from the runs it was part of (Laplace-smoothed, so a new note starts at 0.5). */
+export const utility = (e: { wins?: number; losses?: number }) => ((e.wins ?? 0) + 1) / ((e.wins ?? 0) + (e.losses ?? 0) + 2);
+const hashOf = (e: { description: string; content: string }) => { let h = 5381; const s = e.description + "\n" + e.content; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36) + s.length; };
 const today = () => new Date().toISOString().slice(0, 10);
 const daysSince = (d?: string) => (d ? Math.max(0, (Date.now() - Date.parse(d)) / 86_400_000) : Infinity);
 /** Word-set overlap: how much of the smaller note is contained in the other. */
@@ -22,6 +26,11 @@ const overlap = (a: string[], b: string[]) => { const A = new Set(a), B = new Se
 /** Plain markdown files with frontmatter + a MEMORY.md index: human-editable, diffable, and portable between tools and machines. */
 export class MemoryStore {
   dirs: Partial<Record<Scope, string>>;
+  /** Optional: enables semantic (embedding) retrieval on top of BM25. */
+  embedder?: Embedder;
+  private qv = new Map<string, number[]>();
+  private vecs = new Map<string, { h: string; v: number[] }>();
+  private turn = new Set<string>();
   constructor(dirs: Partial<Record<Scope, string>>) { this.dirs = dirs; }
   static forWorkspace(cwd: string, globalDir = join(process.env.AMNESS_HOME ?? join(homedir(), ".amness"), "memory")) {
     return new MemoryStore({ project: join(cwd, ".amness", "memory"), global: globalDir });
@@ -37,7 +46,7 @@ export class MemoryStore {
         const raw = readFileSync(join(dir, f), "utf8"), m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
         if (!m) continue;
         const fm = Object.fromEntries(m[1].split("\n").map((l) => [l.slice(0, l.indexOf(":")).trim(), l.slice(l.indexOf(":") + 1).trim()]));
-        if (fm.name) out.push({ name: fm.name, type: TYPES.includes(fm.type as MemoryType) ? (fm.type as MemoryType) : "project", description: fm.description ?? "", content: m[2].trim(), scope, updated: fm.updated ?? "", hits: Number(fm.hits) || 0, used: fm.used || undefined });
+        if (fm.name) out.push({ name: fm.name, type: TYPES.includes(fm.type as MemoryType) ? (fm.type as MemoryType) : "project", description: fm.description ?? "", content: m[2].trim(), scope, updated: fm.updated ?? "", hits: Number(fm.hits) || 0, used: fm.used || undefined, wins: Number(fm.wins) || 0, losses: Number(fm.losses) || 0 });
       }
     }
     return out;
@@ -46,7 +55,7 @@ export class MemoryStore {
   private write(e: MemoryEntry) {
     const dir = this.dirs[e.scope]!;
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${e.name}.md`), `---\nname: ${e.name}\ntype: ${e.type}\ndescription: ${e.description}\nupdated: ${e.updated}\nhits: ${e.hits ?? 0}${e.used ? `\nused: ${e.used}` : ""}\n---\n${e.content.trim()}\n`);
+    writeFileSync(join(dir, `${e.name}.md`), `---\nname: ${e.name}\ntype: ${e.type}\ndescription: ${e.description}\nupdated: ${e.updated}\nhits: ${e.hits ?? 0}\nwins: ${e.wins ?? 0}\nlosses: ${e.losses ?? 0}${e.used ? `\nused: ${e.used}` : ""}\n---\n${e.content.trim()}\n`);
   }
 
   /**
@@ -85,20 +94,60 @@ export class MemoryStore {
 
   /** BM25 over name, description and content (name and description count extra), nudged by how often a note has proved useful and how fresh it is. */
   rank(q: string, from: MemoryEntry[] = this.list()): { e: MemoryEntry; score: number }[] {
-    const qt = [...new Set(terms(q))]; if (!qt.length || !from.length) return [];
+    const qt = [...new Set(terms(q))]; if (!from.length) return [];
     const docs = from.map((e) => ({ e, t: [...terms(e.name), ...terms(e.name), ...terms(e.description), ...terms(e.description), ...terms(e.content)] }));
     const avg = docs.reduce((n, d) => n + d.t.length, 0) / docs.length || 1, k1 = 1.2, b = 0.75;
     const df = new Map<string, number>(); for (const d of docs) for (const x of new Set(d.t)) df.set(x, (df.get(x) ?? 0) + 1);
-    return docs.map(({ e, t }) => {
+    let scored = docs.map(({ e, t }) => {
       let score = 0; const tf = new Map<string, number>(); for (const x of t) tf.set(x, (tf.get(x) ?? 0) + 1);
       for (const x of qt) { const f = tf.get(x) ?? 0; if (!f) continue; const idf = Math.log(1 + (docs.length - (df.get(x) ?? 0) + 0.5) / ((df.get(x) ?? 0) + 0.5)); score += idf * ((f * (k1 + 1)) / (f + k1 * (1 - b + (b * t.length) / avg))); }
-      if (score > 0) score *= 1 + 0.1 * Math.log1p(e.hits ?? 0) + (daysSince(e.used ?? e.updated) < 30 ? 0.05 : 0);
       return { e, score };
-    }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).reduce<{ e: MemoryEntry; score: number }[]>((acc, x, i, all2) => {
-      acc.push(x);
-      if (i < 3) for (const n of this.neighbors(x.e, from)) if (!all2.some((y) => y.e.name === n.name && y.e.scope === n.scope) && !acc.some((y) => y.e === n)) acc.push({ e: n, score: x.score * 0.4 });   // one hop: related notes ride along
-      return acc;
-    }, []).sort((a, b) => b.score - a.score);
+    });
+    // Semantic part (only when an embedder primed this query): blend cosine similarity into the lexical score, so a note can match without sharing a word.
+    const qv = this.qv.get(q);
+    if (qv) {
+      const top = Math.max(0, ...scored.map((x) => x.score)), scale = Math.max(top, 2);
+      scored = scored.map((x) => { const nv = this.vecs.get(x.e.scope + "/" + x.e.name), cos = nv && nv.h === hashOf(x.e) ? Math.max(0, cosine(qv, nv.v)) : 0; return { e: x.e, score: cos >= 0.3 || x.score > 0 ? (0.5 * (x.score / (top || 1)) * (top ? 1 : 0) + 0.5 * cos) * scale : 0 }; });
+    }
+    return scored.filter((x) => x.score > 0).map(({ e, score }) => ({ e, score: score * (0.6 + 0.8 * utility(e)) * (1 + 0.1 * Math.log1p(e.hits ?? 0) + (daysSince(e.used ?? e.updated) < 30 ? 0.05 : 0)) }))
+      .sort((a, b) => b.score - a.score).reduce<{ e: MemoryEntry; score: number }[]>((acc, x, i, all2) => {
+        acc.push(x);
+        if (i < 3) for (const n of this.neighbors(x.e, from)) if (!all2.some((y) => y.e.name === n.name && y.e.scope === n.scope) && !acc.some((y) => y.e === n)) acc.push({ e: n, score: x.score * 0.4 });   // one hop: related notes ride along
+        return acc;
+      }, []).sort((a, b) => b.score - a.score);
+  }
+
+  // ---- embeddings (optional): vectors live next to the notes in embeddings.json, keyed by a hash of the note text.
+  private vecFile(scope: Scope) { return this.dirs[scope] && join(this.dirs[scope]!, "embeddings.json"); }
+  /** Embed notes that have no current vector. Call before retrieval when an embedder is set; failures are ignored (BM25 still works). */
+  async index(): Promise<number> {
+    if (!this.embedder) return 0;
+    const all = this.list();
+    for (const sc of ["project", "global"] as Scope[]) { const f = this.vecFile(sc); if (f && existsSync(f) && !all.some((e) => e.scope === sc && this.vecs.has(sc + "/" + e.name))) { try { for (const [n, v] of Object.entries(JSON.parse(readFileSync(f, "utf8")) as Record<string, { h: string; v: number[] }>)) this.vecs.set(sc + "/" + n, v); } catch { /* rebuilt below */ } } }
+    const todo = all.filter((e) => this.vecs.get(e.scope + "/" + e.name)?.h !== hashOf(e));
+    if (!todo.length) return 0;
+    const vs = await this.embedder(todo.map((e) => `${e.name}: ${e.description}\n${e.content}`));
+    todo.forEach((e, i) => this.vecs.set(e.scope + "/" + e.name, { h: hashOf(e), v: vs[i].map((x) => Math.round(x * 1e4) / 1e4) }));
+    for (const sc of ["project", "global"] as Scope[]) {
+      const f = this.vecFile(sc); if (!f || !todo.some((e) => e.scope === sc)) continue;
+      const obj: Record<string, { h: string; v: number[] }> = {}; for (const e of all) if (e.scope === sc) { const v = this.vecs.get(sc + "/" + e.name); if (v) obj[e.name] = v; }
+      try { mkdirSync(join(f, ".."), { recursive: true }); writeFileSync(f, JSON.stringify(obj)); } catch { /* read-only store */ }
+    }
+    return todo.length;
+  }
+  /** Embed a query so the next (synchronous) rank() for the same text can use semantic similarity. */
+  async warmQuery(q: string): Promise<void> {
+    if (!this.embedder || this.qv.has(q)) return;
+    try { this.qv.set(q, (await this.embedder([q]))[0]); if (this.qv.size > 30) this.qv.delete(this.qv.keys().next().value!); } catch { /* lexical only */ }
+  }
+
+  // ---- learning from outcomes: notes that were in front of the model during runs that went well rank higher, ones from runs that failed rank lower.
+  /** Close a turn: credit (or blame) every note surfaced since the last call. `undefined` = inconclusive (a chat reply), nothing changes. */
+  endTurn(success: boolean | undefined) {
+    const keys = [...this.turn]; this.turn.clear();
+    if (success === undefined) return;
+    const all = this.list();
+    for (const k of keys) { const e = all.find((x) => x.scope + "/" + x.name === k); if (e) { try { this.write(success ? { ...e, wins: (e.wins ?? 0) + 1 } : { ...e, losses: (e.losses ?? 0) + 1 }); } catch { /* read-only */ } } }
   }
   search(q: string, n = 5): MemoryEntry[] { const r = this.rank(q).slice(0, n).map((x) => x.e); this.touch(r); return r; }
 
@@ -166,10 +215,10 @@ export class MemoryStore {
   }
 
   /** Record that these notes were surfaced to the model (feeds ranking and the decision to forget). */
-  touch(es: MemoryEntry[]) { this.coRetrieved(es); for (const e of es) { try { this.write({ ...e, hits: (e.hits ?? 0) + 1, used: today() }); } catch { /* read-only store: ranking just won't learn */ } } }
+  touch(es: MemoryEntry[]) { this.coRetrieved(es); for (const e of es) { this.turn.add(e.scope + "/" + e.name); try { this.write({ ...e, hits: (e.hits ?? 0) + 1, used: today() }); } catch { /* read-only store: ranking just won't learn */ } } }
 
-  /** Notes that were never useful: older than `days` and surfaced at most once. */
-  stale(days = 90): MemoryEntry[] { return this.list().filter((e) => daysSince(e.used ?? e.updated) > days && (e.hits ?? 0) <= 1); }
+  /** Notes that were never useful (older than `days`, surfaced at most once) or that keep showing up in runs that fail (4+ runs, under 25% good). */
+  stale(days = 90): MemoryEntry[] { return this.list().filter((e) => (daysSince(e.used ?? e.updated) > days && (e.hits ?? 0) <= 1) || ((e.wins ?? 0) + (e.losses ?? 0) >= 4 && utility(e) < 0.25)); }
   /** Forgetting that can be undone: stale notes move to an `archive/` folder next to the notes. */
   prune(days = 90): string[] {
     const out: string[] = [];
@@ -221,7 +270,7 @@ export function memoryTools(store: MemoryStore, onSave?: (e: MemoryEntry) => voi
     defineTool<{ query: string }>({
       name: "memory_search", description: "Search saved memory notes by keyword; returns matching notes in full.",
       schema: { type: "object", required: ["query"], properties: { query: { type: "string" } } },
-      run: ({ query }) => store.search(query).map((e) => `### ${e.name} [${e.scope}/${e.type}]\n${e.content}`).join("\n\n") || "no matching memory",
+      run: async ({ query }) => { await store.warmQuery(query); return store.search(query).map((e) => `### ${e.name} [${e.scope}/${e.type}]\n${e.content}`).join("\n\n") || "no matching memory"; },
     }),
     defineTool<{ name: string }>({
       name: "memory_forget", description: "Delete a memory note that is wrong or obsolete.",
