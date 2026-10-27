@@ -222,6 +222,8 @@ ${note}
   return {
     /** The live toolbox: add/remove tools between or during runs. */
     registry, memory,
+    /** Keep the provider's prompt cache alive across an idle gap (see createHarness().warm). */
+    warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },
     /** One conversational turn: `history` is everything so far (empty to start); returns the updated transcript in `messages`. */
     chat(history: Message[], userText: string) {

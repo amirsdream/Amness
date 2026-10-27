@@ -77,11 +77,22 @@ export function buildCommands(): Cmd[] {
       a.session.messages = r.messages; a.lastPrompt = 0; a.saveSession(); a.noticeUntil = 0; a.rebuildBlocks();
       a.commit(["", `  ${green("✓")} ${dim("conversation compacted into a handoff note")}`, ...r.note.split("\n").slice(0, 8).map((l) => "    " + dim(l))]);
     } },
-    { name: "memory", help: "list notes · forget <name> · add <text> · stale · prune", args: "[forget|add|stale|prune]", run: async (a, arg) => {
+    { name: "memory", help: "list notes · forget <name> · add <text> · stale · prune · consolidate · graph", args: "[forget|add|stale|prune|consolidate|graph]", run: async (a, arg) => {
       const m = a.memory; if (!m) return void a.say("memory is disabled", yellow);
       const [sub, ...rest] = arg.split(/\s+/), tail = rest.join(" ");
       if (sub === "forget" && tail) return void a.say(m.forget(tail) ? `forgot ${tail}` : `no note named ${tail}`, dim);
       if (sub === "add" && tail) return a.remember(tail);
+      if (sub === "graph") { const all = m.list(), rows = all.map((e) => [e, m.neighbors(e, all)] as const).filter(([, n]) => n.length); return void a.commit(rows.length ? ["", bold("  Related notes"), ...rows.map(([e, n]) => `  ${cyan(e.name.padEnd(24))} ${dim("↔")} ${n.map((x) => x.name).join(", ")}`), dim("  links come from [[name]] mentions and from notes that keep being retrieved together")] : ["", dim("  no links yet. Mention [[other-note]] in a note, or keep using memory: notes retrieved together get linked.")]); }
+      if (sub === "consolidate") {
+        a.say("asking the model to tidy memory (merge duplicates, archive obsolete notes)…", dim);
+        const plan = await m.consolidate(a.model);
+        if (!plan.merges.length && !plan.archive.length) return void a.say("memory looks tidy: nothing to merge or archive", dim);
+        const lines = [...plan.merges.map((x) => `merge ${x.from.join(", ")} → ${x.keep}`), ...plan.archive.map((n) => `archive ${n}`)];
+        a.commit(["", bold("  Proposed memory clean-up"), ...lines.map((l) => "  " + l), dim("  nothing is deleted: replaced notes move to memory/archive/")]);
+        const ok = await a.pick("Apply this clean-up?", [{ label: "Yes, apply", value: "y" }, { label: "No", value: "n" }]);
+        if (ok === "y") { const r = m.applyPlan(plan); a.say(`merged ${r.merged}, archived ${r.archived}`, dim); }
+        return;
+      }
       if (sub === "stale") { const st = m.stale(); return void a.commit(st.length ? ["", bold("  Never-used notes (older than 90 days, surfaced at most once)"), ...st.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}] last used ${e.used ?? e.updated}`)}`), dim("  /memory prune moves them to an archive folder (reversible)")] : ["", dim("  no stale notes")]); }
       if (sub === "prune") { const gone = m.prune(); return void a.say(gone.length ? `archived ${gone.length} stale note${gone.length === 1 ? "" : "s"}: ${gone.join(", ")} (moved to memory/archive/)` : "nothing stale to archive", dim); }
       const all = m.list();
@@ -146,6 +157,10 @@ export function buildCommands(): Cmd[] {
       else text = last && "text" in last ? last.text : "";
       if (!text) return void a.say("nothing to copy yet", dim);
       a.copyText(text); a.say(`copied ${text.length} characters to the clipboard`, dim);
+    } },
+    { name: "keepwarm", help: "keep the Claude prompt cache alive while you are away (costs a few cache reads)", args: "[on|off]", run: (a, arg) => {
+      if (!arg) return void a.say(`keep-warm is ${a.cfg.keepWarm ? "on" : "off"}. Claude drops its prompt cache after 5 idle minutes; with this on, a tiny re-send every ~4.5 minutes (at most 3 per break) keeps it. Only affects Claude.`, dim);
+      a.cfg.keepWarm = arg === "on"; a.saveConfig(); if (!a.cfg.keepWarm) a.stopWarm(); a.say(`keep-warm ${a.cfg.keepWarm ? "on" : "off"}${a.cfg.keepWarm && a.cfg.provider !== "anthropic" ? dim("  (only Claude needs it; OpenAI requests already ask for 24h cache retention)") : ""}`, dim);
     } },
     { name: "check", help: "fast command run after every edit (typecheck, lint); failures go straight back to the model", args: "[cmd|off]", run: (a, arg) => {
       if (!arg) return void a.say(a.check ? `post-edit check: ${cyan(a.check)}` : "no post-edit check set. /check npx tsc --noEmit", dim);

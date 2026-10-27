@@ -7,7 +7,7 @@ export type Message = { role: "system" | "user" | "assistant" | "tool"; content:
   raw?: unknown };
 export type ToolSpec = { name: string; description: string; parameters: Schema };
 /** Any chat model: messages + tool specs in, assistant message out (attach `usage` if known). See openai.ts. */
-export type ModelOpts = { signal?: AbortSignal; /** Called with each piece of assistant text as it is generated (streaming adapters only). */ onText?: (delta: string) => void; /** Called with pieces of the model's reasoning summary, where the provider exposes one. */ onThinking?: (delta: string) => void };
+export type ModelOpts = { signal?: AbortSignal; /** Cap on generated tokens for this call (used for cache keep-alive pings; adapters may ignore it). */ maxTokens?: number; /** Called with each piece of assistant text as it is generated (streaming adapters only). */ onText?: (delta: string) => void; /** Called with pieces of the model's reasoning summary, where the provider exposes one. */ onThinking?: (delta: string) => void };
 export type Model = ((messages: Message[], tools: ToolSpec[], opts?: ModelOpts) => Promise<Message>) & {
   /** Set by adapters whose provider binds reasoning to the exact history (Claude): the harness then never edits past turns. */
   appendOnly?: boolean;
@@ -256,6 +256,19 @@ export function createHarness(o: Options) {
   const sig = () => (typeof o.signal === "function" ? o.signal() : o.signal);
   let approvals: Promise<unknown> = Promise.resolve(); // serialise prompts so parallel calls don't interleave questions
 
+  let lastStep = 0;
+  /**
+   * Re-send the conversation with a tiny output cap so the provider keeps the cached prefix alive during an idle gap (it costs a cache READ of
+   * the prefix, a fraction of what a cold re-read costs). Returns how many prompt tokens were served from cache.
+   */
+  async function warm(msgs: Message[], opts: { signal?: AbortSignal } = {}): Promise<{ prompt: number; cached: number }> {
+    const visible = reg.visible({ step: lastStep, messages: msgs }), menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => t.deferred && !reg.loaded.has(t.name)) : [];
+    const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 80)}`).join("\n") }] : []), FINISH];
+    const m = await o.model(msgs, specs, { signal: opts.signal, maxTokens: 16 });
+    o.budget?.add(m);
+    return { prompt: m.usage?.prompt_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0 };
+  }
+
   /** Agent loop. Resolves with the model's final answer (`finish` summary or accepted plain-text reply). */
   async function run(task: string, opts: { resume?: Message[] } = {}): Promise<RunResult> {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
@@ -265,6 +278,7 @@ export function createHarness(o: Options) {
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     for (let step = 0; step < max; step++) {
+      lastStep = step;
       if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
       for (const text of o.inbox?.() ?? []) { msgs.push({ role: "user", content: text }); emit({ kind: "steer", text }); }
       const over = o.budget?.exceeded();
@@ -412,5 +426,5 @@ export function createHarness(o: Options) {
     throw new Error(`extract failed after ${attempts} attempts: ${last}`);
   }
 
-  return { run, extract };
+  return { run, extract, warm };
 }

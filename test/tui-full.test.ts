@@ -6,6 +6,7 @@ import { renderDiffRows } from "../cli/tui/diffview.ts";
 import { BlockStore } from "../cli/tui/blocks.ts";
 import { getTheme } from "../cli/tui/themes.ts";
 
+import type { Message } from "../src/index.ts";
 const files = { "src/app.ts": "export function f() {\n  return 1;\n}\n", "README.md": "# demo\n" };
 const long = Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n\n");
 const mouse = (b: number, x: number, y: number, up = false) => `\x1b[<${b};${x};${y}${up ? "m" : "M"}`;
@@ -111,4 +112,15 @@ test("copy: drag selects and copies from the transcript, the sidebar and a modal
   // /copy variants
   await t.submit("/copy"); assert.equal(clip.at(-1), reply);
   await t.submit("/copy code"); assert.equal(clip.at(-1), "const answer = 42;");
+});
+
+test("keep-warm: while idle on Claude, a tiny ping keeps the cache (at most 3 per break); off by default", async () => {
+  const pings: number[] = [];
+  const reply = (): Message => ({ role: "assistant", content: "ok", usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, cached_tokens: 60 } });
+  const mk = (cfg: Record<string, unknown>) => rig([(_m, _t, o) => { if ((o as any).maxTokens) pings.push(1); return reply(); }, (_m, _t, o) => { if ((o as any).maxTokens) pings.push(1); return reply(); }, (_m, _t, o) => { if ((o as any).maxTokens) pings.push(1); return reply(); }, (_m, _t, o) => { if ((o as any).maxTokens) pings.push(1); return reply(); }, (_m, _t, o) => { if ((o as any).maxTokens) pings.push(1); return reply(); }], { cols: 120, rows: 30, files, ui: "full", cfg, keepWarmMs: 40 });
+  const off = mk({ provider: "anthropic" }); await off.start(); await off.submit("hi"); await off.until(() => off.idle()); await sleep(200);
+  assert.equal(pings.length, 0);                                           // not enabled: no unattended spending
+  const on = mk({ provider: "anthropic", keepWarm: true }); await on.start(); await on.submit("hi"); await on.until(() => on.idle()); await sleep(400);
+  assert.equal(pings.length, 3);                                           // exactly three, then it stops
+  assert.ok(on.has("cache kept warm"));
 });

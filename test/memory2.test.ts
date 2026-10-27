@@ -91,3 +91,44 @@ test("harness: history is only rewritten when over budget, in one cut, and a cac
   assert.ok(trims.length >= 1 && trims.length <= 6, String(trims.length));          // a handful of cuts across 16 turns, not one per turn
   assert.ok(breaks.length >= 1 && breaks.every((b) => b.at >= 0), JSON.stringify(breaks));                  // every rewrite is reported, and the tool list never changed
 });
+
+test("memory graph: [[links]] and notes retrieved together become neighbours; related notes ride along in ranking", () => {
+  const m = store();
+  m.save(note("db-setup", "database setup", "Postgres 15 on port 5433; see [[migrations]] for schema changes"));
+  m.save(note("migrations", "schema migrations", "Run npm run migrate. Needs the database from db-setup"));
+  m.save(note("release", "release process", "Tag the commit and run make release"));
+  const all = m.list(), db = all.find((e) => e.name === "db-setup")!;
+  assert.deepEqual(m.neighbors(db, all).map((e) => e.name), ["migrations"]);
+  assert.deepEqual(m.neighbors(all.find((e) => e.name === "migrations")!, all).map((e) => e.name), ["db-setup"]);   // links work both ways
+  assert.deepEqual(m.neighbors(all.find((e) => e.name === "release")!, all), []);
+  // a query that only matches db-setup also surfaces its neighbour, ranked lower
+  const r = m.rank("postgres port").map((x) => x.e.name); assert.deepEqual(r.slice(0, 2), ["db-setup", "migrations"]);
+  // co-retrieval links notes that were never linked explicitly
+  const rel = m.list().filter((e) => e.name === "release" || e.name === "migrations");
+  m.touch(rel); assert.deepEqual(m.neighbors(m.list().find((e) => e.name === "release")!).map((e) => e.name), []);   // once is a coincidence
+  m.touch(rel); assert.deepEqual(m.neighbors(m.list().find((e) => e.name === "release")!).map((e) => e.name), ["migrations"]);   // twice is a pattern
+});
+
+test("memory consolidate: the model proposes, bogus names are ignored, apply merges and archives reversibly", async () => {
+  const m = store();
+  m.save(note("test-cmd", "run tests", "npm test")); m.save(note("test-cmd-2", "tests command", "use npm test, it takes 20s", "reference")); m.save(note("old-port", "dev server port", "3000")); m.save(note("keep", "unrelated", "stays put"));
+  const plan = JSON.stringify({ merges: [{ keep: "test-cmd", from: ["test-cmd-2", "ghost"], description: "how to run tests", content: "npm test (about 20s)" }, { keep: "ghost", from: ["keep"], description: "x", content: "y" }], archive: ["old-port", "nonexistent"] });
+  const model: Model = async () => ({ role: "assistant", content: plan });
+  const p = await m.consolidate(model);
+  assert.deepEqual(p, { merges: [{ keep: "test-cmd", from: ["test-cmd-2"], description: "how to run tests", content: "npm test (about 20s)" }], archive: ["old-port"] });
+  assert.equal(m.list().length, 4);                                         // proposing changes nothing
+  assert.deepEqual(m.applyPlan(p), { merged: 1, archived: 2 });
+  assert.deepEqual(m.list().map((e) => e.name).sort(), ["keep", "test-cmd"]); assert.equal(m.list().find((e) => e.name === "test-cmd")!.content, "npm test (about 20s)");
+  assert.ok(existsSync(join(m.dirs.project!, "archive", "old-port.md")) && existsSync(join(m.dirs.project!, "archive", "test-cmd-2.md")));
+});
+
+test("cache keep-alive: warm() re-sends the same tool list with a tiny output cap", async () => {
+  const calls: { specs: string; max?: number }[] = [];
+  const model: Model = async (msgs, specs, o) => { calls.push({ specs: JSON.stringify(specs), max: o?.maxTokens }); return { role: "assistant", content: null, tool_calls: msgs.length < 4 ? [{ id: "a" + msgs.length, function: { name: "t", arguments: "{}" } }] : [{ id: "f", function: { name: "finish", arguments: '{"summary":"."}' } }], usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105, cached_tokens: 80 } }; };
+  const h = createHarness({ model, tools: [defineTool({ name: "t", description: "", schema: { type: "object" }, run: () => "ok" })] });
+  const r = await h.run("x");
+  const w = await h.warm(r.messages);
+  assert.deepEqual(w, { prompt: 100, cached: 80 });
+  const last = calls.at(-1)!, before = calls.at(-2)!;
+  assert.equal(last.max, 16); assert.equal(last.specs, before.specs);       // identical tool definitions: the warm request hits the same cache entry
+});

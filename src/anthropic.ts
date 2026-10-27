@@ -84,7 +84,7 @@ export function anthropic(o: AnthropicOptions = {}): Model {
       () => { throw new Error("Claude support needs the SDK: npm install @anthropic-ai/sdk"); });
     const { system, messages: msgs } = toAnthropic(messages);
     const req = {
-      model, max_tokens: o.maxTokens ?? 32_000, ...(system && { system }), messages: msgs,
+      model, max_tokens: opts?.maxTokens ?? o.maxTokens ?? 32_000, ...(system && { system }), messages: msgs,
       ...(tools.length && { tools: tools.map(toTool) }),
       ...(thinking && { thinking: { type: "adaptive" }, output_config: { effort: o.effort ?? "high" } }),
       cache_control: { type: "ephemeral" }, // the transcript is append-only, so each turn reads the previous one from cache

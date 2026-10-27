@@ -35,7 +35,7 @@ export type AppOptions = {
   cfg: Config; cwd: string; version: string;
   input?: any; output?: Out & { on?: (e: string, f: () => void) => void };
   makeModel?: (cfg: Config) => Model;
-  resume?: "last" | string; prompt?: string; persist?: boolean;
+  resume?: "last" | string; prompt?: string; persist?: boolean; /** idle ms before a cache keep-alive ping (default 270000) */ keepWarmMs?: number;
   /** "full" = the full-screen UI (alternate screen, mouse, sidebar); "inline" = the classic scrollback UI. */
   ui?: "full" | "inline";
 };
@@ -153,6 +153,7 @@ export class App {
     try { if (this.full) this.full.leave(); else { this.screen.clear(); if (this.screen.alt) this.screen.leaveAlt(); } this.io.output.write(PASTE_OFF + "\x1b[?25h"); this.io.input.setRawMode?.(false); this.io.input.pause?.(); this.io.input.off?.("data", this.onData); } catch { /* terminal already gone */ }
   };
   exit(code = 0) {
+    this.stopWarm();
     if (this.running) this.ac?.abort();
     this.saveSession(); this.restore();
     const hint = this.session.turns.length ? dim(`Resume this conversation with: amness -c   (session ${this.session.id})`) : "";
@@ -337,6 +338,7 @@ export class App {
     await this.dispatch(text);
   }
   async dispatch(text: string) {
+    this.stopWarm();
     if (text.startsWith("/")) return this.runCommand(text);
     if (text.startsWith("!")) return this.bash(text.slice(1).trim());
     if (text.startsWith("#")) return this.remember(text.slice(1).trim());
@@ -403,7 +405,7 @@ export class App {
     const secs = Date.now() - this.runStart;
     if (ok && (secs > 4000 || this.runTokens > 2000)) this.inlineOnly([dim(`  ✻ Worked for ${fmtDuration(secs)} · ${fmtTokens(this.runTokens)} tokens`)]);
     if (this.todos.length && this.todos.some((t) => t.status !== "done")) this.inlineOnly(todoList(this.todos, this.width));
-    this.todos = []; this.inflight.clear(); this.running = false; this.ac = undefined; this.thinkBuf = "";
+    this.todos = []; this.inflight.clear(); this.running = false; this.ac = undefined; this.thinkBuf = ""; this.scheduleWarm();
     this.setTitle(`${ok ? "✔" : "✗"} Amness · ${basename(this.cwd)}`);
     if (secs > 20_000) this.io.output.write("\x07");                                  // a long turn finished: nudge the user, even if they switched tabs
     this.saveSession(); this.refreshBranch(); this.idleTimer(); this.render();
@@ -418,7 +420,7 @@ export class App {
     switch (e.kind) {
       case "thinking": if (!sub) { this.thinkBuf = (this.thinkBuf + e.delta).slice(-600); this.blocks.streamThinking(e.delta); } break;
       case "turn": this.session.usage.prompt += e.prompt; this.session.usage.completion += e.completion; this.session.usage.calls++; if (!sub) { const s = this.stepNow(); s.ms = Date.now() - s.t0; s.prompt = e.prompt; s.completion = e.completion; s.cached = e.cached; }
-        this.session.usage.cached = (this.session.usage.cached ?? 0) + e.cached; this.session.usage.reasoning = (this.session.usage.reasoning ?? 0) + e.reasoning;
+        this.session.usage.cached = (this.session.usage.cached ?? 0) + e.cached; if (!sub) this.lastCached = e.cached; this.session.usage.reasoning = (this.session.usage.reasoning ?? 0) + e.reasoning;
         this.session.usage.series = [...(this.session.usage.series ?? []), e.prompt].slice(-200); this.runSeries = [...this.runSeries, e.completion].slice(-40); if (!sub) { this.runTokens = e.tokens; this.lastPrompt = e.prompt; } else this.runTokens += e.completion; break;
       case "text": if (!sub) { this.thinkBuf = ""; this.blocks.endThinking(); this.blocks.streamAssistant(e.delta); this.streamBuf += e.delta; this.streamedThisMsg = true; this.flushStream(false); } break;
       case "assistant": if (!sub) { if (!this.streamedThisMsg || e.streamed === false) { this.blocks.setAssistant(e.text); this.streamBuf = e.text; this.streamedThisMsg = false; } this.blocks.endAssistant(); this.flushStream(true); } break;
@@ -563,6 +565,23 @@ export class App {
   saveConfig() { if (this.persist) saveConfig(this.cfg); }
   /** Put text on the clipboard (OSC 52 plus the platform tool). */
   copyText(text: string) { if (this.full) this.full.copy(text); else copyToClipboard(this.io.output, text, this.persist); }
+  // ---- cache keep-alive: Claude drops a cached prefix after ~5 idle minutes; a tiny re-send every ~4.5 minutes costs a cache read instead of a cold re-read.
+  private warmTimer?: ReturnType<typeof setTimeout>; private warmCount = 0; private lastCached = 0;
+  stopWarm() { if (this.warmTimer) clearTimeout(this.warmTimer); this.warmTimer = undefined; this.warmCount = 0; }
+  private scheduleWarm() {
+    if (this.warmTimer) clearTimeout(this.warmTimer);
+    if (!this.cfg.keepWarm || this.cfg.provider !== "anthropic" || !this.session.messages.length || this.lastCached <= 0 || this.warmCount >= 3) return;
+    this.warmTimer = setTimeout(async () => {
+      this.warmTimer = undefined;
+      if (this.running || !this.cfg.keepWarm) return;
+      try {
+        const r = await this.agent.warm(this.session.messages); this.warmCount++;
+        this.lastCached = r.cached; this.note(`cache kept warm (${r.prompt ? Math.round((r.cached / r.prompt) * 100) : 0}% of the prompt was cached)`);
+        this.scheduleWarm();
+      } catch { /* a failed ping is harmless: the next real request just re-reads the prefix */ }
+    }, this.opts.keepWarmMs ?? 270_000);
+    this.warmTimer.unref?.();
+  }
   setCheck(cmd: string | undefined) { this.check = cmd; this.buildAgent(); }
   setVerify(cmd: string | undefined) { this.verify = cmd; if (this.persist) { const st = loadState(); if (cmd) st.verifyByDir[this.cwd] = cmd; else delete st.verifyByDir[this.cwd]; saveState(st); } this.buildAgent(); }
   async ensureLive() { if (!this.live) this.live = await startLive({ title: "Amness" }); return this.live; }

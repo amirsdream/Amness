@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { defineTool, type Tool } from "./harness.ts";
+import { createHarness, defineTool, type Model, type Tool } from "./harness.ts";
 
 export type MemoryType = "user" | "project" | "feedback" | "reference";
 export type Scope = "project" | "global";
@@ -94,12 +94,79 @@ export class MemoryStore {
       for (const x of qt) { const f = tf.get(x) ?? 0; if (!f) continue; const idf = Math.log(1 + (docs.length - (df.get(x) ?? 0) + 0.5) / ((df.get(x) ?? 0) + 0.5)); score += idf * ((f * (k1 + 1)) / (f + k1 * (1 - b + (b * t.length) / avg))); }
       if (score > 0) score *= 1 + 0.1 * Math.log1p(e.hits ?? 0) + (daysSince(e.used ?? e.updated) < 30 ? 0.05 : 0);
       return { e, score };
-    }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+    }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).reduce<{ e: MemoryEntry; score: number }[]>((acc, x, i, all2) => {
+      acc.push(x);
+      if (i < 3) for (const n of this.neighbors(x.e, from)) if (!all2.some((y) => y.e.name === n.name && y.e.scope === n.scope) && !acc.some((y) => y.e === n)) acc.push({ e: n, score: x.score * 0.4 });   // one hop: related notes ride along
+      return acc;
+    }, []).sort((a, b) => b.score - a.score);
   }
   search(q: string, n = 5): MemoryEntry[] { const r = this.rank(q).slice(0, n).map((x) => x.e); this.touch(r); return r; }
 
+  // ---- graph: which notes belong together. Explicit [[links]] in a note, plus pairs that keep being retrieved together (reconsolidation).
+  private linksFile(scope: Scope) { return this.dirs[scope] && join(this.dirs[scope]!, "links.json"); }
+  private readLinks(scope: Scope): Record<string, number> { const f = this.linksFile(scope); try { return f && existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {}; } catch { return {}; } }
+  /** Notes tied to `e`: ones it links with [[name]], ones that link to it, and ones that were retrieved together with it at least twice. */
+  neighbors(e: MemoryEntry, all: MemoryEntry[] = this.list()): MemoryEntry[] {
+    const names = new Set<string>(), key = (a: string, b: string) => [a, b].sort().join("|");
+    for (const m of e.content.matchAll(/\[\[([^\]]+)\]\]/g)) names.add(slug(m[1]));
+    const co = this.readLinks(e.scope);
+    for (const o of all) if (o.scope === e.scope && o !== e && (o.content.includes(`[[${e.name}]]`) || (co[key(e.name, o.name)] ?? 0) >= 2)) names.add(o.name);
+    return all.filter((o) => o.scope === e.scope && o.name !== e.name && names.has(o.name));
+  }
+  private coRetrieved(es: MemoryEntry[]) {
+    for (const scope of ["project", "global"] as Scope[]) {
+      const group = es.filter((e) => e.scope === scope), f = this.linksFile(scope); if (group.length < 2 || !f) continue;
+      const links = this.readLinks(scope);
+      for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) { const k = [group[i].name, group[j].name].sort().join("|"); links[k] = (links[k] ?? 0) + 1; }
+      try { mkdirSync(join(f, ".."), { recursive: true }); writeFileSync(f, JSON.stringify(links)); } catch { /* read-only store */ }
+    }
+  }
+
+  /** Move a note out of the active set without deleting it (reversible forgetting). */
+  archive(name: string): boolean {
+    let moved = false;
+    for (const sc of ["project", "global"] as Scope[]) {
+      const dir = this.dirs[sc], from = dir && join(dir, `${slug(name)}.md`);
+      if (dir && from && existsSync(from)) { mkdirSync(join(dir, "archive"), { recursive: true }); renameSync(from, join(dir, "archive", `${slug(name)}.md`)); this.reindex(sc); moved = true; }
+    }
+    return moved;
+  }
+
+  /**
+   * Ask a model to tidy memory (Infini Memory style maintenance): merge notes about one topic, drop ones that are obsolete or contradicted by newer ones.
+   * Returns a PLAN and changes nothing; show it to the user, then `applyPlan`.
+   */
+  async consolidate(model: Model): Promise<ConsolidationPlan> {
+    const all = this.list(); if (all.length < 2) return { merges: [], archive: [] };
+    const catalog = all.map((e) => `### ${e.scope}/${e.name} [${e.type}, updated ${e.updated}, used ${e.hits ?? 0}x]\n${e.description}\n${e.content}`).join("\n\n");
+    const h = createHarness({ model, system: "You maintain a small knowledge base of notes for a coding agent. Be conservative: keep every durable fact; only merge notes that are clearly about the same thing, and only archive notes that are clearly obsolete or contradicted by a newer note." });
+    const raw = await h.extract<{ merges?: { keep: string; from: string[]; description: string; content: string }[]; archive?: string[] }>(
+      `Notes:\n\n${catalog}\n\nReturn JSON: {"merges":[{"keep":"<existing note name to keep>","from":["<other note names merged into it>"],"description":"<one line>","content":"<merged text, nothing lost, newer facts win>"}],"archive":["<names of obsolete notes>"]}. Use the exact note names (without scope). Empty lists are fine.`,
+      { type: "object", properties: { merges: { type: "array", items: { type: "object", required: ["keep", "from", "description", "content"], properties: { keep: { type: "string" }, from: { type: "array", items: { type: "string" } }, description: { type: "string" }, content: { type: "string" } } } }, archive: { type: "array", items: { type: "string" } } } });
+    const have = new Set(all.map((e) => e.name)), used = new Set<string>(), plan: ConsolidationPlan = { merges: [], archive: [] };
+    for (const m of raw.merges ?? []) {
+      const from = (m.from ?? []).filter((n) => have.has(n) && n !== m.keep && !used.has(n));
+      if (!have.has(m.keep) || used.has(m.keep) || !from.length || !m.content?.trim()) continue;      // ignore anything that does not refer to real notes
+      used.add(m.keep); from.forEach((n) => used.add(n)); plan.merges.push({ keep: m.keep, from, description: m.description, content: m.content.slice(0, 4000) });
+    }
+    for (const n of raw.archive ?? []) if (have.has(n) && !used.has(n)) { used.add(n); plan.archive.push(n); }
+    return plan;
+  }
+  applyPlan(plan: ConsolidationPlan): { merged: number; archived: number } {
+    let merged = 0, archived = 0;
+    for (const m of plan.merges) {
+      const keep = this.list().find((e) => e.name === m.keep); if (!keep) continue;
+      this.write({ ...keep, description: m.description.replace(/\s+/g, " ").slice(0, 160), content: m.content.trim(), updated: today() });
+      for (const n of m.from) if (this.archive(n)) archived++;
+      merged++;
+    }
+    for (const n of plan.archive) if (this.archive(n)) archived++;
+    for (const sc of ["project", "global"] as Scope[]) if (this.dirs[sc] && existsSync(this.dirs[sc]!)) this.reindex(sc);
+    return { merged, archived };
+  }
+
   /** Record that these notes were surfaced to the model (feeds ranking and the decision to forget). */
-  touch(es: MemoryEntry[]) { for (const e of es) { try { this.write({ ...e, hits: (e.hits ?? 0) + 1, used: today() }); } catch { /* read-only store: ranking just won't learn */ } } }
+  touch(es: MemoryEntry[]) { this.coRetrieved(es); for (const e of es) { try { this.write({ ...e, hits: (e.hits ?? 0) + 1, used: today() }); } catch { /* read-only store: ranking just won't learn */ } } }
 
   /** Notes that were never useful: older than `days` and surfaced at most once. */
   stale(days = 90): MemoryEntry[] { return this.list().filter((e) => daysSince(e.used ?? e.updated) > days && (e.hits ?? 0) <= 1); }
@@ -137,6 +204,8 @@ export class MemoryStore {
     return "## Memory relevant to this message (notes, verify before relying on them)\n" + fresh.map((e) => `### ${e.name} [${e.scope}/${e.type}]\n${e.content}`).join("\n\n");
   }
 }
+
+export type ConsolidationPlan = { merges: { keep: string; from: string[]; description: string; content: string }[]; archive: string[] };
 
 export function memoryTools(store: MemoryStore, onSave?: (e: MemoryEntry) => void): Tool[] {
   return [
