@@ -11,6 +11,8 @@ import { toolLabel, argSummary } from "./view.ts";
 export type RenderCtx = {
   theme: Theme; width: number; now: number; frame: number; expandAll: boolean; live: boolean;
   brand: { icon: string; color: number }; diffMode: "auto" | "stacked" | "split";
+  /** The block above is also a tool call: draw no blank line between them, so a run of tool calls reads as one unit. */
+  tight?: boolean;
 };
 export type Hit = { row: number; x0: number; x1: number; kind: "toggle" | "more"; id: number };
 export type Rendered = { rows: Cell[][]; hits: Hit[]; text: string[] };
@@ -33,6 +35,36 @@ export function summarize(name: string, raw: string, result: string): string {
     case "memory_save": case "memory_forget": return strip(result).slice(0, 40);
     default: return strip(lines.find(Boolean) ?? "").slice(0, 44);
   }
+}
+
+type ToolBlock = Extract<Block, { kind: "tool" }>;
+/** Tool calls that only look at things. A run of them collapses into one "Explored" row; edits, commands and failures always stand alone. */
+export const isQuiet = (b: Block): b is ToolBlock => b.kind === "tool" && (!b.agent || b.agent === "lead") && b.status !== "fail" && !b.edit && ["read_file", "list_files", "grep", "web_search", "fetch_url", "memory_search"].includes(b.name);
+
+/** "3 files read · 2 searches": what a group of quiet tool calls did, in one phrase. */
+export function groupSummary(bs: ToolBlock[]): string {
+  const n = (names: string[]) => bs.filter((b) => names.includes(b.name)).length, parts: string[] = [];
+  const add = (k: number, one: string, many: string) => { if (k) parts.push(`${k} ${k === 1 ? one : many}`); };
+  add(n(["read_file"]), "file read", "files read"); add(n(["grep"]), "search", "searches"); add(n(["list_files"]), "listing", "listings");
+  add(n(["web_search", "fetch_url"]), "web lookup", "web lookups"); add(n(["memory_search"]), "memory lookup", "memory lookups");
+  return parts.join(" · ");
+}
+
+export function renderGroup(bs: ToolBlock[], open: boolean, c: RenderCtx): Rendered {
+  const t = c.theme, bw = c.width - MARGIN * 2, rows: string[] = [], hits: Hit[] = [], bg = t.surface;
+  const running = bs.filter((b) => b.status === "running"), cur = running[running.length - 1];
+  if (!c.tight) rows.push("");
+  const ms = bs.reduce((n, b) => n + (b.ms ?? 0), 0);
+  const status = cur ? F(t.accent2, SPIN[c.frame % SPIN.length]) + F(t.dim, ` ${clipWidth(`${toolLabel(cur.name)} ${argSummary(cur.name, cur.args)}`, Math.max(10, bw - 40))}`)
+    : F(t.ok, "✓ ") + F(t.dim, `${bs.length} steps`) + (ms >= 50 ? F(t.faint, ` · ${fmtMs(ms)}`) : "");
+  rows.push(split(` ${F(t.faint, open ? "▾" : "▸")} ${F(t.tool.read, "●")} ${BOLD(F(t.text, cur ? "Exploring" : "Explored"))}  ${F(t.dim, groupSummary(bs))}`, status + " ", bw, bg));
+  hits.push({ row: rows.length - 1, x0: MARGIN, x1: c.width - MARGIN, kind: "toggle", id: bs[0].id });
+  if (open) for (const b of bs) {
+    const res = b.status === "running" ? F(t.accent2, "…") : F(t.faint, summarize(b.name, b.args, b.result ?? ""));
+    rows.push(fit(`   ${F(t.faint, "│")} ${F(t.dim, toolLabel(b.name).padEnd(7))} ${F(t.text, clipWidth(argSummary(b.name, b.args), bw - 30))}  ${res}`, bw, t.bg));
+  }
+  const cells = rows.map((r) => padLeft(parseAnsi(" ".repeat(MARGIN) + r), c.width));
+  return { rows: cells, hits, text: cells.map((r) => r.map((x) => x.ch).join("").replace(/\s+$/, "")) };
 }
 
 export function renderBlock(b: Block, c: RenderCtx): Rendered {
@@ -99,7 +131,7 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
     : F(failed ? t.err : t.ok, failed ? "✗ " : "✓ ") + F(failed ? t.err : t.dim, summarize(b.name, b.args, b.result ?? "")) + (b.ms !== undefined && b.ms >= 50 ? F(t.faint, ` · ${fmtMs(b.ms)}`) : "");
   const hasBody = b.status !== "running" && !!(edit || (b.result && b.result.trim()));
   const caret = F(t.faint, hasBody ? (expanded ? "▾" : "▸") : " ");
-  if (!sub) blank();
+  if (!sub && (!c.tight || (hasBody && expanded))) blank();   // collapsed one-liners stack tightly; a card with a body gets air above it
   const head = `${caret} ${F(hue, "●")} ${label}  ${args}`;
   rows.push(sub ? `   ${F(t.faint, "│")} ${F(hue, "●")} ${F(t.dim, toolLabel(b.name))} ${F(t.faint, argSummary(b.name, b.args))}` : split(" " + head, status + " ", bw, bg));
   if (!sub && hasBody) hits.push({ row: rows.length - 1, x0: MARGIN, x1: c.width - MARGIN, kind: "toggle", id: b.id });
@@ -107,7 +139,7 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
   if (!sub && hasBody && expanded) {
     const bar = F(hue, "▏"), body = (s: string) => rows.push(fit(bar + " " + s, bw, bg));
     if (edit) {
-      const mode = c.diffMode === "auto" ? (bw >= 120 ? "split" : "stacked") : c.diffMode, max = b.more ? Infinity : 28;
+      const mode = c.diffMode === "auto" ? (bw >= 120 ? "split" : "stacked") : c.diffMode, max = b.more ? Infinity : 16;
       const d = renderDiffRows(edit.diff, { width: bw - 2, theme: t, lang: langOf(edit.path), mode, maxRows: max });
       for (const r of d.rows) rows.push(bar + " " + r);
       if (d.hidden > 0) { rows.push(fit(`${bar}  ${F(t.accent2, `▾ show ${d.hidden} more line${d.hidden === 1 ? "" : "s"}`)}`, bw, t.surface2)); hits.push({ row: rows.length - 1, x0: MARGIN, x1: c.width - MARGIN, kind: "more", id: b.id }); }

@@ -64,6 +64,7 @@ No API key yet? Run `amness demo`: a scripted model makes the mistakes real mode
 
 `amness` opens a **full-screen interface** by default: a header (project, branch, model, mode), a scrollable transcript of cards, a session sidebar, a rounded input panel and a status line.
 
+- **Calm by default.** Runs of reads and searches collapse into one row ("Explored · 3 files read · 2 searches") that opens on click; edits, commands and failures always get their own card, collapsed one-liners stack tightly, and long diffs show the first 16 rows with a click for the rest. `Ctrl+O` expands everything.
 - **Cards.** Your prompts, assistant replies (themed markdown, code blocks with a copy button, tables), collapsible tool cards with status chips, and syntax-highlighted diffs with line numbers and word-level marks (split view on wide terminals).
 - **Live run view.** While the agent works, the status line says what it is doing ("Reading src/app.ts", "Running 3 tools in parallel", "Verifying", "Waiting for you") with elapsed time, tokens and the step counter, and the sidebar shows a RUN panel: the think → act → verify pipeline, step progress, running tools with timers, and the last finished actions.
 - **Sidebar** (`Ctrl+B`): session, context gauge with a per-request sparkline and breakdown, token usage, todos, changed files, workspace.

@@ -5,7 +5,7 @@ import type { App } from "./app.ts";
 import { A, mix, type Cell } from "./ansi.ts";
 import { brandOfModel } from "./brand.ts";
 import { Canvas } from "./canvas.ts";
-import { renderBlock, type Hit, type RenderCtx, type Rendered } from "./cards.ts";
+import { isQuiet, renderBlock, renderGroup, type Hit, type RenderCtx, type Rendered } from "./cards.ts";
 import type { Block } from "./blocks.ts";
 import type { MouseEv } from "./keys.ts";
 import { MOUSE_OFF, MOUSE_ON } from "./keys.ts";
@@ -40,7 +40,9 @@ export class FullView {
   private regions: Region[] = [];
   private prevTotal = 0;
   private viewTop = 0; private viewH = 0; private viewX = 0; private viewW = 0; private total = 0;
-  private items: { b: Block; r: Rendered; start: number }[] = [];
+  private items: { b: Block; r: Rendered; start: number; group?: boolean }[] = [];
+  /** Groups of quiet tool calls (reads, searches) the user has opened, by the id of the first call. */
+  private groupOpen = new Set<number>();
   private sel?: { ax: number; ay: number; hx: number; hy: number; done: boolean };
   private down?: { x: number; y: number; moved: boolean };
   private lastWheel = 0;
@@ -135,12 +137,22 @@ export class FullView {
     this.items = []; let total = 0;
     if (!app.blocks.blocks.length) { this.drawEmpty(c, t, x0, y0, w, h); this.viewTop = y0; this.viewH = h; this.viewX = x0; this.viewW = w; this.total = 0; return; }
     const live = new Set<number>();
-    for (const b of app.blocks.blocks) {
-      live.add(b.id);
-      if (b.kind === "tool" && b.name === "todo_write") continue;   // todos live in the sidebar
-      const key = this.sig(b, ctx), hit = this.cache.get(b.id);
-      const r = hit && hit.key === key ? hit.r : (() => { const rr = renderBlock(b, ctx); this.cache.set(b.id, { key, r: rr }); return rr; })();
-      this.items.push({ b, r, start: total }); total += r.rows.length;
+    const blocks = app.blocks.blocks.filter((b) => !(b.kind === "tool" && b.name === "todo_write"));   // todos live in the sidebar
+    let prevTool: boolean = false;
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i]; live.add(b.id);
+      let run = 1; if (isQuiet(b)) while (i + run < blocks.length && isQuiet(blocks[i + run])) run++;
+      const tctx = { ...ctx, tight: prevTool };
+      if (run >= 2) {
+        const members = blocks.slice(i, i + run) as Extract<Block, { kind: "tool" }>[], open = this.expandAll || this.groupOpen.has(b.id);
+        const key: string = `g|${tctx.tight}|${open}|${ctx.theme.name}|${ctx.width}|` + members.map((m) => `${m.id}:${m.status}:${m.ms ?? 0}`).join(",") + (members.some((m) => m.status === "running") ? `|${ctx.frame}` : ""), hit = this.cache.get(b.id);
+        const r: Rendered = hit && hit.key === key ? hit.r : (() => { const rr = renderGroup(members, open, tctx); this.cache.set(b.id, { key, r: rr }); return rr; })();
+        for (const m of members) live.add(m.id);
+        this.items.push({ b, r, start: total, group: true }); total += r.rows.length; i += run - 1; prevTool = r.rows.length <= 2; continue;
+      }
+      const key: string = this.sig(b, tctx) + (tctx.tight ? "|t" : ""), hit = this.cache.get(b.id);
+      const r: Rendered = hit && hit.key === key ? hit.r : (() => { const rr = renderBlock(b, tctx); this.cache.set(b.id, { key, r: rr }); return rr; })();
+      this.items.push({ b, r, start: total }); total += r.rows.length; prevTool = b.kind === "tool" && (!b.agent || b.agent === "lead") && r.rows.length <= 2;
     }
     for (const id of this.cache.keys()) if (!live.has(id)) this.cache.delete(id);
     if (this.scroll > 0 && total > this.prevTotal) { this.scroll += total - this.prevTotal; this.unseen += total - this.prevTotal; }   // keep the view anchored while scrolled up
@@ -153,7 +165,7 @@ export class FullView {
       if (it.start + it.r.rows.length <= start) continue;
       if (it.start >= start + h) break;
       for (let k = 0; k < it.r.rows.length; k++) { const row = it.start + k - start; if (row >= 0 && row < h) c.put(x0, y0 + row, it.r.rows[k], W); }
-      for (const hh of it.r.hits) { const row = it.start + hh.row - start; if (row >= 0 && row < h) this.regions.push({ x: x0 + hh.x0, y: y0 + row, w: hh.x1 - hh.x0, h: 1, kind: hh.kind, click: () => this.hitClick(hh, it.b) }); }
+      for (const hh of it.r.hits) { const row = it.start + hh.row - start; if (row >= 0 && row < h) this.regions.push({ x: x0 + hh.x0, y: y0 + row, w: hh.x1 - hh.x0, h: 1, kind: hh.kind, click: () => this.hitClick(hh, it.b, it.group) }); }
       yy = it.start + it.r.rows.length;
     }
     void yy;
@@ -176,9 +188,10 @@ export class FullView {
       this.regions.push({ x: px, y: y0 + h - 1, w: lw, h: 1, kind: "jump", click: () => this.scrollTo(0) });
     }
   }
-  private hitClick(h: Hit, b: Block) {
+  private hitClick(h: Hit, b: Block, group = false) {
     const before = this.total;
-    if (h.kind === "toggle") this.app.blocks.toggle(b.id);
+    if (group) { if (this.groupOpen.has(b.id)) this.groupOpen.delete(b.id); else this.groupOpen.add(b.id); }
+    else if (h.kind === "toggle") this.app.blocks.toggle(b.id);
     else if (b.kind === "tool") { b.more = true; this.app.blocks.version++; }
     this.cache.delete(b.id); this.app.render();
     void before;

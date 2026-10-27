@@ -75,3 +75,14 @@ test("/loop shows a step-by-step trace of turns, tools and guards", async () => 
   const s = t.screen();
   assert.match(s, /Agent loop · 3 turns/); assert.ok(s.includes("model") && s.includes("Read") && s.includes("replied without tools"), s);
 });
+
+test("full: consecutive reads and searches collapse into one 'Explored' row that opens on click; edits and commands stay separate", async () => {
+  const t = rig([call("list_files", {}), call("grep", { pattern: "f", path: "src" }), call("read_file", { path: "src/app.ts" }), call("edit_file", { path: "src/app.ts", old: "return 1", new: "return 2" }), call("sh", { cmd: "echo hi" }), say("done")], { cols: 132, rows: 40, files, ui: "full" });
+  await t.start(); t.app.setMode("yolo");
+  await t.submit("go"); await t.until(() => t.idle() && t.has("done"));
+  assert.ok(t.has("Explored") && t.has("1 file read") && t.has("1 search") && t.has("3 steps"), t.screen());
+  assert.ok(t.has("Update") && t.has("Bash"));
+  const rows = t.screen().split("\n"), y = rows.findIndex((r) => r.includes("Explored")), x = rows[y].indexOf("Explored");
+  await t.type(mouse(0, x + 1, y + 1)); await t.type(mouse(0, x + 1, y + 1, true)); await t.settle();
+  assert.ok(t.has("src/app.ts") && /List\s+\./.test(t.screen()), t.screen());   // opened: one line per call
+});
