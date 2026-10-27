@@ -169,7 +169,7 @@ export function loadCases(dir: string): Case[] {
   for (const f of readdirSync(dir).filter((x) => x.endsWith(".json")).sort()) {
     const j = JSON.parse(readFileSync(join(dir, f), "utf8"));
     if (!j || typeof j.task !== "string" || typeof j.check !== "string" || typeof j.files !== "object") throw new Error(`${f}: needs "task", "files" (path -> text) and "check" (shell command)`);
-    out.push({ name: j.name ?? f.replace(/\.json$/, ""), files: j.files, task: j.task, verify: j.verify, check: j.check });
+    out.push({ name: j.name ?? f.replace(/\.json$/, ""), files: j.files, task: j.task, verify: j.verify, check: j.check, ...(j.solution && typeof j.solution === "object" && { solution: j.solution }) });
   }
   if (!out.length) throw new Error(`no *.json cases in ${dir}`);
   return out;

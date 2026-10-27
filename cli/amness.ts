@@ -2,8 +2,8 @@
 import { execFile, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { formatReplay, replayFile, Budget, MemoryStore, effortsFor, type RunResult, codeVariants, createCodeAgent, createDeepAgent, evaluate, loadMcp, readBundle, startLive, type Approve, type Event, type Model } from "../src/index.ts";
+import { basename, dirname, join, resolve } from "node:path";
+import { caseFromWorkspace, formatMining, formatReplay, replayFile, Budget, MemoryStore, effortsFor, type RunResult, codeVariants, createCodeAgent, createDeepAgent, evaluate, loadMcp, readBundle, startLive, type Approve, type Event, type Model } from "../src/index.ts";
 import { createModel } from "./model.ts";
 import { detectVerify } from "./detect.ts";
 import { HELP, runHeadless } from "./headless.ts";
@@ -374,6 +374,18 @@ const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
 
   inside the chat: /help for commands · @file to mention files · shift+tab to change permissions`;
 
+/** amness traces [--dir d] [--case name --task "..." --check "cmd" [--verify "cmd"]]: failure report from the session traces, or snapshot the repo into an eval task. */
+function traces(args: string[]): number {
+  const val = (f: string) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; }, dir = resolve(val("--dir") ?? join(".amness", "traces"));
+  const name = val("--case");
+  if (name) {
+    if (!val("--task") || !val("--check")) { console.error('usage: amness traces --case <name> --task "what to do" --check "<command that exits 0 only when the task is really done>" [--verify "<command the agent may run>"]'); return 2; }
+    const r = caseFromWorkspace(process.cwd(), { name, task: val("--task")!, check: val("--check")!, verify: val("--verify") });
+    console.log(`${green("✓")} wrote ${r.path}  (${r.files} files, ${(r.bytes / 1024).toFixed(0)} KB, from git HEAD)\n${dim("run it: amness eval --cases " + dirname(r.path) + " --variants ab --trials 3  ·  add a \"solution\" to the JSON to include it in --selftest")}`); return 0;
+  }
+  console.log(formatMining(dir)); return 0;
+}
+
 /** amness replay <trace.jsonl>: run a recorded session through the current harness (no model, no tools) and show what behaves differently. */
 async function runReplay(args: string[]): Promise<number> {
   const val = (f: string) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; }, file = args.find((a) => !a.startsWith("--") && args[args.indexOf(a) - 1]?.startsWith("--") !== true);
@@ -411,6 +423,7 @@ async function main() {
   if (quick === "--version" || quick === "-v") return void console.log(VERSION);
   if (quick === "--help" || quick === "-h" || quick === "help") return void console.log(TOP_HELP);
   if (quick === "eval" && argv.length > 1) { process.exitCode = await runEval(argv.slice(1), { model: makeModel, maxTokens: cfg.maxTokens, confirm }); return; }
+  if (quick === "traces") { process.exitCode = traces(argv.slice(1)); return; }
   if (quick === "replay") { process.exitCode = await runReplay(argv.slice(1)); return; }
   if (quick === "run") { process.exitCode = await runHeadless(argv.slice(1)); return; }
   if (quick === "-p" || quick === "--print") { process.exitCode = await runHeadless(argv.slice(1)); return; }

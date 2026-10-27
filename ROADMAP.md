@@ -59,7 +59,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | L2 | Stagnation detection from external signals, not self-report | P1 | M | [~] |
 | L3 | Independent skeptical evaluator with a sprint contract | P1 | M | [~] |
 | L4 | Trace replay: test harness changes without model calls | P1 | M | [x] |
-| L5 | Failure mining: every bad session becomes an eval task | P2 | M | [ ] |
+| L5 | Failure mining: every bad session becomes an eval task | P2 | M | [x] |
 | L6 | Cache-aware per-step model routing | P2 | L | [ ] |
 | L7 | Structural code index with call and import graph | P2 | L | [~] |
 | L8 | Model profiles and scaffold pruning from ablations | P2 | M | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **L5**: failure mining over .amness/traces: patterns clustered by normalised signature (finish rejected, loop, repair, denied, tool errors...), per-session trouble, cache hit rate; /report and amness traces; /report case and amness traces --case snapshot git HEAD into an eval task with your own held-out check; user cases may omit a solution (selftest then only checks the check fails). src/mining.ts, test/mining.test.ts.
 - **L4**: traces now record run messages, every model message and full tool results (record option; chat sessions and --trace); amness replay <trace> feeds them through the current harness with stub tools and a scripted model and reports the guard/trim/cache-break/rejection differences; unchanged harness reproduces identically. src/replay.ts, test/replay.test.ts.
 - **L7** (partly): the structural index with call/import graph (find_refs, impact, ranking by identifier overlap and centrality) exists and is tested; its benefit on real multi-file tasks is NOT yet measured (amness eval --cases with bug-in-a-mid-sized-repo; run: amness eval --variants full,full-index).
 - **G10**: zero-dependency structural index (symbols, import graph with .js-for-.ts, index and python resolution, identifier usage; 12 languages by regex) rebuilt incrementally by mtime; repo_map, find_refs, impact tools offered when the repo has 25+ source files; a 45-file eval task. src/codeindex.ts, test/codeindex.test.ts.

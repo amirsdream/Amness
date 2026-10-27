@@ -6,7 +6,7 @@ import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
 import { estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
 import { codeBlocks } from "./clipboard.ts";
-import { Hooks, Permissions, SANDBOX_MODES, cacheWaste, projectConfigFingerprint, sandboxHelp, sandboxKind, type SandboxMode } from "../../src/index.ts";
+import { caseFromWorkspace, formatMining, Hooks, Permissions, SANDBOX_MODES, cacheWaste, projectConfigFingerprint, sandboxHelp, sandboxKind, type SandboxMode } from "../../src/index.ts";
 import { loadState, saveState } from "../state.ts";
 import { tokenReport } from "./tokens.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
@@ -196,6 +196,16 @@ export function buildCommands(): Cmd[] {
     { name: "reviewer", help: "independent skeptical reviewer: criteria before the work, a check before it is accepted (costs extra model calls)", args: "[on|off]", run: (a, arg) => {
       if (!arg) return void a.say(`reviewer is ${a.cfg.review ? "on" : "off"}. /reviewer on: a fresh, read-only reviewer writes acceptance criteria before a task and checks the work against them before it can finish (at most two rounds). Roughly +2 to +4 model calls per task.`, dim);
       a.cfg.review = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`reviewer ${arg === "on" ? "on" : "off"}`, dim);
+    } },
+    { name: "report", help: "recurring problems in your session traces · /report case <name> turns the last request into an eval task", args: "[case <name>]", run: async (a, arg) => {
+      const [sub, name] = arg.split(/\s+/);
+      if (sub === "case") {
+        if (!name) return void a.say("usage: /report case <name>   (then it asks for the command that proves the task is solved)", dim);
+        const prompts = a.blocks.prompts(), last = prompts.at(-1)?.block; if (!last || last.kind !== "user") return void a.say("send a task first: the case is built from your last request", dim);
+        const check = await a.askText(`A command that exits 0 only when "${last.text.slice(0, 50).replace(/\s+/g, " ")}" is really done (the agent never sees it)`); if (!check) return void a.say("cancelled", dim);
+        const r = caseFromWorkspace(a.cwd, { name, task: last.text, check, verify: a.verify }); return void a.say(`wrote ${r.path.replace(a.cwd + "/", "")} (${r.files} files from git HEAD). Run: amness eval --cases .amness/evals/cases --variants ab`, dim);
+      }
+      a.commit(["", ...formatMining(join(a.cwd, ".amness", "traces")).split("\n").map((l) => "  " + l)]);
     } },
     { name: "models", help: "use other models for some jobs: /models explore|compact|review <model|off> · /models fallback <model|off>", args: "[role model]", run: (a, arg) => {
       const [role, id] = arg.split(/\s+/), roles = ["explore", "compact", "review"];

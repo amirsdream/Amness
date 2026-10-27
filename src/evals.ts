@@ -171,7 +171,7 @@ export async function selfTest(cases: Case[]): Promise<{ case: string; ok: boole
       for (const [f, t] of Object.entries(c.files)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), t); }
       const judge = async () => (typeof c.check === "string" ? (await runShell(c.check, dir, 60_000)).startsWith("exit=0") : (await c.check(dir)) === true);
       if (await judge()) { out.push({ case: c.name, ok: false, why: "check already passes before any fix" }); continue; }
-      if (!c.solution) { out.push({ case: c.name, ok: false, why: "no reference solution to test against" }); continue; }
+      if (!c.solution) { out.push({ case: c.name, ok: true, why: "unverified: no reference solution, only checked that the check fails on the starting files" }); continue; }
       for (const [f, t] of Object.entries(c.solution)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), t); }
       out.push((await judge()) ? { case: c.name, ok: true } : { case: c.name, ok: false, why: "check still fails with the reference solution" });
     } finally { rmSync(dir, { recursive: true, force: true }); }

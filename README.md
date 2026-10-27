@@ -140,6 +140,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/agents` | custom subagents available to the task tool |
 | `/skills` | skills found (SKILL.md folders) |
 | `/procs` | background processes the agent started (`/procs stop <id>`) |
+| `/report [case <name>]` | recurring problems in your traces; turn the last request into an eval task |
 | `/reviewer [on\|off]` | independent reviewer: acceptance criteria first, a check before work is accepted |
 | `/hooks` · `/permissions` | lifecycle hooks in effect · permission rules (list, or `allow`/`ask`/`deny <rule>`) |
 | `/copy` | copy the last reply (`/copy code`, `/copy all`) |
@@ -176,6 +177,8 @@ Precedence: **built-in floor > deny > ask > allow > the permission mode.** Shell
 **Tracing.** Every loop event (turns with token and cache counts, tool calls with timings, hooks, cache breaks, trims) is written to `.amness/traces/<session>.jsonl`, one JSON line each, so a bad session can be read with `grep` and `jq`. Set `AMNESS_OTLP=http://localhost:4318` (or any OTLP/HTTP collector) to also export OpenTelemetry spans with GenAI attributes (`gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.tool.name`); headless runs take `--trace <file>`. `/loop` shows how many tokens were re-read at full price after cache breaks, with an estimated cost. A full disk or an unreachable collector never stops the agent.
 
 **Replay (test harness changes offline).** Chat sessions and `--trace` runs also record the model's messages and the tools' results. `amness replay .amness/traces/<session>.jsonl [--off loop,stagnation] [--stagnation-turns 4] [--max-steps 20] [--context-budget 30000]` feeds a recorded run back through the *current* harness with no model call and no real tool, and prints exactly which guards, rejections, trims or cache breaks differ from what happened (exit code 1 when anything does). An unchanged harness reproduces a recording identically, so a replay of your real sessions is a free regression test before you ship a change to a guard; after the first difference the model would have said something else, so later lines are indicative. Library: `replayFile`, `replayRun`, `readTrace`.
+
+**Failure mining.** `/report` (or `amness traces`) reads your session traces and groups what went wrong into recurring patterns: finishes the verify command rejected, loop and stagnation stops, malformed calls, denied actions, tool errors, with numbers and paths normalised so "5 failing in /a/b.test.ts" and "3 failing in /c/d.test.ts" count as one problem, plus the sessions with the most trouble. To keep a failure from coming back, turn it into an eval task: `/report case <name>` (or `amness traces --case <name> --task "..." --check "<command that exits 0 only when it is really fixed>"`) snapshots the repository **at git HEAD** with your request as the task and your check as the held-out judge, ready for `amness eval --cases .amness/evals/cases`. Add a `"solution"` to the JSON to include it in `--selftest`.
 
 **Hooks.** Run your own commands at fixed points of the loop, in the same vocabulary as Claude Code and Codex. Configure them in `.amness/hooks.json` (project) and `~/.amness/hooks.json` (yours):
 
