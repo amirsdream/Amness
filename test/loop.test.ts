@@ -105,3 +105,28 @@ test("harness emits trim events when it shrinks noisy output", async () => {
   await createHarness({ model, tools: [noisy], onEvent: (e) => ev.push(e) }).run("x");
   assert.ok(ev.some((e) => e.kind === "trim" && e.saved > 300));
 });
+
+test("loop guard: cycles of 2-4 different calls are caught, reordered or re-spaced repeats are normalised, varied reads are not flagged", async () => {
+  const { findCycle, canonicalCall } = await import("../src/harness.ts");
+  assert.deepEqual(findCycle(["a", "b", "a", "b", "a", "b"]), ["a", "b"]);
+  assert.deepEqual(findCycle(["x", "a", "b", "c", "a", "b", "c", "a", "b", "c"]), ["a", "b", "c"]);
+  assert.equal(findCycle(["a", "b", "a", "b", "a"]), undefined);                    // not three full repetitions yet
+  assert.equal(findCycle(["a", "a", "a", "a", "a", "a"]), undefined);               // exact repeats have their own guard
+  assert.equal(findCycle(["r1", "r2", "r3", "r4", "r5", "r6"]), undefined);          // reading different things is progress
+  assert.equal(canonicalCall("sh", { b: 1, cmd: "npm   test" }), canonicalCall("sh", { cmd: "npm test", b: 1 }));
+  assert.notEqual(canonicalCall("read_file", { path: "a", start: 1 }), canonicalCall("read_file", { path: "a", start: 50 }));
+  const t = defineTool({ name: "t", description: "", schema: obj, run: () => "ok" });
+  // same two calls over and over with nothing changing: the exact-repeat guard stops it
+  const ev1: any[] = []; await createHarness({ model: scripted(...[1, 2, 1, 2, 1, 2].map((i) => call(["t", { i }]))).model, tools: [t], maxSteps: 12, onEvent: (e) => ev1.push(e) }).run("x");
+  assert.ok(ev1.some((e) => e.kind === "loop"));
+  // an edit that is flipped back and forth with a test run in between: every test run is legitimate on its own, but the whole pattern is a cycle
+  const flip = defineTool({ name: "flip", description: "", schema: obj, run: (a: any, ctx) => (ctx.emit?.({ kind: "edit", path: "f", created: false, added: 1, removed: 1, diff: "" }), "flipped " + a.to) });
+  const ev: any[] = [];
+  const { model, seen } = scripted(...Array.from({ length: 14 }, (_, i) => (i % 2 ? call(["t", {}]) : call(["flip", { to: i % 4 === 0 ? "y" : "x" }]))));
+  await createHarness({ model, tools: [t, flip], maxSteps: 16, onEvent: (e) => ev.push(e) }).run("x");
+  assert.ok(ev.some((e) => e.kind === "loop" && /cycle of 4 calls/.test(e.detail)), JSON.stringify(ev.filter((e) => e.kind === "loop")));
+  assert.ok(seen.at(-1)!.some((m) => m.role === "tool" && /going in circles/.test(m.content ?? "")));
+  // re-running the same test command after real edits is NOT a repeat
+  const quiet: any[] = []; await createHarness({ model: scripted(...[1, 2, 3, 4, 5].flatMap((i) => [call(["flip", { to: "v" + i }]), call(["t", {}])])).model, tools: [t, flip], maxSteps: 14, onEvent: (e) => quiet.push(e) }).run("x");
+  assert.ok(!quiet.some((e) => e.kind === "loop"), JSON.stringify(quiet.filter((e) => e.kind === "loop")));
+});

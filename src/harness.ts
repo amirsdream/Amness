@@ -233,6 +233,21 @@ export function firstCacheBreak(prev: PrefixSig | undefined, now: PrefixSig): { 
   for (let i = 0; i < Math.min(prev.msgs.length, now.msgs.length); i++) if (prev.msgs[i] !== now.msgs[i]) return { reason: `earlier history was rewritten at message ${i} (compaction, handoff or edit)`, at: i };
   return now.msgs.length < prev.msgs.length ? { reason: "history was shortened (handoff or rewind)", at: now.msgs.length } : undefined;
 }
+/** A call reduced to what it does, so trivial differences (key order, extra spaces in a command) do not hide a repeat. */
+export function canonicalCall(name: string, args: unknown): string {
+  const norm = (v: unknown): unknown => (Array.isArray(v) ? v.map(norm) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v as object).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, x]) => [k, norm(x)])) : typeof v === "string" && name === "sh" ? v.replace(/\s+/g, " ").trim() : v);
+  return name + JSON.stringify(norm(args));
+}
+/** A repeating pattern of 2 to 4 different calls at the end of `hist` (A B A B A B, A B C A B C A B C...). Exact repeats of one call are handled separately. */
+export function findCycle(hist: string[], minReps = 3): string[] | undefined {
+  for (let p = 2; p <= 4; p++) {
+    const need = p * minReps; if (hist.length < need) continue;
+    const tail = hist.slice(-need); let ok = true;
+    for (let i = p; i < need && ok; i++) if (tail[i] !== tail[i - p]) ok = false;
+    if (ok && new Set(tail.slice(0, p)).size > 1) return tail.slice(0, p);
+  }
+  return undefined;
+}
 const MAX_PARALLEL = 5;
 const isErr = (r: string) => /^(ERROR|DENIED|REJECTED)\b/.test(r);
 /** Run `fns` with at most `n` in flight; results keep input order. */
@@ -287,7 +302,8 @@ export function createHarness(o: Options) {
   /** Agent loop. Resolves with the model's final answer (`finish` summary or accepted plain-text reply). */
   async function run(task: string, opts: { resume?: Message[] } = {}): Promise<RunResult> {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
-    const seen = new Map<string, number>();
+    const seen = new Map<string, number>(), history: string[] = [];
+    let epoch = 0;   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
     let sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
@@ -373,10 +389,12 @@ export function createHarness(o: Options) {
           emit({ kind: "rejected", detail: fb });
           return `REJECTED: ${clip(fb, 3000)}\nFix the problem, then finish again.`;
         }
-        const key = name + raw;
-        const n = (seen.get(key) ?? 0) + 1;
-        seen.set(key, n);
+        const key = canonicalCall(name, args);
+        const n = (seen.get(key + "@" + epoch) ?? 0) + 1;
+        seen.set(key + "@" + epoch, n); history.push(key);
         if (n > 2 && !off.has("loop")) { emit({ kind: "loop", detail: key.slice(0, 100) }); return `ERROR: you've made this exact call ${n} times. Do something different.`; }
+        const cycle = off.has("loop") ? undefined : findCycle(history);
+        if (cycle) { emit({ kind: "loop", detail: `cycle of ${cycle.length} calls: ${cycle.map((c) => c.slice(0, 40)).join(" → ")}` }); return `ERROR: you are going in circles (${cycle.map((c) => c.split("{")[0]).join(" → ")} → repeating, with the same arguments). Stop and think about why it is not working: read the last results again, check an assumption with a different tool, or change approach.`; }
         const pre = await hook("PreToolUse", { tool: name, args });
         if (pre?.block) { emit({ kind: "denied", detail: `${name}: blocked by a hook` }); return `BLOCKED BY A HOOK: ${clip(pre.block, 2000)}\nDo not retry the same call; choose another approach or explain what you could not do.`; }
         if (pre?.args) { const e2 = validate(pre.args, t!.schema); if (e2.length) return `ERROR: a hook rewrote the arguments into something invalid (${e2.join("; ")})`; args = pre.args; }
@@ -398,7 +416,7 @@ export function createHarness(o: Options) {
         }
         let result: string;
         emit({ kind: "toolstart", id: c.id, name, args: raw });
-        try { const r = await t!.run(args, { registry: reg, step, emit, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
+        try { const r = await t!.run(args, { registry: reg, step, emit: (ev) => { if (ev.kind === "edit") epoch++; emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
         const post = await hook("PostToolUse", { tool: name, args, result: clip(result, 4000), ok: !/^(ERROR|DENIED)/.test(result) });
         if (post?.context) result += `\n\n[hook] ${clip(post.context, 2000)}`;
