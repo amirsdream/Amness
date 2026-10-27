@@ -68,7 +68,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | L11 | Best-of-n with a hybrid verifier, escalated only when needed | P3 | L | [ ] |
 | L12 | `amness tune`: bounded self-improvement with held-out gates | P3 | L | [ ] |
 | L13 | Parallel worktree agents with a test-gated merge | P3 | L | [ ] |
-| L14 | Benchmark adapters with leak audit and cost per solve | P3 | L | [ ] |
+| L14 | Benchmark adapters with leak audit and cost per solve | P3 | L | [~] |
 
 ---
 
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **L14** (partly): SWE-bench-format suite adapter (--suite, --test-cmd, --install, --limit): clone at base commit, hidden tests applied only after the agent finishes, exclusion ledger for instances that cannot be set up (left out of every statistic and listed in the report), --audit contamination checks (fix in problem statement, fix already in base, missing commit), --seed for reproducible intervals. src/suites.ts, test/suites.test.ts. NOT done: no full public benchmark has been run, no published results (needs Docker environments and model spend).
 - **L5**: failure mining over .amness/traces: patterns clustered by normalised signature (finish rejected, loop, repair, denied, tool errors...), per-session trouble, cache hit rate; /report and amness traces; /report case and amness traces --case snapshot git HEAD into an eval task with your own held-out check; user cases may omit a solution (selftest then only checks the check fails). src/mining.ts, test/mining.test.ts.
 - **L4**: traces now record run messages, every model message and full tool results (record option; chat sessions and --trace); amness replay <trace> feeds them through the current harness with stub tools and a scripted model and reports the guard/trim/cache-break/rejection differences; unchanged harness reproduces identically. src/replay.ts, test/replay.test.ts.
 - **L7** (partly): the structural index with call/import graph (find_refs, impact, ranking by identifier overlap and centrality) exists and is tested; its benefit on real multi-file tasks is NOT yet measured (amness eval --cases with bug-in-a-mid-sized-repo; run: amness eval --variants full,full-index).

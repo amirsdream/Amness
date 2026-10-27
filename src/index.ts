@@ -31,3 +31,4 @@ export * from "./route.ts";
 export * from "./codeindex.ts";
 export * from "./replay.ts";
 export * from "./mining.ts";
+export * from "./suites.ts";

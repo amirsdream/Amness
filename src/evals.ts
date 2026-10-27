@@ -16,19 +16,22 @@ export type Case = {
   check: string | ((dir: string) => boolean | string | Promise<boolean | string>);
   /** A known-good fix (files to overwrite). Used by `selfTest` to prove the case is solvable and its check is not trivially true. */
   solution?: Record<string, string>;
+  /** Prepare the workspace beyond writing `files` (clone a repository, check out a commit, apply a patch). A failure excludes the case from the statistics instead of counting as a fail. */
+  setup?: (dir: string) => Promise<void>;
 };
 export type Outcome = { text: string; steps: number; tokens: number; /** prompt tokens sent, and how many of them the provider served from its cache */ prompt?: number; cached?: number; /** how often each harness event fired during the run (nudge, loop, repair, rejected, trim, ...) */ events?: Record<string, number> };
 export type Variant = { name: string; run: (c: Case, dir: string) => Promise<Outcome> };
-export type Row = { case: string; variant: string; trial: number; pass: boolean; steps: number; tokens: number; ms: number; note?: string; events?: Record<string, number>; prompt?: number; cached?: number };
+export type Row = { /** set when the workspace could not be prepared: the run is listed in the exclusion ledger and left out of every statistic */ excluded?: string; case: string; variant: string; trial: number; pass: boolean; steps: number; tokens: number; ms: number; note?: string; events?: Record<string, number>; prompt?: number; cached?: number };
 
 /** Run every case x variant x trial in a fresh temp workspace and judge each result with the case's held-out check. `jobs` runs that many sessions at once. */
-export async function evaluate(cases: Case[], variants: Variant[], o: { trials?: number; jobs?: number; onRow?: (r: Row) => void; baseline?: string; k?: number } = {}) {
+export async function evaluate(cases: Case[], variants: Variant[], o: { trials?: number; jobs?: number; onRow?: (r: Row) => void; baseline?: string; k?: number; seed?: number } = {}) {
   const rows: Row[] = [], work: (() => Promise<void>)[] = [];
   for (const c of cases) for (const v of variants) for (let trial = 0; trial < (o.trials ?? 1); trial++) work.push(async () => {
     const dir = mkdtempSync(join(tmpdir(), "amness-eval-"));
     for (const [f, content] of Object.entries(c.files)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), content); }
     const t0 = Date.now();
     const row: Row = { case: c.name, variant: v.name, trial, pass: false, steps: 0, tokens: 0, ms: 0 };
+    if (c.setup) { try { await c.setup(dir); } catch (e) { row.excluded = (e as Error).message.slice(0, 300); row.ms = Date.now() - t0; rows.push(row); o.onRow?.(row); rmSync(dir, { recursive: true, force: true }); return; } }
     try {
       const out = await v.run(c, dir);
       Object.assign(row, { steps: out.steps, tokens: out.tokens, events: out.events, prompt: out.prompt, cached: out.cached });
@@ -46,7 +49,7 @@ export async function evaluate(cases: Case[], variants: Variant[], o: { trials?:
     const r = rows.filter((x) => x.variant === v.name), avg = (f: (x: Row) => number) => Math.round(r.reduce((n, x) => n + f(x), 0) / (r.length || 1));
     return { variant: v.name, runs: r.length, passRate: r.filter((x) => x.pass).length / (r.length || 1), steps: avg((x) => x.steps), tokens: avg((x) => x.tokens), secs: avg((x) => x.ms) / 1000 };
   });
-  return { rows, summary, table: formatTable(summary), analysis: analyze(rows, { baseline: o.baseline, k: o.k }) };
+  return { rows, summary, table: formatTable(summary), analysis: analyze(rows, { baseline: o.baseline, k: o.k, seed: o.seed }) };
 }
 
 export function formatTable(s: { variant: string; runs: number; passRate: number; steps: number; tokens: number; secs: number }[]) {
@@ -64,14 +67,15 @@ export type Comparison = {
   variant: string; vs: string; dPass: number; ci: Interval; wins: number; losses: number; ties: number; p: number; pAdj: number;
   dTokensPerSolved: number; verdict: "better" | "worse" | "inconclusive";
 };
-export type Analysis = { baseline: string; tasks: number; trials: number; stats: VariantStats[]; comparisons: Comparison[]; minDetectable: number };
+export type Analysis = { /** runs left out because the workspace could not be prepared, with the reason */ excluded: { case: string; variant: string; reason: string }[]; baseline: string; tasks: number; trials: number; stats: VariantStats[]; comparisons: Comparison[]; minDetectable: number };
 
 /**
  * Turn raw rows into a statistical comparison. Tasks are the unit: each task contributes its pass fraction across trials, intervals are
  * task-level bootstrap intervals, the significance test is an exact sign test on the tasks where two variants differ, and p-values are
  * Holm-adjusted across the variants compared. Cost is reported as tokens per solved task, not per run, so a cheap variant that fails is not "efficient".
  */
-export function analyze(rows: Row[], o: { baseline?: string; k?: number; seed?: number } = {}): Analysis {
+export function analyze(allRows: Row[], o: { baseline?: string; k?: number; seed?: number } = {}): Analysis {
+  const rows = allRows.filter((r) => !r.excluded), excluded = allRows.filter((r) => r.excluded);
   const variants = [...new Set(rows.map((r) => r.variant))], tasks = [...new Set(rows.map((r) => r.case))];
   const trials = Math.max(1, ...rows.map((r) => r.trial + 1)), k = Math.min(o.k ?? 3, trials) || 1, baseline = o.baseline && variants.includes(o.baseline) ? o.baseline : variants[0];
   type T = { n: number; pass: number; tokens: number };
@@ -96,7 +100,7 @@ export function analyze(rows: Row[], o: { baseline?: string; k?: number; seed?: 
   });
   const adj = holm(raw.map((c) => c.p));
   const comparisons: Comparison[] = raw.map((c, i) => ({ ...c, pAdj: adj[i], verdict: c.ci.lo > 0 && adj[i] < 0.05 ? "better" : c.ci.hi < 0 && adj[i] < 0.05 ? "worse" : "inconclusive" }));
-  return { baseline, tasks: tasks.length, trials, stats, comparisons, minDetectable: minDetectable(tasks.length) };
+  return { excluded: excluded.map((r) => ({ case: r.case, variant: r.variant, reason: r.excluded! })), baseline, tasks: tasks.length, trials, stats, comparisons, minDetectable: minDetectable(tasks.length) };
 }
 
 const pct = (x: number, d = 0) => (Number.isNaN(x) ? "-" : (x * 100).toFixed(d) + "%");
@@ -115,6 +119,7 @@ export function formatReport(a: Analysis): string {
   }
   const fired = a.stats.filter((s) => Object.keys(s.events).length);
   if (fired.length) { out.push("", "guards fired per run:"); for (const s of fired) out.push(`  ${pad(s.variant, 22)} ${Object.entries(s.events).filter(([, n]) => n >= 0.01).map(([k, n]) => `${k} ${n.toFixed(2)}`).join(" · ")}`); }
+  if (a.excluded.length) { out.push("", `exclusion ledger: ${a.excluded.length} run(s) could not be set up and are NOT counted anywhere above:`); for (const x of a.excluded.slice(0, 10)) out.push(`  ${x.case} / ${x.variant}: ${x.reason}`); }
   out.push("", `reading: with ${a.tasks} task${a.tasks === 1 ? "" : "s"} only pass-rate differences above ~${(a.minDetectable * 100).toFixed(0)} points can be detected reliably; "inconclusive" means the data cannot tell, not that the variants are equal.`);
   if (a.trials < 3) out.push(`         ${a.trials} trial${a.trials === 1 ? "" : "s"} per task: model sampling noise is not averaged out; use --trials 3 or more for decisions.`);
   return out.join("\n");
