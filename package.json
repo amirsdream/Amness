@@ -46,7 +46,7 @@
     "demo": "node cli/amness.ts demo",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "build": "tsc",
-    "test": "node --test \"test/**/*.test.ts\"",
+    "test": "node --test --test-timeout=180000 \"test/**/*.test.ts\"",
     "test:pty": "python3 test/pty/tui.py"
   },
   "devDependencies": {
