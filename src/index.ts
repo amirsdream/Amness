@@ -34,3 +34,4 @@ export * from "./mining.ts";
 export * from "./suites.ts";
 export * from "./router.ts";
 export * from "./profiles.ts";
+export * from "./secrets.ts";

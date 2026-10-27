@@ -1,5 +1,6 @@
 import { exec, execFile } from "node:child_process";
 import { wrapCommand, type SandboxMode } from "./sandbox.ts";
+import { childEnv } from "./secrets.ts";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { applyBundle, collectFiles, readBundle, writeBundle, type Bundle } from "./bundle.ts";
@@ -19,7 +20,7 @@ import { loadSkills, skillsBlock, skillTool, type Skill } from "./skills.ts";
 import { applyOps, parsePatch, replaceMany } from "./patch.ts";
 import { proposeContract, reviewWork } from "./review.ts";
 import type { HookRunner } from "./hooks.ts";
-import { Permissions, type PermissionChecker } from "./permissions.ts";
+import { OBFUSCATED_EXEC, Permissions, commandViews, type PermissionChecker } from "./permissions.ts";
 
 const RISKY: [RegExp, string][] = [
   [/\brm\s+(-\w*[rf]|--recursive|--force)/, "recursive/forced delete"], [/\bsudo\b/, "sudo"],
@@ -29,7 +30,7 @@ const RISKY: [RegExp, string][] = [
   [/\b(chmod|chown)\s+-R|\bdd\s+if=|\bmkfs|>\s*\/dev\/|:\(\)\s*\{/, "dangerous system command"],
   [/\b(ssh|scp|rsync)\b/, "remote access"],
 ];
-export const riskOf = (cmd: string): string | false => RISKY.find(([re]) => re.test(cmd))?.[1] ?? false;
+export const riskOf = (cmd: string): string | false => { const views = commandViews(cmd); return RISKY.find(([re]) => views.some((v) => re.test(v)))?.[1] ?? (OBFUSCATED_EXEC.test(cmd) || OBFUSCATED_EXEC.test(views[1] ?? "") ? "decodes or downloads a payload and runs it" : false); };
 
 /** How much the agent may do without asking. default: ask for edits and non-trivial shell; acceptEdits: ask only for shell; plan: read-only; yolo: never ask. */
 export type PermMode = "default" | "acceptEdits" | "plan" | "yolo";
@@ -43,8 +44,8 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
   try { wrapped = wrapCommand(cmd, cwd, sandbox); } catch (e) { return Promise.resolve(`exit=126\nERROR: ${(e as Error).message}`); }          // asked for a sandbox we cannot provide: refuse, never run unprotected
   const done = (err: any, out: string, errOut: string) => `exit=${err ? (err.name === "AbortError" ? "interrupted" : err.killed ? "timeout" : err.code ?? 1) : 0}\n${out}${errOut}`;
   return new Promise((res) => wrapped
-    ? execFile(wrapped.file, wrapped.args, { cwd, timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut)))
-    : exec(cmd, { cwd, timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut))));
+    ? execFile(wrapped.file, wrapped.args, { cwd, env: childEnv(process.env, true), timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut)))
+    : exec(cmd, { cwd, env: childEnv(), timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut))));
 }
 
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
@@ -213,6 +214,10 @@ export type CodeAgentOptions = {
   memory?: boolean | MemoryStore;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
+  /** Mask secrets in tool output before the model sees it (default on). */
+  redact?: boolean;
+  /** Commands that contain text copied from untrusted tool results (web pages, MCP servers): "ask" (default), "deny" or "off". */
+  taint?: "ask" | "deny" | "off";
   /** Record full messages in events so a trace can be replayed (`replay`). */
   record?: boolean;
   /** Structural code index tools (repo_map, find_refs, impact), offered when the repository has at least `minFiles` source files (default 25). */
@@ -347,7 +352,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, compactModel: o.models?.compact, system: o.chat ? CHAT_SYSTEM : CODE_SYSTEM, tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 },
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 

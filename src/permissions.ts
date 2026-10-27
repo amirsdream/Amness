@@ -37,6 +37,21 @@ export function splitCommand(cmd: string): { parts: string[]; opaque: boolean } 
   return { parts, opaque };
 };
 
+/** A command the way the shell will see it, for detection: quotes and backslash escapes inside words removed (r""m, r\m, "rm"), $'\x72m' decoded, ${IFS} turned into a space. Never used to RUN anything. */
+export function normalizeCommand(cmd: string): string {
+  let s = cmd.replace(/\$'((?:[^'\\]|\\.)*)'/g, (_m, body: string) => body.replace(/\\x([0-9a-fA-F]{2})/g, (_x, h) => String.fromCharCode(parseInt(h, 16))).replace(/\\([0-7]{1,3})/g, (_x, o) => String.fromCharCode(parseInt(o, 8))).replace(/\\(.)/g, "$1"));
+  s = s.replace(/\$\{IFS\}|\$IFS/g, " ");
+  return s.replace(/\\(?=[A-Za-z0-9_./~-])/g, "").replace(/(["'])\1/g, "").replace(/["']/g, "");
+}
+/** The command plus every other form it may take: normalised, and the text of nested `sh -c '...'`, `bash -c "..."` and `eval "..."` (recursively). All of them are checked against the floor and the risk list. */
+export function commandViews(cmd: string, depth = 0): string[] {
+  const views = new Set<string>([cmd, normalizeCommand(cmd)]);
+  if (depth < 3) for (const m of cmd.matchAll(/\b(?:ba|z|da|k)?sh\s+(?:-\w*c\w*)\s+(?:"((?:[^"\\]|\\.)*)"|'([^']*)')|\beval\s+(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+))/g)) { const inner = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5]; if (inner) for (const v of commandViews(inner, depth + 1)) views.add(v); }
+  return [...views];
+}
+/** Decoding a payload and running it is how checks get dodged; it always deserves a human look. */
+export const OBFUSCATED_EXEC = /\b(?:base64|b64decode|xxd\s+-r|openssl\s+(?:enc|base64)\b)[^|;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b|\beval\s+["']?\$\(|\b(?:ba|z|da|k)?sh\s+<\(\s*(?:curl|wget)|\bpython3?\s+-c\s+["'][^"']*(?:base64|exec\(|__import__)/;
+
 // ---- the floor: refused or always-asked, whatever the mode ------------------------------------------------------------------------------
 const PROTECTED = /(^|\/)\.amness\/(hooks|permissions)\.json$/;
 const FLOOR_DENY: [RegExp, string][] = [
@@ -69,8 +84,10 @@ export function floorCheck(tool: string, args: Record<string, any>, cwd: string)
   if (kind === "sh" && typeof args.cmd === "string") {
     const cmd: string = args.cmd;
     if (WRITES_PROTECTED.test(cmd) && !splitCommand(cmd).parts.every((p) => READONLY_VERB.test(p))) return { action: "deny", floor: true, reason: "the agent may not change its own hooks or permission rules" };
-    for (const [re, why] of FLOOR_DENY) if (re.test(cmd)) return { action: "deny", floor: true, reason: why };
-    for (const [re, why] of FLOOR_ASK) if (re.test(cmd)) return { action: "ask", floor: true, reason: why };
+    const views = commandViews(cmd);
+    for (const [re, why] of FLOOR_DENY) if (views.some((v) => re.test(v))) return { action: "deny", floor: true, reason: why };
+    for (const [re, why] of FLOOR_ASK) if (views.some((v) => re.test(v))) return { action: "ask", floor: true, reason: why };
+    if (OBFUSCATED_EXEC.test(cmd) || OBFUSCATED_EXEC.test(views[1] ?? "")) return { action: "ask", floor: true, reason: "decodes or downloads a payload and runs it" };
   }
   return { action: "none" };
 }

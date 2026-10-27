@@ -99,7 +99,7 @@ export async function loadMcp(command: string, args: string[] = [], o: { prefix?
       return {
         name: `${prefix}__${t.name}`.replace(/[^\w-]/g, "_").slice(0, 64), description: t.description ?? t.title ?? t.name,
         schema: t.inputSchema ?? { type: "object" }, risky: risky ? () => `MCP tool ${t.name} may change external state` : false,
-        deferred: listed.length > (o.deferAbove ?? 15),
+        deferred: listed.length > (o.deferAbove ?? 15), untrusted: true,
         run: async (args) => {
           const r = await rpc("tools/call", { name: t.name, arguments: args });
           const text = (r.content ?? []).map((c: any) => (c.type === "text" ? c.text : `[${c.type}]`)).join("\n");

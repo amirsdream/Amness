@@ -471,6 +471,7 @@ export class App {
         this.notify(e.notes.length ? "warn" : "ok", `${line}${e.notes.length ? ". Note: " + e.notes.join("; ") : ""}`, [dim(`  ◐ ${line}${e.notes.length ? " · " + e.notes.join("; ") : ""}`)]);
       } break;
       case "hook": this.stepNow().notes.push(`hook ${e.event}${e.blocked ? " blocked" : ""}: ${one(e.detail, 100)}`); if (e.blocked || e.detail !== "added context") this.notify(e.blocked ? "warn" : "info", `hook ${e.event}: ${one(e.detail, 200)}`, [dim(`  ⚙ hook ${e.event}: ${one(e.detail, w - 20)}`)]); break;
+      case "policy": if (!sub) this.policyLog = [...this.policyLog, `${e.action.padEnd(5)} ${e.tool}: ${e.reason}`].slice(-20); break;
       case "cachebreak": if (!sub) { this.cacheBreaks++; this.stepNow().notes.push("cache break: " + e.reason); } break;
       case "trim": if (!sub) { this.trimmed += e.saved; this.stepNow().notes.push(`trimmed ~${fmtTokens(Math.round(e.saved / 4))} tokens (${e.what})`); } break;
       case "phase": if (!sub) {
@@ -618,7 +619,7 @@ export class App {
     this.warmTimer.unref?.();
   }
   /** Project hooks run commands on this machine, so a cloned repo's hooks only run after the user approves this exact file. */
-  hooks!: Hooks; rules!: Permissions; roles: Roles = {}; lastRoute = "";
+  policyLog: string[] = []; hooks!: Hooks; rules!: Permissions; roles: Roles = {}; lastRoute = "";
   loadHooks() {
     const fp = projectConfigFingerprint(this.cwd), trusted = !!fp && loadState().hookTrust?.[this.cwd] === fp;
     try { this.hooks = Hooks.load(this.cwd, { trustProject: trusted }); } catch (e) { this.hooks = Hooks.load(this.cwd, { trustProject: false }); this.note(`hooks ignored: ${(e as Error).message}`); }

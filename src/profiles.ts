@@ -8,7 +8,7 @@ import type { Guard } from "./harness.ts";
 
 export type Profile = { off?: Guard[]; stagnationTurns?: number; maxSteps?: number; contextBudget?: number; review?: boolean; note?: string };
 export type ProfileFile = { default?: Profile; models?: Record<string, Profile> };
-const GUARDS: Guard[] = ["nudge", "loop", "compact", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "review"];
+const GUARDS: Guard[] = ["nudge", "loop", "compact", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "review", "redact"];
 
 const glob = (pat: string) => new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
 function check(file: string, j: ProfileFile): ProfileFile {

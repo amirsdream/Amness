@@ -47,7 +47,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G12 | Tracing (JSONL trace file, OpenTelemetry export, cache-miss cost) | P2 | S–M | [x] |
 | G13 | Git worktrees, `/review`, pull-request helper | P2 | M | [ ] |
 | G14 | Better loop detection (cycles, not only exact repeats) | P2 | S | [x] |
-| G15 | Prompt-injection and secrets hardening | P2 | M | [ ] |
+| G15 | Prompt-injection and secrets hardening | P2 | M | [x] |
 | G16 | Editor integration (ACP server, VS Code) | P3 | L | [ ] |
 | G17 | Image input (screenshots) | P3 | M | [ ] |
 | G18 | Session branching | P3 | M | [ ] |
@@ -63,7 +63,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | L6 | Cache-aware per-step model routing | P2 | L | [~] |
 | L7 | Structural code index with call and import graph | P2 | L | [~] |
 | L8 | Model profiles and scaffold pruning from ablations | P2 | M | [~] |
-| L9 | Taint tracking and capability policy (out-of-band enforcement) | P2 | L | [ ] |
+| L9 | Taint tracking and capability policy (out-of-band enforcement) | P2 | L | [~] |
 | L10 | Reversible actions: transactions over files and shell | P2 | L | [ ] |
 | L11 | Best-of-n with a hybrid verifier, escalated only when needed | P3 | L | [ ] |
 | L12 | `amness tune`: bounded self-improvement with held-out gates | P3 | L | [ ] |
@@ -293,6 +293,8 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **L9** (partly): taint tracking: a shell command containing 3+ consecutive words (or a 24+ char token) copied verbatim from an untrusted tool result needs approval regardless of mode or allow rules (taint: ask|deny|off); floor/deny/ask/allow layering with /policy explaining decisions; capability rules for web tools via the existing rule syntax. Adversarial eval suite (attack success vs benign pass rate) NOT built yet.
+- **G15**: untrusted tool output (web, MCP) wrapped as data; shell commands parsed through quoting/escape/IFS/nested sh -c and eval tricks for the floor and risk checks, decode-and-run payloads always ask; secrets masked in tool output and never written to traces; Amness's own keys removed from child environments (credential-looking ones too under the sandbox). src/secrets.ts, src/permissions.ts, test/secrets.test.ts, test/taint.test.ts.
 - **L8** (partly): profile.json per model pattern (guards off, stagnationTurns, maxSteps; project over user), /profile, and a conservative recommender that reads an ablation (amness eval --variants ablate --profile-out) and marks each guard remove / KEEP / undecided with the numbers and an evidence-strength warning. src/profiles.ts, test/profiles.test.ts. No model-specific defaults ship: none has been measured.
 - **L6** (partly): cache-aware per-step router: exploration (read-only) streaks go to the cheap model only when the saving repays the cold read on its own cache (price table, warm-cache check); first step, edits, failures, rejections, steering and answers use the strong model; a cheap proposal of an edit/command/finish/text is redone by the strong model; reasoning blobs never cross models; /router, /models cheap, eval variant full+route (--cheap-model). src/router.ts, test/router.test.ts. Savings NOT measured on a real model yet.
 - **L14** (partly): SWE-bench-format suite adapter (--suite, --test-cmd, --install, --limit): clone at base commit, hidden tests applied only after the agent finishes, exclusion ledger for instances that cannot be set up (left out of every statistic and listed in the report), --audit contamination checks (fix in problem statement, fix already in base, missing commit), --seed for reproducible intervals. src/suites.ts, test/suites.test.ts. NOT done: no full public benchmark has been run, no published results (needs Docker environments and model spend).

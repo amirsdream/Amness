@@ -342,7 +342,7 @@ test("/mcp attaches a server live: its tools are callable, read-only ones run, d
   assert.ok(await t.until(() => t.has("may change external state"), 5000));                  // the destructive tool is gated
   await t.key("3"); await t.type("not that one"); await t.key(KEY.enter);
   assert.ok(await t.until(() => t.idle(), 5000));
-  assert.match(plain(t.text()), /● fake_mcp__echo\(yo\)/); assert.ok(t.seen.at(-1)!.msgs.some((m) => m.content === "echo:yo"));
+  assert.match(plain(t.text()), /● fake_mcp__echo\(yo\)/); assert.ok(t.seen.at(-1)!.msgs.some((m) => (m.content ?? "").includes("\necho:yo\n")));
   assert.match(t.seen.at(-1)!.msgs.filter((m) => m.role === "tool").at(-1)!.content!, /DENIED: not that one/);
   await t.submit("/mcp off"); assert.match(plain(t.text()), /MCP servers detached/);
   } finally { t.app.exit(0); }                                                                 // never leave the MCP child process behind

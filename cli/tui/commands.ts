@@ -215,6 +215,10 @@ export function buildCommands(): Cmd[] {
       if (role === "fallback") a.cfg.fallback = id === "off" ? undefined : id; else a.cfg.models = { ...(a.cfg.models ?? {}), [role]: id === "off" ? undefined : id };
       a.saveConfig(); a.buildAgent(); a.say(`${role} → ${id === "off" ? "main model" : id}`, dim);
     } },
+    { name: "policy", help: "why recent actions were allowed, asked about or refused (rules, the safety floor, untrusted-text checks)", live: true, run: (a) => {
+      a.commit(["", bold("  Recent policy decisions"), ...(a.policyLog.length ? a.policyLog.map((l) => "  " + (l.startsWith("deny") ? red(l.slice(0, 5)) : l.startsWith("ask") ? yellow(l.slice(0, 5)) : green(l.slice(0, 5))) + l.slice(5)) : [dim("  none yet: every call so far went through the permission mode alone")]),
+        "", dim("  layers: safety floor > deny rules > untrusted-text check (commands copied from web pages or tool servers) > ask rules > allow rules > permission mode"), dim("  /permissions lists your rules, /sandbox shows OS enforcement")]);
+    } },
     { name: "profile", help: "harness settings for this model (.amness/profile.json): guards switched off, limits", live: true, run: (a) => {
       const p = a.profile.profile;
       a.commit(["", bold("  Harness profile"), `  ${dim("model")}   ${a.cfg.model}`, `  ${dim("from")}    ${a.profile.sources.length ? a.profile.sources.map((s) => s.replace(a.cwd + "/", "")).join(", ") : dim("(none: built-in defaults)")}`, `  ${dim("off")}     ${p.off?.length ? p.off.join(", ") : dim("nothing: every guard is on")}`, `  ${dim("limits")}  ${[p.maxSteps !== undefined && `max steps ${p.maxSteps}`, p.stagnationTurns !== undefined && `stagnation after ${p.stagnationTurns} turns`].filter(Boolean).join(" · ") || dim("defaults")}`, ...(p.note ? [`  ${dim("note")}    ${p.note}`] : []), dim("  write one from measurements: amness eval --variants ablate --profile-out profile.json")]);

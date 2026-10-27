@@ -4,6 +4,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Event } from "./harness.ts";
+import { redactDeep } from "./secrets.ts";
 
 export type TraceLine = { t: string; ms: number; kind: string; [k: string]: unknown };
 export type TracerOptions = { /** receive every line as it is written (used by replay) */ sink?: (line: TraceLine) => void; file?: string; otlp?: string; sessionId: string; model?: string; /** extra resource attributes */ attrs?: Record<string, string> };
@@ -25,7 +26,7 @@ export class Tracer {
   private agent?: string;
   private write(kind: string, rest: Record<string, unknown>) {
     if (!this.file && !this.sink) return;
-    const line: TraceLine = { t: new Date().toISOString(), ms: Date.now() - this.t0, kind, ...(this.agent && { agent: this.agent }), ...rest };
+    const line: TraceLine = { t: new Date().toISOString(), ms: Date.now() - this.t0, kind, ...(this.agent && { agent: this.agent }), ...redactDeep(rest) };       // secrets never reach the trace file
     this.sink?.(line); if (!this.file) return;
     try { appendFileSync(this.file, JSON.stringify(line) + "\n"); } catch { /* a full disk must not stop the agent */ }
   }

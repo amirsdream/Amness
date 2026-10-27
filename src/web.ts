@@ -50,12 +50,12 @@ export async function fetchText(url: string, max = 20_000, offset = 0): Promise<
 
 export const webTools = (search: SearchProvider = process.env.TAVILY_API_KEY ? tavily() : duckduckgo) => [
   defineTool<{ query: string; n?: number }>({
-    name: "web_search", description: "Search the web. Returns title, url, snippet per hit. Use specific queries; run several varied ones.",
+    name: "web_search", untrusted: true, description: "Search the web. Returns title, url, snippet per hit. Use specific queries; run several varied ones.",
     schema: { type: "object", required: ["query"], properties: { query: { type: "string" }, n: { type: "integer" } } },
     run: async ({ query, n }) => (await search(query, Math.min(n ?? 6, 10))).map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}\n   ${h.snippet}`).join("\n") || "no results; rephrase the query",
   }),
   defineTool<{ url: string; offset?: number }>({
-    name: "fetch_url", description: "Fetch a web page as readable text (20k chars per call; use offset to page).",
+    name: "fetch_url", untrusted: true, description: "Fetch a web page as readable text (20k chars per call; use offset to page).",
     schema: { type: "object", required: ["url"], properties: { url: { type: "string" }, offset: { type: "integer" } } },
     run: ({ url, offset }) => fetchText(url, 20_000, offset ?? 0),
   }),

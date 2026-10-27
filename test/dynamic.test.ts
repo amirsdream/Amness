@@ -87,7 +87,7 @@ test("MCP: loads (paginated) tools, calls them, flags destructive ones, defers b
     await assert.rejects(Promise.resolve(mcp.tools[1].run({}, ctx)), /nope/);
     const { model, seen } = scripted(call(["fake__echo", { text: "yo" }]), call(["fake__wipe", {}]), call(["finish", { summary: "." }]));
     await createHarness({ model, tools: mcp.tools }).run("t");
-    assert.equal(toolOut(seen)[0], "echo:yo"); assert.match(toolOut(seen)[1], /DENIED/);
+    assert.match(toolOut(seen)[0], /^\[untrusted content from fake__echo[\s\S]*\necho:yo\n\[end of untrusted content\]$/);   // MCP output is wrapped as data assert.match(toolOut(seen)[1], /DENIED/);
   } finally { mcp.close(); }
   const big = await loadMcp("node", ["test/fake-mcp.mjs"], { env: { EXTRA: "20" }, deferAbove: 10 });
   try { assert.equal(big.tools.length, 22); assert.ok(big.tools.every((t) => t.deferred)); } finally { big.close(); }
