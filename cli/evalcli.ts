@@ -1,7 +1,7 @@
 // `amness eval`: compare harness variants on a task suite, with statistics you can act on.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { analyze, builtinCases, evaluate, leakAudit, loadSuite, suiteToCases, formatReport, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
+import { analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
 import { bold, dim, green, red } from "./ui.ts";
 
 export const EVAL_HELP = `usage: amness eval [flags]
@@ -23,6 +23,8 @@ export const EVAL_HELP = `usage: amness eval [flags]
   --jobs <n>           sessions run at once (default 1)
   --max-tokens <n>     token cap per session (default: your configured budget)
   --max-steps <n>      steps per session (default 30)
+  --profile-out <f>    after an ablation, write the recommended profile (guards the data says to switch off) for --profile-model
+  --profile-model <p>  the model name or pattern the profile applies to (default: the configured model)
   --out <file>         where to save raw results (default .amness/evals/<time>.json)
   --report <file>      re-analyse saved results; runs nothing
   --selftest           check that every task is solvable and its held-out check is sound; runs no model
@@ -62,6 +64,11 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelF
     const out = resolve(val("--out") ?? join(".amness", "evals", new Date().toISOString().replace(/[:.]/g, "-") + ".json"));
     mkdirSync(join(out, ".."), { recursive: true });
     writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), baseline: analysis.baseline, k: Math.min(3, trials), variants: names, trials, rows }, null, 1));
+    if (val("--profile-out")) {
+      const rec = recommend(analysis, names.includes("full") ? "full" : analysis.baseline), pm = val("--profile-model") ?? "*";
+      console.log("\nguard verdicts:"); for (const v of rec.verdicts) console.log(`  ${v.action === "remove" ? "remove" : v.action === "keep" ? "KEEP  " : "keep? "} ${v.guard.padEnd(11)} ${v.why}`); console.log(`  ${rec.strength}`);
+      writeFileSync(resolve(val("--profile-out")!), JSON.stringify({ models: { [pm]: rec.profile } }, null, 2) + "\n"); console.log(`profile written to ${val("--profile-out")}: copy it to .amness/profile.json`);
+    }
     console.log("\n" + formatReport(analysis) + "\n\n" + dim(`raw results: ${out}  (re-analyse with: amness eval --report ${out})`));
     return 0;
   } catch (e) { console.error(red("✗ " + (e as Error).message)); return 2; }

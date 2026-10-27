@@ -33,3 +33,4 @@ export * from "./replay.ts";
 export * from "./mining.ts";
 export * from "./suites.ts";
 export * from "./router.ts";
+export * from "./profiles.ts";

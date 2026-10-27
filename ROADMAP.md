@@ -62,7 +62,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | L5 | Failure mining: every bad session becomes an eval task | P2 | M | [x] |
 | L6 | Cache-aware per-step model routing | P2 | L | [~] |
 | L7 | Structural code index with call and import graph | P2 | L | [~] |
-| L8 | Model profiles and scaffold pruning from ablations | P2 | M | [ ] |
+| L8 | Model profiles and scaffold pruning from ablations | P2 | M | [~] |
 | L9 | Taint tracking and capability policy (out-of-band enforcement) | P2 | L | [ ] |
 | L10 | Reversible actions: transactions over files and shell | P2 | L | [ ] |
 | L11 | Best-of-n with a hybrid verifier, escalated only when needed | P3 | L | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **L8** (partly): profile.json per model pattern (guards off, stagnationTurns, maxSteps; project over user), /profile, and a conservative recommender that reads an ablation (amness eval --variants ablate --profile-out) and marks each guard remove / KEEP / undecided with the numbers and an evidence-strength warning. src/profiles.ts, test/profiles.test.ts. No model-specific defaults ship: none has been measured.
 - **L6** (partly): cache-aware per-step router: exploration (read-only) streaks go to the cheap model only when the saving repays the cold read on its own cache (price table, warm-cache check); first step, edits, failures, rejections, steering and answers use the strong model; a cheap proposal of an edit/command/finish/text is redone by the strong model; reasoning blobs never cross models; /router, /models cheap, eval variant full+route (--cheap-model). src/router.ts, test/router.test.ts. Savings NOT measured on a real model yet.
 - **L14** (partly): SWE-bench-format suite adapter (--suite, --test-cmd, --install, --limit): clone at base commit, hidden tests applied only after the agent finishes, exclusion ledger for instances that cannot be set up (left out of every statistic and listed in the report), --audit contamination checks (fix in problem statement, fix already in base, missing commit), --seed for reproducible intervals. src/suites.ts, test/suites.test.ts. NOT done: no full public benchmark has been run, no published results (needs Docker environments and model spend).
 - **L5**: failure mining over .amness/traces: patterns clustered by normalised signature (finish rejected, loop, repair, denied, tool errors...), per-session trouble, cache hit rate; /report and amness traces; /report case and amness traces --case snapshot git HEAD into an eval task with your own held-out check; user cases may omit a solution (selftest then only checks the check fails). src/mining.ts, test/mining.test.ts.

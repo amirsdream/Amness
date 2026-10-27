@@ -215,6 +215,10 @@ export function buildCommands(): Cmd[] {
       if (role === "fallback") a.cfg.fallback = id === "off" ? undefined : id; else a.cfg.models = { ...(a.cfg.models ?? {}), [role]: id === "off" ? undefined : id };
       a.saveConfig(); a.buildAgent(); a.say(`${role} → ${id === "off" ? "main model" : id}`, dim);
     } },
+    { name: "profile", help: "harness settings for this model (.amness/profile.json): guards switched off, limits", live: true, run: (a) => {
+      const p = a.profile.profile;
+      a.commit(["", bold("  Harness profile"), `  ${dim("model")}   ${a.cfg.model}`, `  ${dim("from")}    ${a.profile.sources.length ? a.profile.sources.map((s) => s.replace(a.cwd + "/", "")).join(", ") : dim("(none: built-in defaults)")}`, `  ${dim("off")}     ${p.off?.length ? p.off.join(", ") : dim("nothing: every guard is on")}`, `  ${dim("limits")}  ${[p.maxSteps !== undefined && `max steps ${p.maxSteps}`, p.stagnationTurns !== undefined && `stagnation after ${p.stagnationTurns} turns`].filter(Boolean).join(" · ") || dim("defaults")}`, ...(p.note ? [`  ${dim("note")}    ${p.note}`] : []), dim("  write one from measurements: amness eval --variants ablate --profile-out profile.json")]);
+    } },
     { name: "router", help: "route exploration steps to a cheaper model when that pays off, cache cost included (needs /models cheap <id>)", args: "[on|off]", run: (a, arg) => {
       if (!arg) return void a.say(`router is ${a.cfg.router ? "on" : "off"}${a.cfg.models?.cheap ? ` (cheap model: ${a.cfg.models.cheap})` : dim("  (set one with /models cheap <model id>)")}. Planning, edits, failures and answers always use ${a.cfg.model}; a run of read-only steps moves to the cheap model once the saving repays the cold read of the conversation on that model's own cache.`, dim);
       if (arg === "on" && !a.cfg.models?.cheap) return void a.say("choose the cheap model first: /models cheap <model id>", red);
