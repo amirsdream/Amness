@@ -23,11 +23,8 @@ jobs:
       - run: npm run typecheck
       - name: bubblewrap (lets the Linux sandbox tests run when the runner allows user namespaces)
         run: sudo apt-get install -y bubblewrap || true
-      - name: find hanging test files
-        run: |
-          for f in test/*.test.ts; do
-            if ! timeout 100 node --no-warnings --test "$f" > /tmp/out.txt 2>&1; then echo "=== FAILED OR HUNG: $f (exit $?)"; grep -E '^(not ok|# Subtest|✖)' /tmp/out.txt | tail -5; tail -5 /tmp/out.txt; fi
-          done
+      - name: debug trace
+        run: timeout 40 node --no-warnings test/dbgtrace.ts || echo "exit $?"
 
   terminal:
     name: real-terminal tests (pseudo-terminal)
