@@ -73,6 +73,8 @@ export type Event =
   | { kind: "phase"; phase: "model" | "tools" | "verify" | "compact"; step: number; max: number; n?: number }
   /** A lifecycle hook ran: what it did (blocked, added context, warned). */
   | { kind: "hook"; event: string; detail: string; blocked: boolean }
+  /** What the run really did, from recorded facts (not the model's words): shown after an accepted finish. */
+  | { kind: "audit"; changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] }
   | { kind: "finish"; summary: string };
 
 /** Shared token/time cap. Pass one instance to a harness (and its subagents) to bound the whole run. */
@@ -89,7 +91,7 @@ export class Budget {
 
 export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string; /** from the built-in safety floor: "don't ask again" shortcuts must not skip this prompt */ floor?: boolean }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
-export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule";
+export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger";
 
 export type Options = {
   model: Model;
@@ -116,6 +118,8 @@ export type Options = {
   onHandoff?: (note: string) => void;
   /** Rules that allow, force-ask or deny a call before the permission mode is consulted (see `Permissions`). Deny wins; allow skips the prompt. */
   permissions?: { check(tool: string, args: Record<string, any>): { action: "allow" | "ask" | "deny" | "none"; rule?: string; reason?: string; floor?: boolean } };
+  /** Claims ledger (see `Ledger`): records edits and commands, and rejects a `finish` whose summary claims things that did not happen. */
+  ledger?: { onEdit(e: { path: string; added: number; removed: number; created: boolean }): void; onCommand(cmd: string, result: string): void; check(summary: string, o?: { gated?: boolean }): string[]; audit(task: string): { changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] } };
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
   hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
@@ -303,7 +307,7 @@ export function createHarness(o: Options) {
   async function run(task: string, opts: { resume?: Message[] } = {}): Promise<RunResult> {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
     const seen = new Map<string, number>(), history: string[] = [];
-    let epoch = 0;   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
+    let epoch = 0, ledgerRejects = 0;   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
     let sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
@@ -383,9 +387,14 @@ export function createHarness(o: Options) {
         if (name === "finish") {
           const stop = await hook("Stop", { summary: args.summary });
           if (stop?.block) { emit({ kind: "rejected", detail: stop.block }); return `REJECTED by a hook: ${clip(stop.block, 3000)}\nFix the problem, then finish again.`; }
+          if (o.ledger && !off.has("ledger")) {
+            const problems = o.ledger.check(String(args.summary ?? ""), { gated: !!o.verify });
+            if (problems.length && ledgerRejects < 2) { ledgerRejects++; const detail = `the record does not support your summary: ${problems.join(" ")}`; emit({ kind: "rejected", detail }); return `REJECTED: ${detail}\nFix it (run the command, or correct the summary), then finish again.`; }
+            if (problems.length) emit({ kind: "hook", event: "Ledger", detail: `finishing with unverified claims: ${problems.join(" ")}`, blocked: false });
+          }
           if (o.verify) emit({ kind: "phase", phase: "verify", step, max });
           const fb = feedback(await o.verify?.(args.summary));
-          if (!fb) { done = args.summary; emit({ kind: "finish", summary: args.summary }); return "accepted"; }
+          if (!fb) { done = args.summary; if (o.ledger && !off.has("ledger")) emit({ kind: "audit", ...o.ledger.audit(task) }); emit({ kind: "finish", summary: args.summary }); return "accepted"; }
           emit({ kind: "rejected", detail: fb });
           return `REJECTED: ${clip(fb, 3000)}\nFix the problem, then finish again.`;
         }
@@ -416,8 +425,9 @@ export function createHarness(o: Options) {
         }
         let result: string;
         emit({ kind: "toolstart", id: c.id, name, args: raw });
-        try { const r = await t!.run(args, { registry: reg, step, emit: (ev) => { if (ev.kind === "edit") epoch++; emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
+        try { const r = await t!.run(args, { registry: reg, step, emit: (ev) => { if (ev.kind === "edit") { epoch++; if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
+        if (name === "sh" && !off.has("ledger")) o.ledger?.onCommand(String(args.cmd ?? ""), result);
         const post = await hook("PostToolUse", { tool: name, args, result: clip(result, 4000), ok: !/^(ERROR|DENIED)/.test(result) });
         if (post?.context) result += `\n\n[hook] ${clip(post.context, 2000)}`;
         emit({ kind: "tool", id: c.id, name, args: raw, result });

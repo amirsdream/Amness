@@ -348,6 +348,7 @@ Each turn: steer (messages you typed meanwhile) → budget check → compaction 
 - **Compaction in stages, cheapest first.** Observations are condensed as they arrive (terminal codes and progress redraws stripped, repeated lines collapsed, long output cut to head and tail plus its error lines). Older output that is repeated or **expired** (a read of a file that was edited afterwards) is dropped, then old tool output is elided, and only on very long runs does the model write a handoff note and continue in a fresh context. Elision cuts well below the budget in one go, so the provider's prompt-cache prefix stays valid between cuts. `/loop` shows how much was trimmed.
 - **Post-edit check.** `/check <cmd>` (headless `--check`, library `check`) runs a fast command such as a typecheck after every edit. Only a failure is shown to the model, appended to the edit result, so a mistake is caught one step after it happens instead of at the end.
 - **Guards.** Repeat-call detection (the same call, normalised, with nothing edited in between; re-running tests after an edit is fine), cycle detection (2 to 4 different calls repeating three times, such as an edit flipped back and forth around a test run), a nudge when the model announces an action instead of taking it, a wrap-up warning three steps before the step cap, and no-progress detection (a reflection prompt after 3 all-failing turns, a clean stop after 6).
+- **Claims are checked against a record.** The harness records what really happened (files edited, commands run and their exit codes) and compares the `finish` summary with it: "all tests pass" needs a passing test run *after the last edit*, "build is clean" needs a successful build or typecheck, and a file named as changed must have been edited. A mismatch is rejected with the specifics (at most twice, so it can never deadlock). Accepted runs end with an audit line: files changed, whether tests passed after the final edit, test files touched when the task did not mention tests. Agents that judge their own work accept plausible progress as real progress ([When Do Agent Loops Mistake Stagnation for Progress?](https://arxiv.org/abs/2607.25152)); this is the cheap external check.
 - **Done means verified.** `finish` passes through your `verify` gate (tests, build) and is rejected with feedback until it holds.
 
 ### Prompt cache and memory
@@ -378,13 +379,13 @@ Every guard and efficiency feature can be switched off, so "does this help?" is 
 
 ```bash
 amness eval --selftest                       # prove every task is solvable and its held-out check is sound (no model, free)
-amness eval --variants ab --trials 3         # baseline (no guards) vs full harness on 8 built-in tasks
+amness eval --variants ab --trials 3         # baseline (no guards) vs full harness on 10 built-in tasks
 amness eval --variants ablate --trials 5     # full harness, then each guard removed in turn
 amness eval --cases ./my-tasks --jobs 3      # your own tasks: a folder of *.json
 amness eval --report .amness/evals/<run>.json   # re-analyse saved results, runs nothing
 ```
 
-Each task runs in a fresh temporary workspace. The agent sees the task and an optional `verify` command; a **held-out `check`** it never sees decides pass or fail. Variants: `baseline`, `full`, `full+check`, `no-gate`, and `full-<guard>` for each of `nudge loop compact stuck wrapup condense schedule`.
+Each task runs in a fresh temporary workspace. The agent sees the task and an optional `verify` command; a **held-out `check`** it never sees decides pass or fail. Variants: `baseline`, `full`, `full+check`, `no-gate`, and `full-<guard>` for each of `nudge loop compact stuck wrapup condense schedule ledger`.
 
 What the report gives you, and why:
 
@@ -393,7 +394,7 @@ What the report gives you, and why:
 - **Reliability, not just a pass rate:** `pass^k` is the chance that k attempts at a task *all* pass, which exposes variants that only succeed sometimes.
 - **Cost per solved task, not per run:** a variant that is cheap because it gives up is not efficient. A `●` marks variants on the pass-rate versus tokens-per-solve Pareto frontier.
 - **Why a variant behaves as it does:** how often each guard fired per run (nudges, loop blocks, rejected finishes, trimmed output).
-- **An honest power note.** With 8 tasks only large differences (about 70 points) are detectable; the report says so instead of declaring a winner. Add tasks with `--cases` before trusting a small difference.
+- **An honest power note.** With 10 tasks only large differences (about 65 points) are detectable; the report says so instead of declaring a winner. Add tasks with `--cases` before trusting a small difference.
 
 The method follows recent evaluation practice: harness choice can change cost per solved task by large factors while pass-rate differences stay small ([The Scaffold Effect in Coding Agents](https://arxiv.org/abs/2607.22585)), and task-level paired bootstrap intervals are the right uncertainty statement ([Harness or Model?](https://arxiv.org/html/2609.11987v1)). The built-in suite is small and synthetic; it is a regression harness for the guards, not a substitute for SWE-bench-style benchmarks, and a real run costs real tokens (the command asks before starting).
 

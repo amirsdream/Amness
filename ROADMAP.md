@@ -55,7 +55,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G20 | LLM approval reviewer for risky calls | P3 | M | [ ] |
 | G21 | Windows support (tested) and a built, tested Docker image | P3 | M | [ ] |
 | G22 | Publish to npm (needs a build step or a bundled runtime) | P3 | M | [ ] |
-| L1 | Grounded finish gate: claims ledger and scope audit | P1 | M | [ ] |
+| L1 | Grounded finish gate: claims ledger and scope audit | P1 | M | [~] |
 | L2 | Stagnation detection from external signals, not self-report | P1 | M | [ ] |
 | L3 | Independent skeptical evaluator with a sprint contract | P1 | M | [ ] |
 | L4 | Trace replay: test harness changes without model calls | P1 | M | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **L1** (partly): claims ledger (edits and commands with exit codes recorded from tool events) checks the finish summary: tests-pass needs a passing run after the last edit, build/typecheck claims need a matching command, 'changed file X' needs a recorded edit; rejected with specifics at most twice; audit line after accepted finish (files changed, tests after last edit, test files touched unprompted); 'ledger' guard for ablation; 2 new eval tasks (test-weakening-trap, partial-verify-trap). src/ledger.ts, test/ledger.test.ts. Measuring the false-done rate on a real model is still to do (amness eval --variants full,full-ledger).
 - **G4**: sh_start / sh_read / sh_stop / sh_list with a 200 KB ring buffer, process-group kill, max 5, plan mode hides sh_start, same permission rules and floor as sh; sidebar PROCESSES section, /procs, cleanup on exit. src/procs.ts, test/procs.test.ts.
 - **G14**: cycle detection (2-4 different calls repeating 3x) with a reflection-style refusal; repeat counting now ignores key order and whitespace and resets after any file edit, which also fixes a false positive (re-running the same test command after real edits was being blocked on the third time). src/harness.ts, test/loop.test.ts.
 - **G12**: always-on JSONL trace per session (.amness/traces), optional OTLP/HTTP export with GenAI attributes (AMNESS_OTLP, --trace), cache-waste figure (tokens re-read at full price and estimated dollars) in /loop. src/trace.ts, test/trace.test.ts.

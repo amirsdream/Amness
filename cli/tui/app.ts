@@ -450,6 +450,11 @@ export class App {
         void t; this.inlineOnly(lines); break;
       }
       case "todos": this.todos = e.todos; break;
+      case "audit": if (!sub && (e.changed.length || e.notes.length)) {
+        const line = `${e.changed.length} file${e.changed.length === 1 ? "" : "s"} changed${e.testsAfterLastEdit === true ? " · tests passed after the last edit" : ""}`;
+        this.stepNow().notes.push("audit: " + line + (e.notes.length ? " · " + e.notes.join("; ") : ""));
+        this.notify(e.notes.length ? "warn" : "ok", `${line}${e.notes.length ? ". Note: " + e.notes.join("; ") : ""}`, [dim(`  ◐ ${line}${e.notes.length ? " · " + e.notes.join("; ") : ""}`)]);
+      } break;
       case "hook": this.stepNow().notes.push(`hook ${e.event}${e.blocked ? " blocked" : ""}: ${one(e.detail, 100)}`); if (e.blocked || e.detail !== "added context") this.notify(e.blocked ? "warn" : "info", `hook ${e.event}: ${one(e.detail, 200)}`, [dim(`  ⚙ hook ${e.event}: ${one(e.detail, w - 20)}`)]); break;
       case "cachebreak": if (!sub) { this.cacheBreaks++; this.stepNow().notes.push("cache break: " + e.reason); } break;
       case "trim": if (!sub) { this.trimmed += e.saved; this.stepNow().notes.push(`trimmed ~${fmtTokens(Math.round(e.saved / 4))} tokens (${e.what})`); } break;
