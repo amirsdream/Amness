@@ -29,3 +29,4 @@ export * from "./worktree.ts";
 export * from "./agents.ts";
 export * from "./route.ts";
 export * from "./codeindex.ts";
+export * from "./replay.ts";

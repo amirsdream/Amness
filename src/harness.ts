@@ -79,6 +79,9 @@ export type Event =
   /** What the run really did, from recorded facts (not the model's words): shown after an accepted finish. */
   /** The independent reviewer's verdict on a finish. */
   | { kind: "review"; pass: boolean; findings: string[]; inconclusive?: boolean }
+  /** Only when `record` is set: the messages a run started from, and every message the model produced (for trace replay). */
+  | { kind: "run"; messages: Message[] }
+  | { kind: "model"; message: Message }
   | { kind: "audit"; changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] }
   | { kind: "finish"; summary: string };
 
@@ -131,6 +134,8 @@ export type Options = {
   ledger?: { onEdit(e: { path: string; added: number; removed: number; created: boolean; diff?: string }): void; onCommand(cmd: string, result: string): void; check(summary: string, o?: { gated?: boolean }): string[]; audit(task: string): { changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] } };
   /** Model for the handoff note written when the context rolls over (often a cheaper one). Default: `model`. */
   compactModel?: Model;
+  /** Emit `run` and `model` events with full message content, so a trace can be replayed later (see `replay`). Larger traces; off unless asked. */
+  record?: boolean;
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
   hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
@@ -317,6 +322,7 @@ export function createHarness(o: Options) {
   /** Agent loop. Resolves with the model's final answer (`finish` summary or accepted plain-text reply). */
   async function run(task: string, opts: { resume?: Message[] } = {}): Promise<RunResult> {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
+    if (o.record) emit({ kind: "run", messages: msgs.map((m) => ({ ...m, raw: undefined })) });
     const seen = new Map<string, number>(), history: string[] = [];
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
@@ -366,6 +372,7 @@ export function createHarness(o: Options) {
         throw e;
       }
       o.budget?.add(m); tokens += m.usage?.total_tokens ?? 0; lastPrompt = m.usage?.prompt_tokens ?? 0;
+      if (o.record) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
       emit({ kind: "turn", step, tokens, prompt: m.usage?.prompt_tokens ?? 0, completion: m.usage?.completion_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0, reasoning: m.usage?.reasoning_tokens ?? 0 });
       if (m.content?.trim()) emit({ kind: "assistant", text: m.content, streamed });
       msgs.push({ role: "assistant", content: m.content ?? null, ...(m.tool_calls?.length && { tool_calls: m.tool_calls }), ...(m.raw !== undefined && { raw: m.raw }) });

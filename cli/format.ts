@@ -32,7 +32,7 @@ export function formatEvent(e: Event & { agent?: string }): string {
       return `${who}${yellow("✎")} ${bold(e.path)} ${e.created ? green("new file ") : ""}${green("+" + e.added)} ${red("-" + e.removed)}\n${shown.join("\n")}`;
     }
     case "aborted": return `${who}${yellow("⏹ stopped")} ${dim("run interrupted; progress is saved and can be resumed")}`;
-    case "turn": case "phase": case "trim": case "cachebreak": case "toolstart": case "text": case "thinking": case "assistant": case "todos": case "steer": return "";
+    case "turn": case "phase": case "trim": case "cachebreak": case "run": case "model": case "toolstart": case "text": case "thinking": case "assistant": case "todos": case "steer": return "";
     case "rollover": return `${who}${magenta("⟳ context rollover")} ${dim("handoff note written; continuing in a fresh context")}`;
     case "review": return `${who}${e.pass ? green("✔ review") : yellow("✖ review")} ${dim(e.inconclusive ? "inconclusive (accepted)" : e.pass ? "the reviewer found no problems" : e.findings.slice(0, 2).map((f) => one(f, 70)).join("; "))}`;
     case "audit": return e.changed.length || e.notes.length ? `${who}${e.notes.length ? yellow("◐ audit") : green("◉ audit")} ${dim(`${e.changed.length} file(s) changed${e.testsAfterLastEdit === true ? " · tests passed after the last edit" : ""}${e.notes.length ? " · " + e.notes.join("; ") : ""}`)}` : "";

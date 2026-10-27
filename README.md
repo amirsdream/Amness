@@ -175,6 +175,8 @@ Precedence: **built-in floor > deny > ask > allow > the permission mode.** Shell
 
 **Tracing.** Every loop event (turns with token and cache counts, tool calls with timings, hooks, cache breaks, trims) is written to `.amness/traces/<session>.jsonl`, one JSON line each, so a bad session can be read with `grep` and `jq`. Set `AMNESS_OTLP=http://localhost:4318` (or any OTLP/HTTP collector) to also export OpenTelemetry spans with GenAI attributes (`gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.tool.name`); headless runs take `--trace <file>`. `/loop` shows how many tokens were re-read at full price after cache breaks, with an estimated cost. A full disk or an unreachable collector never stops the agent.
 
+**Replay (test harness changes offline).** Chat sessions and `--trace` runs also record the model's messages and the tools' results. `amness replay .amness/traces/<session>.jsonl [--off loop,stagnation] [--stagnation-turns 4] [--max-steps 20] [--context-budget 30000]` feeds a recorded run back through the *current* harness with no model call and no real tool, and prints exactly which guards, rejections, trims or cache breaks differ from what happened (exit code 1 when anything does). An unchanged harness reproduces a recording identically, so a replay of your real sessions is a free regression test before you ship a change to a guard; after the first difference the model would have said something else, so later lines are indicative. Library: `replayFile`, `replayRun`, `readTrace`.
+
 **Hooks.** Run your own commands at fixed points of the loop, in the same vocabulary as Claude Code and Codex. Configure them in `.amness/hooks.json` (project) and `~/.amness/hooks.json` (yours):
 
 ```json

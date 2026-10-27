@@ -3,7 +3,7 @@ import { execFile, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { Budget, MemoryStore, effortsFor, type RunResult, codeVariants, createCodeAgent, createDeepAgent, evaluate, loadMcp, readBundle, startLive, type Approve, type Event, type Model } from "../src/index.ts";
+import { formatReplay, replayFile, Budget, MemoryStore, effortsFor, type RunResult, codeVariants, createCodeAgent, createDeepAgent, evaluate, loadMcp, readBundle, startLive, type Approve, type Event, type Model } from "../src/index.ts";
 import { createModel } from "./model.ts";
 import { detectVerify } from "./detect.ts";
 import { HELP, runHeadless } from "./headless.ts";
@@ -374,6 +374,16 @@ const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
 
   inside the chat: /help for commands · @file to mention files · shift+tab to change permissions`;
 
+/** amness replay <trace.jsonl>: run a recorded session through the current harness (no model, no tools) and show what behaves differently. */
+async function runReplay(args: string[]): Promise<number> {
+  const val = (f: string) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; }, file = args.find((a) => !a.startsWith("--") && args[args.indexOf(a) - 1]?.startsWith("--") !== true);
+  if (!file) { console.error("usage: amness replay <trace.jsonl> [--off guard,guard] [--stagnation-turns n] [--max-steps n] [--context-budget chars]\n  Traces are written to .amness/traces/ (full messages are recorded in chat sessions and headless runs with --trace)."); return 2; }
+  try {
+    const o: Record<string, unknown> = {}; if (val("--off")) o.off = val("--off")!.split(","); if (val("--stagnation-turns")) o.stagnationTurns = Number(val("--stagnation-turns")); if (val("--max-steps")) o.maxSteps = Number(val("--max-steps")); if (val("--context-budget")) o.contextBudget = Number(val("--context-budget"));
+    const reports = await replayFile(resolve(file), o); console.log(formatReplay(reports)); return reports.every((r) => r.same) ? 0 : 1;
+  } catch (e) { console.error(red("✗ " + (e as Error).message)); return 2; }
+}
+
 async function startChat(argv: string[]) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) { console.error("amness chat needs an interactive terminal. For scripts use: amness run [flags] \"task\""); process.exitCode = 2; return; }
   let resume: string | undefined;
@@ -401,6 +411,7 @@ async function main() {
   if (quick === "--version" || quick === "-v") return void console.log(VERSION);
   if (quick === "--help" || quick === "-h" || quick === "help") return void console.log(TOP_HELP);
   if (quick === "eval" && argv.length > 1) { process.exitCode = await runEval(argv.slice(1), { model: makeModel, maxTokens: cfg.maxTokens, confirm }); return; }
+  if (quick === "replay") { process.exitCode = await runReplay(argv.slice(1)); return; }
   if (quick === "run") { process.exitCode = await runHeadless(argv.slice(1)); return; }
   if (quick === "-p" || quick === "--print") { process.exitCode = await runHeadless(argv.slice(1)); return; }
   if (quick && quick in screens) return void (await screens[quick]().catch((e) => { if (!(e instanceof Cancel)) throw e; }));
