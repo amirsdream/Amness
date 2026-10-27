@@ -1,6 +1,29 @@
-# Roadmap: harness gaps to close
+# Roadmap
 
-Found by comparing Amness with the main coding-agent harnesses and recent papers (see [Sources](#sources)). Work through them in order; tick a box when the item is done **and** its acceptance check passes. Each item gets its own commit, tests, and a README line.
+Two tracks. **Track A (G1 to G22)** closes the gaps found by comparing Amness with the main coding-agent harnesses. **Track B (L1 to L14)** is the plan to get ahead of them, drawn from recent papers (see [Sources](#sources) and each item's evidence note). Work through them in order; tick a box when the item is done **and** its acceptance check passes. Each item gets its own commit, tests, and a README line.
+
+## Strategy: how Amness gets ahead
+
+Parity (Track A below) makes Amness a credible alternative. **Track B** is where it can lead, because Amness already has the hard-to-copy base: a statistical eval runner with every guard switchable, a cache-break detector, a trace of every loop turn, and a UI that shows all of it. The bets, each backed by recent work and each measurable on our own eval runner:
+
+1. **Never trust the model's own report.** Self-judging loops accept regressions; grounded external checks do not. (L1 to L3)
+2. **Be the most measurable harness.** Replay, failure mining and benchmark adapters turn every real failure into a regression test. (L4, L5, L14)
+3. **Win on cost, including the cache.** Per-step model routing that prices cache loss, and a structural code index. (L6 to L8)
+4. **Security by construction, not by prompt.** Deterministic policy with taint tracking, sandbox and reversible actions. (L9, L10, G6)
+5. **A harness that improves itself under guarantees.** Bounded edits, held-out gates, rollback. (L11 to L13)
+
+Rule for Track B: **no item ships as a default until the eval runner shows it helps** on a suite that includes tasks it should help and tasks it should not touch. Anthropic's long-running-harness write-up makes the same point from the other side: components that were load-bearing for one model became dead weight for the next, so every scaffold needs an ablation (see L8).
+
+### Suggested order
+
+| Phase | Items | Why first |
+|---|---|---|
+| 1. Foundations | G1, G2, G3, G12, G14, G4 | Hooks, a trace file and permission rules are prerequisites for most Track B items |
+| 2. Grounded verification | L1, L2, L3 | Biggest reliability gain per effort; reuses the verify gate and the trace |
+| 3. Measurement | L4, L5, L14 | Makes every later claim checkable and turns failures into tests |
+| 4. Economics | L6, L7, L8, G10 | Cost per solved task is the number users feel |
+| 5. Trust | G6, L9, L10 | Needs the sandbox and permission engine from phase 1 |
+| 6. Compounding | L11, L12, L13 | Needs measurement (phase 3) and trust (phase 5) to be safe |
 
 Legend: **P1** do first · **P2** next · **P3** later. Effort: S (hours), M (a day or two), L (several days).
 
@@ -32,6 +55,20 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G20 | LLM approval reviewer for risky calls | P3 | M | [ ] |
 | G21 | Windows support (tested) and a built, tested Docker image | P3 | M | [ ] |
 | G22 | Publish to npm (needs a build step or a bundled runtime) | P3 | M | [ ] |
+| L1 | Grounded finish gate: claims ledger and scope audit | P1 | M | [ ] |
+| L2 | Stagnation detection from external signals, not self-report | P1 | M | [ ] |
+| L3 | Independent skeptical evaluator with a sprint contract | P1 | M | [ ] |
+| L4 | Trace replay: test harness changes without model calls | P1 | M | [ ] |
+| L5 | Failure mining: every bad session becomes an eval task | P2 | M | [ ] |
+| L6 | Cache-aware per-step model routing | P2 | L | [ ] |
+| L7 | Structural code index with call and import graph | P2 | L | [ ] |
+| L8 | Model profiles and scaffold pruning from ablations | P2 | M | [ ] |
+| L9 | Taint tracking and capability policy (out-of-band enforcement) | P2 | L | [ ] |
+| L10 | Reversible actions: transactions over files and shell | P2 | L | [ ] |
+| L11 | Best-of-n with a hybrid verifier, escalated only when needed | P3 | L | [ ] |
+| L12 | `amness tune`: bounded self-improvement with held-out gates | P3 | L | [ ] |
+| L13 | Parallel worktree agents with a test-gated merge | P3 | L | [ ] |
+| L14 | Benchmark adapters with leak audit and cost per solve | P3 | L | [ ] |
 
 ---
 
@@ -137,12 +174,118 @@ Needs a build step (or a bundled runtime) because the CLI currently relies on No
 
 ---
 
+---
+
+# Track B: getting ahead
+
+Each item lists the **evidence** (and how well I could check it: *read* = I read the page or abstract, *snippet* = only a search summary), **build**, **measure** (how we prove it beats the baseline on our eval runner) and **accept**.
+
+## Grounded verification
+
+### L1. Grounded finish gate: claims ledger and scope audit
+**Evidence.** Agents that judge their own work accept plausible changes as progress: in a controlled study, a frontier agent claimed improvement in every one of 54 cycles while 56% had zero or negative real change, and even the strongest in-band judge accepted cycles where 44% were real regressions ([When Do Agent Loops Mistake Stagnation for Progress?](https://arxiv.org/abs/2607.25152), *read abstract*). Sign-only gating from a real-world signal did as well as rich feedback, so the *grounding* is what matters. Anthropic's long-running harness likewise separates the judge from the builder ([Harness design for long-running apps](https://www.anthropic.com/engineering/harness-design-long-running-apps), *read*).
+**Build.** Today `finish` is gated only by the user's `verify` command. Add a **claims ledger**: the harness records ground-truth events (commands run and exit codes, files changed, test counts parsed from output) and checks the `finish` summary against them before accepting it ("tests pass" with no passing test run is rejected; "fixed X" with no change in X's file is flagged). Add a **scope audit**: files changed outside what the task and the plan imply are listed and require a one-line justification. Auto-detect a verify command when none is set (we already have `detectVerify`) and say clearly when `finish` is unverified.
+**Measure.** Eval variant `full` vs `full-ledger`: rate of false "done" (pass by the agent's claim, fail by the held-out check) and tokens per solved task. Add 3 eval tasks designed to tempt a false success (a test the agent can weaken, a claim that needs a command it is likely to skip).
+**Accept.** Tests: unsupported claims are rejected with a specific message; a scope violation is surfaced; a clean run is not slowed; the ledger is visible in `/loop` and the trace.
+
+### L2. Stagnation detection from external signals
+**Evidence.** Same paper: stagnation looks like progress to the model. Pair with the existing no-progress stop (6 failing turns), which only catches errors, not busy-but-useless loops.
+**Build.** Track objective progress signals per turn: failing-test count or error count parsed from command output, size of diff, new files touched, verify result. If the signals do not improve for K turns (default 8) while the model keeps acting, inject a structured "stuck" reflection (what changed, what did not) and, on the second hit, stop with a clear report. Signals are optional and degrade gracefully when output cannot be parsed.
+**Measure.** Ablation `full-stagnation` on tasks with a plausible-but-wrong path: wasted tokens before stopping, and recovery rate.
+**Accept.** Tests with scripted trajectories: improving error counts never trigger it; flat counts do; unparseable output falls back to the old guard.
+
+### L3. Independent skeptical evaluator with a sprint contract
+**Evidence.** Anthropic found a separate, skeptical evaluator easier to tune than making a generator self-critical, with a pre-agreed contract of testable criteria per chunk and hard thresholds; it paid off on tasks beyond what the model does reliably alone, and cost more (about $3-4 per QA round in their example). They also warn that an untuned evaluator talks itself out of real findings, so its prompt must be tuned against logs (*read*).
+**Build.** Optional `review` role (uses a separate, fresh-context call, optionally another model via L6/G9) that, before the first edit, proposes acceptance criteria from the task ("contract"), then after `verify` passes inspects the diff, runs the criteria it can execute, and returns pass/fail with specifics. The generator sees only the failures. Off by default; on for tasks tagged hard or by `--review`.
+**Measure.** `full` vs `full+review` on the hard half of the suite: pass rate, false-done rate, and cost per solved task. Keep only if the interval excludes zero.
+**Accept.** Tests: the evaluator cannot edit files; its objections reach the generator; a passing review adds one call, not a loop; criteria are shown to the user.
+
+## Measurement
+
+### L4. Trace replay
+**Evidence.** Harness engineering needs failures stored as files that can be inspected and re-run ([Harness Engineering for Self-Improvement](https://lilianweng.github.io/posts/2026-07-04-harness/), *read*); the reliability review treats observability gaps as a root cause of invalid conclusions ([Engineering Reliable Coding Agents](https://arxiv.org/abs/2608.13867), *read abstract*).
+**Build.** Needs G12. Record each turn's model output and tool results. `amness replay <trace>` feeds the recorded model messages back through the current harness with the tool results replaced by recorded ones, and reports where the *harness* would have behaved differently (a guard that would now fire, a different cache break, a different compaction, a permission that would now be denied). No model calls, so it runs in CI.
+**Measure.** Time and cost to detect a harness regression: a replay suite of 20 real traces runs in seconds for $0.
+**Accept.** Tests: replaying an unchanged harness reproduces the transcript byte for byte; changing a guard threshold reports exactly the turns that differ.
+
+### L5. Failure mining
+**Evidence.** AHE-style debugging reads traces, writes a root-cause report per failure, and proposes bounded fixes; Self-Harness clusters failures into patterns ([Lilian Weng's survey](https://lilianweng.github.io/posts/2026-07-04-harness/), *read*).
+**Build.** `/report` (and `amness traces --failures`) clusters recent sessions by failure signature (guard that fired, verify failure text, stuck stops, user interruptions with a correction). For a chosen failure, offer to **turn it into an eval task**: snapshot the repo state, the task, the verify command, and ask the user to confirm a held-out check. Output lands in `.amness/evals/cases/`, runnable with `amness eval --cases`.
+**Measure.** Count of regression tasks created per month and how many later caught a harness regression.
+**Accept.** Tests: clustering groups scripted failures correctly; the generated case passes `--selftest`; no case is created without confirmation.
+
+### L14. Benchmark adapters with leak audit and cost per solve
+**Evidence.** A structural-index study reports per-cell exclusion ledgers, leak audits and three seeds on SWE-PolyBench Verified and SWE-bench Pro ([Code Isn't Memory](https://arxiv.org/abs/2606.22417), *read abstract*); harness choice moves cost per solved task up to 40x while pass rate moves little ([Scaffold Effect](https://arxiv.org/abs/2607.22585), *snippet*); SWE-bench Verified has flawed tests and contamination concerns (search results, *snippet*), so private, contamination-controlled suites matter ([Harness or Model?](https://arxiv.org/html/2609.11987v1), *snippet*).
+**Build.** `amness eval --suite <name>` adapters that load a subset of a public benchmark into our `Case` format (Docker needed for environments), plus a **leak audit** (task text or repo history must not contain the fix), multiple seeds, an exclusion ledger, and the same cost-per-solved-task and cache-hit reporting. Publish results for Amness variants in the repo, with the commands to reproduce.
+**Accept.** Tests with a tiny fake suite; leak audit catches a planted fix; report includes seeds and exclusions.
+
+## Economics
+
+### L6. Cache-aware per-step model routing
+**Evidence.** Routing each step of a trajectory to the cheapest adequate model cut cost 72% while keeping 97.3% of frontier quality in [AgentRouter](https://arxiv.org/abs/2609.22951) (*read abstract*, authors' numbers, trained classifier); per-query routers (RouteLLM, FrugalGPT applied per step) saved only 31 to 44%. Cheap-model mistakes can corrupt the context later steps rely on. A cache-aware cost model matters because each model has its own cache ([Cache-Aware Prompt Compression](https://arxiv.org/pdf/2607.15516), *snippet*). None of these tools model the cache cost of switching.
+**Build.** Extends G9. A heuristic router (no training): cheap model for read-only exploration, summarising and compaction; strong model for planning, edits and verification; **escalate** after a failure signal (a failed edit, a rejected finish, an L2 stagnation hit). Before switching, estimate the cache loss (the cached prefix is re-read at full price on the new model) and only switch when expected savings exceed it; batch exploration so the switch happens once. Guard against corrupted context: the strong model re-reads any file the cheap model summarised before editing it (read-before-edit already forces this for edits).
+**Measure.** Pareto plot from the eval runner: pass rate vs tokens per solved task vs dollars, for single-model, naive router, and cache-aware router on the same tasks.
+**Accept.** Tests: routing decisions for scripted turns; no switch when the cache is hot and savings are small; escalation on failure; `/status` and `/loop` show which model ran each turn and why.
+
+### L7. Structural code index
+**Evidence.** A structural index (symbols, call graph, dependencies) inside a harness gave a localization gain and a statistically separated resolve gain with *lower* cost per solved task than agentic grep, mostly on multi-file changes, with one fixed model and three seeds ([Code Isn't Memory](https://arxiv.org/abs/2606.22417), *read abstract*). Aider's repo map is the only index in the eleven-agent study; no studied system uses embedding code retrieval ([source study](https://arxiv.org/html/2609.00006v1), *read*).
+**Build.** Builds on G10. Zero-dependency extractors for symbols, imports and call sites (regex and light parsing per language), stored per file keyed by mtime. Tools: `repo_map(query)`, `find_refs(symbol)`, `impact(path)` (who imports or calls this). Rank by identifier overlap, definition-vs-use, and graph proximity to files already touched. Optional: tree-sitter or LSP when present (G11).
+**Measure.** Eval suite with multi-file tasks and single-file tasks: the index must lower tokens per solve on the former and not hurt the latter.
+**Accept.** Tests per language fixture; `impact` finds a planted caller; cache invalidates on edits; output is capped.
+
+### L8. Model profiles and scaffold pruning
+**Evidence.** Components that mattered for one model were dead weight for the next; the way to find out is to remove one at a time and measure ([Anthropic](https://www.anthropic.com/engineering/harness-design-long-running-apps), *read*). The harness study found planning, tool sets and context management each help some models and hurt others ([Empirical Study](https://arxiv.org/abs/2609.20804), *read*).
+**Build.** `harness-profile.json` per model family (nudge on/off, step caps, compaction budget, plan-first, tool set, reset vs compaction). `amness eval --variants ablate --profile-out` writes a recommended profile: guards whose removal does not hurt (interval includes zero and cost improves) are suggested for removal. Ship conservative defaults for the main model families, each with the eval evidence behind it.
+**Accept.** Tests: profile loads and overrides defaults; the recommender flags a guard with no measured effect and keeps one that helps; the chosen profile is shown in `/status`.
+
+## Trust
+
+### L9. Taint tracking and capability policy
+**Evidence.** The field is moving from asking models to refuse injections to deterministic, out-of-band enforcement: CaMeL, FIDES, Progent and similar reference-monitor designs (search summary of [arXiv 2606.26479](https://arxiv.org/abs/2606.26479), *snippet*); least-privilege and egress allow-lists for coding agents ([survey 2606.10749](https://arxiv.org/html/2606.10749v1), *snippet*); prompt-level "do not" rules in an instruction file are not enforcement ([arXiv 2608.23550](https://arxiv.org/pdf/2608.23550), *snippet*). A caution: least-privilege alone stopped attacks in only one coding setting in a hijacking study ([2510.17276](https://arxiv.org/pdf/2510.17276), *snippet*), so enforcement must combine data-flow and capability rules.
+**Build.** Needs G3. Mark data by origin (user, workspace file, web, MCP, tool output from untrusted paths). A risky action whose arguments are derived from untrusted data (a command string that appears verbatim in fetched web text) requires explicit approval even in `acceptEdits`, and is denied under a strict policy. Capability scopes per tool and per skill (paths, hosts, commands); network egress allow-list for the shell. Everything enforced in code, never by prompt text. A `/policy` view shows why a call was allowed or denied.
+**Measure.** A small adversarial suite (injected instructions in a web page, a README, an MCP result) run through `amness eval`: attack success rate vs benign task pass rate, with and without L9.
+**Accept.** Tests: a command copied from a fetched page is escalated; a trusted command is not; capability denials are explained; benign eval tasks unchanged.
+
+### L10. Reversible actions
+**Evidence.** Self-modifications can have effects that cannot be reversed from other states; 197 of 600 capability-improving mutations failed a recoverability check in one study ([EvoUndo](https://arxiv.org/abs/2608.28363), *read abstract*). The same logic applies to agent actions in a repo.
+**Build.** Extend `/undo` and `/rewind` beyond files edited by our tools: run risky shell commands inside a transaction (git stash/worktree snapshot plus, where the sandbox (G6) allows, an overlay filesystem) so side effects on tracked and untracked files can be reverted; flag commands whose effects cannot be reversed (network writes, package publishes, database changes) and always ask for those. `/undo` reports exactly what it could and could not restore.
+**Measure.** Eval tasks with a deliberately destructive step; after undo the workspace hash equals the starting hash.
+**Accept.** Tests: a shell command that rewrites many files is fully reverted; irreversible commands are labelled before they run.
+
+## Compounding
+
+### L11. Best-of-n with a hybrid verifier
+**Evidence.** Test-time scaling works for software agents when selection uses execution-based and execution-free verifiers together, and generated tests help ([R2E-Gym](https://arxiv.org/abs/2504.07164), [DeepSWE](https://www.together.ai/blog/deepswe), *snippet*); verifier quality is not measured by scaling alone ([SWE-RM](https://arxiv.org/abs/2512.21919), *snippet*). Flawed benchmark tests make test-based selection risky (*snippet*).
+**Build.** Needs G13 and L3. For tasks flagged hard (or after an L2 stagnation stop), run n attempts in separate worktrees, select with: held-out-style generated tests, the user's verify command, and the L3 evaluator, in that order; apply the winner. Hard cap on n and tokens; always shows the cost before starting.
+**Measure.** Pass rate and dollars per solved task on the hard subset vs a single attempt; keep only if it wins on cost per solve, not just pass rate.
+**Accept.** Tests: attempts do not interfere; selection prefers a candidate that passes the generated tests; the budget cap holds.
+
+### L12. `amness tune`: bounded self-improvement
+**Evidence.** Meta-Harness and AHE evolve harness code and components from traces ([survey](https://lilianweng.github.io/posts/2026-07-04-harness/), *read*; [Self-HPO 2610.22791](https://arxiv.org/abs/2610.22791), *snippet*). Safe versions bound the editable surface, keep the verifier and permissions outside the loop, accept edits only if held-in tasks improve and held-out tasks do not regress, and log rejected candidates; self-modifications must be recoverable ([EvoUndo](https://arxiv.org/abs/2608.28363), *read abstract*).
+**Build.** Needs L4, L5, L8. Make the tunable surface explicit data (system prompt text, tool descriptions, thresholds, nudge wording, profile) in `.amness/harness/`, versioned in git. `amness tune` proposes one attributable edit at a time (failure named, root cause, fix, predicted regressions), evaluates it with the paired statistics on held-in and held-out sets, and keeps it only if it is better and breaks nothing. The eval runner, verifier, permissions and model config are read-only to the loop. Every accepted edit is a commit that can be reverted.
+**Measure.** Held-out pass rate and cost per solve before and after a tuning run on the user's own failure-mined tasks.
+**Accept.** Tests with a scripted proposer: a harmful edit is rejected and logged; a helpful one is committed; the loop cannot touch read-only files.
+
+### L13. Parallel worktree agents with a test-gated merge
+**Evidence.** Eight of eleven studied systems support sub-agents, with orchestration ranging from sequential delegation to parallel trees ([source study](https://arxiv.org/html/2609.00006v1), *read*). Multi-agent setups can add cost without gain, so this ships only if measured.
+**Build.** Needs G8, G13. A coordinator splits a task into independent parts, each runs in its own worktree with its own budget, results merge through the verify gate; conflicts go back to the coordinator, not the user.
+**Measure.** Multi-part tasks: wall time and cost vs a single agent; keep only if it wins on wall time without losing pass rate.
+**Accept.** Tests: independent parts run concurrently; a conflicting merge is reported and not applied; budgets are per agent and total.
+
+## Evidence quality
+
+Items marked *read* rest on a page or abstract I fetched. Items marked *snippet* rest on search-result summaries only and must be re-checked against the paper before we copy any number or design detail. The percentages above are the papers' own results, not measurements of Amness; each Track B item has a **Measure** step precisely so we find out what holds on our own tasks.
+
 ## Sources
 
 - [Harness Engineering: Anatomy, Architecture, and Evolution of Coding Agents: A Source-Code Study of Eleven Systems](https://arxiv.org/html/2609.00006v1): hooks, sandboxes, skills, subagents, tracing and indexing across Claude Code, Codex, Gemini CLI, OpenCode, Aider and others.
 - [CLI Coding Agents Comparison](https://hidekazu-konishi.com/entry/cli_coding_agents_comparison.html): hooks, skills, subagents, IDE integration and instruction-file conventions per tool (a blog; "not documented" there does not mean absent).
 - [A Comparison of AI Agent Harnesses in 2026](https://winder.ai/ai-agent-harness-comparison/) and [Code as Agent Harness](https://arxiv.org/html/2605.18747v1): surveys of the landscape.
 - [An Empirical Study of Harness Design for Coding Agents](https://arxiv.org/abs/2609.20804): editing strategy and action space matter; keep stuck detection and post-edit checks.
+- [Harness design for long-running apps (Anthropic)](https://www.anthropic.com/engineering/harness-design-long-running-apps): planner, generator and separate evaluator; sprint contracts; resets vs compaction; remove scaffolding one piece at a time.
+- [When Do Agent Loops Mistake Stagnation for Progress?](https://arxiv.org/abs/2607.25152): self-evaluation bias; externally grounded gating.
+- [Harness Engineering for Self-Improvement (Lilian Weng)](https://lilianweng.github.io/posts/2026-07-04-harness/): what can be optimised, evaluators outside the loop, held-out gates.
+- [EvoUndo](https://arxiv.org/abs/2608.28363) (recoverable self-modification), [AgentRouter](https://arxiv.org/abs/2609.22951) (per-step routing), [Code Isn't Memory](https://arxiv.org/abs/2606.22417) (structural index), [Engineering Reliable Coding Agents](https://arxiv.org/abs/2608.13867) (system-level reliability).
 
 Several of these sources are blogs and disagree on details; verify against each tool's official docs before copying a behaviour.
 
@@ -151,3 +294,4 @@ Several of these sources are blogs and disagree on details; verify against each 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
 - (nothing closed yet)
+- 2026-10-27: roadmap deepened with Track B (L1 to L14) from a second round of papers and engineering posts.
