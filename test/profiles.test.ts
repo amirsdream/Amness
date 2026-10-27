@@ -20,17 +20,17 @@ test("profile: patterns match model names, the project overrides the user, guard
 const row = (variant: string, c: number, t: number, pass: boolean, tokens: number): Row => ({ case: "t" + c, variant, trial: t, pass, steps: 1, tokens, ms: 1 });
 test("recommend: remove only what the data supports; load-bearing guards stay; weak evidence is called out", () => {
   const rows: Row[] = [];
-  for (let c = 0; c < 20; c++) for (let t = 0; t < 3; t++) {
-    rows.push(row("full", c, t, c < 14, 1000));
-    rows.push(row("full-nudge", c, t, c < 14, 800));                    // same pass rate, cheaper: removable
-    rows.push(row("full-ledger", c, t, c < 7, 1000));                   // loses half the tasks: load-bearing
-    rows.push(row("full-loop", c, t, c < 14 || (c < 18 && t === 0), 1000));  // maybe slightly better, not significant
-    rows.push(row("full-wrapup", c, t, c < 14, 1000));                  // no effect, no saving: stays
+  for (let c = 0; c < 40; c++) for (let t = 0; t < 3; t++) {
+    rows.push(row("full", c, t, c < 28, 1000));
+    rows.push(row("full-nudge", c, t, c < 28, 800));                    // same pass rate, cheaper: removable
+    rows.push(row("full-ledger", c, t, c < 14, 1000));                   // loses half the tasks: load-bearing
+    rows.push(row("full-loop", c, t, c < 28 || (c < 36 && t === 0), 1000));  // maybe slightly better, not significant
+    rows.push(row("full-wrapup", c, t, c < 28, 1000));                  // no effect, no saving: stays
   }
   const r = recommend(analyze(rows, { baseline: "full" })), by = (g: string) => r.verdicts.find((v) => v.guard === g)!;
   assert.equal(by("nudge").action, "remove"); assert.match(by("nudge").why, /does not hurt[\s\S]*lowers tokens per solved task by 286/);
   assert.equal(by("ledger").action, "keep"); assert.match(by("ledger").why, /removing it loses 35 pts/);
   assert.equal(by("wrapup").action, "undecided"); assert.notEqual(by("loop").action, "keep");
-  assert.deepEqual(r.profile.off, ["nudge"]); assert.match(r.strength, /20 tasks × 3 trial/);
+  assert.deepEqual(r.profile.off, ["nudge"]); assert.match(r.strength, /40 tasks × 3 trial/);
   const few = recommend(analyze(rows.filter((x) => Number(x.case.slice(1)) < 4), { baseline: "full" })); assert.match(few.strength, /weak evidence/);
 });
