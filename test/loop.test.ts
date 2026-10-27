@@ -57,3 +57,51 @@ test("supersede: an older identical call's output is dropped, the newest stays",
   supersede(msgs);
   assert.match(msgs[1].content!, /superseded/); assert.equal(msgs[3].content, big);
 });
+
+test("condense: strips control codes and progress redraws, collapses repeats, keeps error lines from a cut middle", async () => {
+  const { condense } = await import("../src/harness.ts");
+  assert.equal(condense("\x1b[31mred\x1b[0m"), "red");
+  assert.equal(condense("10%\r50%\r100%\ndone"), "100%\ndone");
+  assert.match(condense(Array(50).fill("tick").join("\n")), /tick\n  … previous line repeated 49 more times/);
+  const noisy = ["start", ...Array.from({ length: 2000 }, (_, i) => `ok line ${i}`), "FAIL: expected 3 got 4", ...Array.from({ length: 2000 }, (_, i) => `more ${i}`), "end"].join("\n");
+  const c = condense(noisy, 3000);
+  assert.ok(c.length < 3600 && c.includes("FAIL: expected 3 got 4") && c.startsWith("start") && c.endsWith("end"));
+  assert.equal(condense("a\na\nb"), "a\na\nb");   // two repeats are left alone
+});
+
+test("supersede: a read of a file edited afterwards is expired", () => {
+  const big = "x".repeat(400), call = (id: string, name: string, path: string): Message => ({ role: "assistant", content: null, tool_calls: [{ id, function: { name, arguments: JSON.stringify({ path }) } }] });
+  const msgs: Message[] = [call("r", "read_file", "a.ts"), { role: "tool", tool_call_id: "r", content: big }, call("e", "edit_file", "a.ts"), { role: "tool", tool_call_id: "e", content: "edited " + big },
+    call("o", "read_file", "b.ts"), { role: "tool", tool_call_id: "o", content: big }, ...Array.from({ length: 6 }, () => ({ role: "user", content: "pad" }) as Message)];
+  const saved = supersede(msgs, 6, (n) => n === "read_file");
+  assert.match(msgs[1].content!, /stale/); assert.equal(msgs[3].content, "edited " + big); assert.equal(msgs[5].content, big); assert.ok(saved > 300);
+});
+
+test("compact: cuts well below the budget once over it (so the cached prefix stays stable afterwards)", async () => {
+  const { compact } = await import("../src/harness.ts");
+  const msgs: Message[] = Array.from({ length: 20 }, (_, i) => ({ role: "tool", tool_call_id: "t" + i, content: "y".repeat(1000) }));
+  assert.equal(compact(msgs, 30_000), 0);
+  const saved = compact(msgs, 15_000);
+  const left = msgs.reduce((n, m) => n + (m.content?.length ?? 0), 0);
+  assert.ok(left <= 15_000 * 0.7 + 1000 && saved > 0, String(left));
+});
+
+test("post-edit check: a failing check is appended to the edit result, a passing one adds nothing", async () => {
+  const { createCodeAgent } = await import("../src/index.ts");
+  const { mkdtempSync, writeFileSync } = await import("node:fs"); const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+  for (const [check, expect] of [["echo BROKEN >&2; exit 1", true], ["true", false]] as const) {
+    const dir = mkdtempSync(join(tmpdir(), "amness-chk-")); writeFileSync(join(dir, "a.js"), "x\n");
+    const { model, seen } = scripted(call(["read_file", { path: "a.js" }]), call(["edit_file", { path: "a.js", old: "x", new: "y" }]), call(["finish", { summary: "." }]));
+    await createCodeAgent({ model, cwd: dir, check, permissions: { mode: () => "yolo" }, memory: false }).run("t");
+    const edit = seen.at(-1)!.filter((m) => m.role === "tool")[1].content!;
+    assert.equal(/post-edit check/.test(edit) && edit.includes("BROKEN"), expect, edit);
+  }
+});
+
+test("harness emits trim events when it shrinks noisy output", async () => {
+  const noisy = defineTool({ name: "noisy", description: "", schema: obj, run: () => Array(500).fill("progress line").join("\n") });
+  const ev: any[] = [];
+  const { model } = scripted(call(["noisy", {}]), call(["finish", { summary: "." }]));
+  await createHarness({ model, tools: [noisy], onEvent: (e) => ev.push(e) }).run("x");
+  assert.ok(ev.some((e) => e.kind === "trim" && e.saved > 300));
+});

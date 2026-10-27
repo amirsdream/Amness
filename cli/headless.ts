@@ -9,6 +9,7 @@ import { createModel } from "./model.ts";
 export const HELP = `usage: amness run [flags] "task"
   --cwd <dir>          workspace (default .)
   --verify <cmd>       command that must exit 0 before the agent may finish
+  --check <cmd>        fast command run after every edit; failures are shown to the agent immediately
   --provider <id>      ${Object.keys(PROVIDERS).join(" | ")}    --model <id>    --base-url <url>    --effort none|low|medium|high|xhigh|max   --api auto|responses|chat
   --bundle <file>      continue from a portable session bundle (any provider/model)
   --export <file>      write a portable session bundle when done
@@ -34,7 +35,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   cfg.baseUrl = val("--base-url") ?? cfg.baseUrl;
   cfg.api = (val("--api") as typeof cfg.api) ?? cfg.api;
   cfg.effort = (val("--effort") as typeof cfg.effort) ?? cfg.effort;
-  const cwd = resolve(val("--cwd") ?? "."), verify = val("--verify"), bundle = val("--bundle"), exportTo = val("--export");
+  const cwd = resolve(val("--cwd") ?? "."), verify = val("--verify"), check = val("--check"), bundle = val("--bundle"), exportTo = val("--export");
   const yes = bool("--yes"), json = bool("--json"), noMemory = bool("--no-memory");
   const li = args.indexOf("--live"); let livePort: number | undefined;
   if (li >= 0) { const nxt = args[li + 1]; livePort = /^\d+$/.test(nxt ?? "") ? Number(args.splice(li, 2)[1]) : (args.splice(li, 1), 0); }
@@ -49,7 +50,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   const budget = new Budget({ maxTokens });
   const model = createModel(cfg);
   const agent = createCodeAgent({
-    model, cwd, verify, approve, budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
+    model, cwd, verify, check, approve, budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e: Event) => { live?.onEvent(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
   try {

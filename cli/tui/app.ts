@@ -53,7 +53,7 @@ export class App {
   shRules = new Set<string>(); toolRules = new Set<string>();
   model!: Model; agent!: ReturnType<typeof createCodeAgent>; budget = new Budget();
   store: SessionStore; session: SessionData; edits: EditEv[] = [];
-  verify: string | undefined;
+  verify: string | undefined; check: string | undefined; trimmed = 0;
   runSeries: number[] = []; thinkBuf = "";
   phase: { phase: string; step: number; max: number; n?: number } | undefined; activity: { name: string; args: string; ms: number; ok: boolean }[] = [];
   /** One entry per loop iteration of the conversation so far, for /loop. */
@@ -108,7 +108,7 @@ export class App {
     this.model = (this.opts.makeModel ?? ((c) => createModel(c, undefined, { cacheKey })))(this.cfg);
     this.agent = createCodeAgent({
       model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
   }
@@ -439,6 +439,7 @@ export class App {
         void t; this.inlineOnly(lines); break;
       }
       case "todos": this.todos = e.todos; break;
+      case "trim": if (!sub) { this.trimmed += e.saved; this.stepNow().notes.push(`trimmed ~${fmtTokens(Math.round(e.saved / 4))} tokens (${e.what})`); } break;
       case "phase": if (!sub) {
         this.phase = { phase: e.phase, step: e.step, max: e.max, n: e.n };
         if (e.phase === "model") this.trace = [...this.trace, { n: this.trace.length + 1, t0: Date.now(), ms: 0, prompt: 0, completion: 0, tools: [], notes: [] }].slice(-300);
@@ -553,11 +554,12 @@ export class App {
   private rebuildBlocksIfEmpty() { if (!this.blocks.blocks.length && this.session.messages.length) this.blocks.loadMessages(this.session.messages); }
   rebuildBlocks() { this.blocks.loadMessages(this.session.messages); this.full?.invalidate(); }
   async resumeById(id: string) { const s = this.store.load(id); if (!s) return; this.loadSession(s); this.rebuildBlocks(); this.render(); }
-  newConversation() { this.saveSession(); this.session = newSession(this.cwd, this.cfg.model); this.edits = []; this.trace = []; this.lastPrompt = 0; this.todos = []; this.pendingContext = []; this.blocks.clear(); this.full?.invalidate(); this.buildAgent(); }
+  newConversation() { this.saveSession(); this.session = newSession(this.cwd, this.cfg.model); this.edits = []; this.trace = []; this.trimmed = 0; this.lastPrompt = 0; this.todos = []; this.pendingContext = []; this.blocks.clear(); this.full?.invalidate(); this.buildAgent(); }
   loadSession(s: SessionData) { this.saveSession(); this.session = s; this.recount(); this.edits = []; }
   saveSession() { if (this.persist && this.session.turns.length) try { this.session.model = this.cfg.model; this.store.save(this.session); } catch { /* read-only dir */ } }
   saveHistory() { if (!this.persist) return; try { mkdirSync(home(), { recursive: true }); writeFileSync(join(home(), "history.json"), JSON.stringify(this.editor.history.slice(0, 200))); } catch { /* ignore */ } }
   saveConfig() { if (this.persist) saveConfig(this.cfg); }
+  setCheck(cmd: string | undefined) { this.check = cmd; this.buildAgent(); }
   setVerify(cmd: string | undefined) { this.verify = cmd; if (this.persist) { const st = loadState(); if (cmd) st.verifyByDir[this.cwd] = cmd; else delete st.verifyByDir[this.cwd]; saveState(st); } this.buildAgent(); }
   async ensureLive() { if (!this.live) this.live = await startLive({ title: "Amness" }); return this.live; }
   providerInfo() { return PROVIDERS[this.cfg.provider]; }

@@ -32,7 +32,7 @@ export function formatEvent(e: Event & { agent?: string }): string {
       return `${who}${yellow("✎")} ${bold(e.path)} ${e.created ? green("new file ") : ""}${green("+" + e.added)} ${red("-" + e.removed)}\n${shown.join("\n")}`;
     }
     case "aborted": return `${who}${yellow("⏹ stopped")} ${dim("run interrupted; progress is saved and can be resumed")}`;
-    case "turn": case "phase": case "toolstart": case "text": case "thinking": case "assistant": case "todos": case "steer": return "";
+    case "turn": case "phase": case "trim": case "toolstart": case "text": case "thinking": case "assistant": case "todos": case "steer": return "";
     case "rollover": return `${who}${magenta("⟳ context rollover")} ${dim("handoff note written; continuing in a fresh context")}`;
     case "finish": return `${who}${green("✔ finish")} ${dim(one(e.summary, 80))}`;
   }

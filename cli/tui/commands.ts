@@ -120,7 +120,7 @@ export function buildCommands(): Cmd[] {
     { name: "loop", alias: "trace", help: "step-by-step trace of the agent loop: model turns, tools, guards", live: true, run: (a) => {
       const T = a.trace; if (!T.length) return a.say(dim("no loop activity yet: send a task first"));
       const tot = T.reduce((n, s) => n + s.completion + s.prompt, 0), ms = T.reduce((n, s) => n + s.ms, 0);
-      const out = ["", bold(`Agent loop · ${T.length} turn${T.length === 1 ? "" : "s"} · ${fmtDuration(ms)} · ${fmtTokens(tot)} tokens`), dim("each turn: the model answers, its tool calls run, results go back; guards are shown where they fired"), ""];
+      const out = ["", bold(`Agent loop · ${T.length} turn${T.length === 1 ? "" : "s"} · ${fmtDuration(ms)} · ${fmtTokens(tot)} tokens`), dim(`${a.trimmed ? `trimmed ~${fmtTokens(Math.round(a.trimmed / 4))} tokens of stale or noisy output · ` : ""}each turn: the model answers, its tool calls run, results go back; guards are shown where they fired`), ""];
       for (const s of T) {
         const pad = String(s.n).padStart(2);
         out.push(`${cyan(`${pad} ●`)} ${bold("model")} ${dim(`${fmtDuration(s.ms)} · ${fmtTokens(s.prompt)} in · ${fmtTokens(s.completion)} out${s.cached ? ` · ${fmtTokens(s.cached)} cached` : ""}`)}`);
@@ -135,6 +135,10 @@ export function buildCommands(): Cmd[] {
         toolDefChars: JSON.stringify(a.agent.registry.visible({ step: 0, messages: [] }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }))).length }));
     } },
     { name: "todos", help: "show the agent's checklist", live: true, run: (a) => a.commit(["", ...(a.todos.length ? todoList(a.todos, a.width) : [dim("  no todo list right now")])]) },
+    { name: "check", help: "fast command run after every edit (typecheck, lint); failures go straight back to the model", args: "[cmd|off]", run: (a, arg) => {
+      if (!arg) return void a.say(a.check ? `post-edit check: ${cyan(a.check)}` : "no post-edit check set. /check npx tsc --noEmit", dim);
+      a.setCheck(arg === "off" ? undefined : arg); a.say(arg === "off" ? "post-edit check off" : `post-edit check → ${cyan(arg)}`, dim);
+    } },
     { name: "verify", help: "command that must pass before it may finish", args: "[cmd|off]", run: (a, arg) => {
       if (!arg) return void a.say(a.verify ? `verify: ${cyan(a.verify)}` : "no verify command set. /verify npm test", dim);
       a.setVerify(arg === "off" ? undefined : arg); a.say(arg === "off" ? "verify gate off" : `verify gate → ${cyan(arg)}`, dim);

@@ -123,6 +123,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/mode` · `/plan` · `/verify <cmd>` | permissions, plan mode, the "done must be proven" command |
 | `/clear` · `/compact` · `/resume` | new conversation, summarise to free context, continue an earlier one |
 | `/undo` · `/rewind` · `/diff` | revert the last turn (files and conversation), go back to a turn, review all changes |
+| `/check <cmd>` | fast command run after every edit; only failures reach the model |
 | `/loop` (alias `/trace`) | step-by-step trace of the agent loop: each model turn, its tools and timings, and any guard that fired |
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
 | `/memory` · `/init` | list/forget/add memory notes · have the agent write `AGENTS.md` |
@@ -161,6 +162,7 @@ amness run --verify "npm test" --json "fix the failing test"      # one-shot, no
 |---|---|
 | `--cwd <dir>` | workspace (default `.`) |
 | `--verify <cmd>` | must exit 0 before the agent may finish |
+| `--check <cmd>` | fast command run after every edit; failures are shown to the agent at once |
 | `--provider`, `--model`, `--base-url`, `--effort`, `--api` | model selection |
 | `--yes` | auto-approve risky commands (default: they are denied) |
 | `--json` | one JSON event per line on stdout, then a final `{"kind":"result"}` line |
@@ -287,9 +289,21 @@ flowchart LR
 Each turn: steer (messages you typed meanwhile) → budget check → compaction → model call → tool calls → verification gate. The details that keep long runs reliable:
 
 - **Scheduling.** Read-only and subagent calls in one turn run concurrently (up to 5); anything that can change state runs alone, in the order issued. Mark your own tools `readOnly` or `parallel` to opt in.
-- **Compaction in stages.** Repeated identical calls drop their stale older output first, then old tool output is elided, and on very long runs the model writes a handoff note and continues in a fresh context.
+- **Compaction in stages, cheapest first.** Observations are condensed as they arrive (terminal codes and progress redraws stripped, repeated lines collapsed, long output cut to head and tail plus its error lines). Older output that is repeated or **expired** (a read of a file that was edited afterwards) is dropped, then old tool output is elided, and only on very long runs does the model write a handoff note and continue in a fresh context. Elision cuts well below the budget in one go, so the provider's prompt-cache prefix stays valid between cuts. `/loop` shows how much was trimmed.
+- **Post-edit check.** `/check <cmd>` (headless `--check`, library `check`) runs a fast command such as a typecheck after every edit. Only a failure is shown to the model, appended to the edit result, so a mistake is caught one step after it happens instead of at the end.
 - **Guards.** Repeat-call detection, a nudge when the model announces an action instead of taking it, a wrap-up warning three steps before the step cap, and no-progress detection (a reflection prompt after 3 all-failing turns, a clean stop after 6).
 - **Done means verified.** `finish` passes through your `verify` gate (tests, build) and is rejected with feedback until it holds.
+
+### Where these choices come from
+
+Recent work on coding-agent loops points the same way, and the loop follows it where it can be done without training a model:
+
+- [An Empirical Study of Harness Design for Coding Agents](https://arxiv.org/abs/2609.20804) (2026): cheap rule-based elision before any LLM summarisation gave the lowest cost; a recall tool for elided content was almost never used, so there isn't one; stuck detection and lightweight post-edit checks are cheap ways to stop wasted turns.
+- [AgentDiet](https://arxiv.org/abs/2509.23586) (trajectory reduction): removing useless, redundant and *expired* information cut input tokens 40-60% with unchanged results. This is the source of the expired-read and repeated-call rules.
+- [CoACT](https://arxiv.org/abs/2607.02911) and [SWE-Pruner](https://arxiv.org/abs/2601.16746): reads dominate token use, and compression must preserve what the next action needs, and leave earlier messages untouched to keep the cache valid. amness uses rules for this; the papers use trained compressors, which would add a dependency.
+- A [source-code study of eleven coding agents](https://arxiv.org/html/2609.00006v1): read-only tools run concurrently, mutating tools one at a time.
+
+The percentages above are the papers' results on their own benchmarks, not measurements of amness; use the eval runner (`evaluate`) with the guards switched on and off to measure them on your tasks.
 
 ## Safety and privacy
 

@@ -65,6 +65,8 @@ export type Event =
   | { kind: "edit"; path: string; created: boolean; added: number; removed: number; diff: string; /** File content before the edit (null = it did not exist); lets a UI offer undo. */ before?: string | null }
   | { kind: "turn"; step: number; tokens: number; prompt: number; completion: number; cached: number; reasoning: number }
   | { kind: "rollover"; detail: string }
+  /** Context that was shrunk without losing anything current (chars; roughly 4 per token). */
+  | { kind: "trim"; saved: number; what: string }
   /** Where the loop is: lets a UI show live progress. `step` is 0-based; `n` is the number of tool calls in the batch. */
   | { kind: "phase"; phase: "model" | "tools" | "verify" | "compact"; step: number; max: number; n?: number }
   | { kind: "finish"; summary: string };
@@ -150,27 +152,66 @@ const INTENT = /\b(i'll|i will|let me(?! know)|next,? i|now i|i am going to|i'm 
 export const clip = (s: string, n = 6000) =>
   s.length <= n ? s : `${s.slice(0, (n * 2) / 3)}\n...[${s.length - n} chars cut]...\n${s.slice(-n / 3)}`;
 
-/** Same call repeated later in the transcript: the older output is stale, so drop it first (cheapest compaction, loses nothing current). */
-export function supersede(msgs: Message[], keep = 6) {
-  const calls = new Map<string, string>(), latest = new Map<string, string>();
-  for (const m of msgs) for (const c of m.tool_calls ?? []) { const k = c.function.name + c.function.arguments; calls.set(c.id, k); latest.set(k, c.id); }
-  for (const m of msgs.slice(0, -keep)) {
-    const k = m.role === "tool" && m.tool_call_id ? calls.get(m.tool_call_id) : undefined;
-    if (k && latest.get(k) !== m.tool_call_id && (m.content?.length ?? 0) > 200 && !m.content!.startsWith("[")) m.content = "[superseded: this call was repeated later; see the newer result]";
+const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+const SIGNAL = /error|fail|warn|exception|assert|panic|traceback|✗|expected|actual|cannot|not found|denied/i;
+/**
+ * Shrink a tool observation before it enters the transcript, keeping what the next action depends on
+ * (CoACT's "action-preserving" rule, done with rules instead of a trained compressor): strip terminal control codes and
+ * progress-bar redraws, collapse repeated lines, and when still too long keep head and tail plus the error-looking lines from the middle.
+ */
+export function condense(s: string, max = 6000): string {
+  let t = s.replace(ANSI, "");
+  if (t.includes("\r")) t = t.split("\n").map((l) => (l.includes("\r") ? l.split("\r").filter(Boolean).pop() ?? "" : l)).join("\n");
+  const lines = t.split("\n"), out: string[] = [];
+  for (let i = 0; i < lines.length; ) {
+    let j = i + 1; while (j < lines.length && lines[j] === lines[i]) j++;
+    const n = j - i;
+    if (!lines[i].trim() || n <= 2) out.push(...lines.slice(i, j)); else out.push(lines[i], `  … previous line repeated ${n - 1} more times`);
+    i = j;
   }
+  t = out.join("\n").replace(/\n{4,}/g, "\n\n\n");
+  if (t.length <= max) return t;
+  const head = t.slice(0, Math.floor(max * 0.4)), tail = t.slice(t.length - Math.floor(max * 0.3)), mid = t.slice(head.length, t.length - tail.length);
+  const sig = mid.split("\n").filter((l) => SIGNAL.test(l)).map((l) => l.slice(0, 200)).slice(0, 25).join("\n");
+  return `${head}\n...[${mid.length} chars cut${sig ? "; the error/warning lines from the cut part follow" : ""}]...\n${sig ? sig + "\n...\n" : ""}${tail}`;
+}
+
+/** Same call repeated later in the transcript: the older output is stale, so drop it first (cheapest compaction, loses nothing current). */
+export function supersede(msgs: Message[], keep = 6, isRead?: (tool: string) => boolean): number {
+  const calls = new Map<string, { key: string; name: string; path?: string }>(), latest = new Map<string, string>();
+  for (const m of msgs) for (const c of m.tool_calls ?? []) {
+    let path: string | undefined; try { const p = JSON.parse(c.function.arguments || "{}").path; if (typeof p === "string") path = p; } catch { /* not JSON: no path */ }
+    const key = c.function.name + c.function.arguments; calls.set(c.id, { key, name: c.function.name, path }); latest.set(key, c.id);
+  }
+  // "Expired" reads (AgentDiet): a read of a file that was edited afterwards no longer describes the file.
+  const editedAt = new Map<string, number>();
+  if (isRead) msgs.forEach((m, i) => { const c = m.role === "tool" && m.tool_call_id ? calls.get(m.tool_call_id) : undefined; if (c?.path && !isRead(c.name) && !/^(ERROR|DENIED|REJECTED)/.test(m.content ?? "")) editedAt.set(c.path, i); });
+  let saved = 0;
+  msgs.slice(0, -keep).forEach((m, i) => {
+    const c = m.role === "tool" && m.tool_call_id ? calls.get(m.tool_call_id) : undefined;
+    if (!c || (m.content?.length ?? 0) <= 200 || m.content!.startsWith("[")) return;
+    const stale = c.path !== undefined && isRead?.(c.name) && (editedAt.get(c.path) ?? -1) > i;
+    const note = stale ? "[stale: this file was edited afterwards; read it again if you need the current contents]" : latest.get(c.key) !== m.tool_call_id ? "[superseded: this call was repeated later; see the newer result]" : "";
+    if (note) { saved += m.content!.length - note.length; m.content = note; }
+  });
+  return saved;
 }
 
 /** Elide old tool outputs once the transcript passes `budget` chars; the last `keep` messages stay intact. */
-export function compact(msgs: Message[], budget = 60_000, keep = 6) {
+export function compact(msgs: Message[], budget = 60_000, keep = 6): number {
   let total = msgs.reduce((n, m) => n + (m.content?.length ?? 0), 0);
+  if (total <= budget) return 0;
+  // Hysteresis: once over budget, cut well below it in one go. Every edit to old messages breaks the provider's prompt-cache prefix, so do it rarely.
+  const target = budget * 0.7, start = total;
   for (const m of msgs.slice(0, -keep)) {
-    if (total <= budget) break;
+    if (total <= target) break;
     if (m.role === "tool" && (m.content?.length ?? 0) > 300) {
       const old = m.content!.length;
       m.content = `[old output elided, ${old} chars; call the tool again if you need it]`;
       total -= old - m.content.length;
     }
   }
+  return start - total;
 }
 
 const MAX_PARALLEL = 5;
@@ -207,7 +248,7 @@ export function createHarness(o: Options) {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
     const seen = new Map<string, number>();
     const max = o.maxSteps ?? 30;
-    let nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
+    let ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     for (let step = 0; step < max; step++) {
@@ -232,7 +273,7 @@ export function createHarness(o: Options) {
       }
       o.checkpoint?.(msgs);
       emit({ kind: "phase", phase: "compact", step, max });
-      if (!off.has("compact") && !o.model.appendOnly) { supersede(msgs); compact(msgs, o.contextBudget); }
+      if (!off.has("compact") && !o.model.appendOnly) { const s = supersede(msgs, 6, (n) => reg.get(n)?.readOnly === true) + compact(msgs, o.contextBudget); if (s > 0) emit({ kind: "trim", saved: s, what: "stale tool output" }); }
       const key = [...names].sort().join(",");
       if (step > 0 && key !== shown) emit({ kind: "tools", detail: key });
       shown = key;
@@ -300,7 +341,7 @@ export function createHarness(o: Options) {
         }
         let result: string;
         emit({ kind: "toolstart", id: c.id, name, args: raw });
-        try { const r = await t!.run(args, { registry: reg, step, emit, signal: sig() }); result = clip(typeof r === "string" ? r : JSON.stringify(r) ?? "ok"); }
+        try { const r = await t!.run(args, { registry: reg, step, emit, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = condense(raw); ingress += raw.length - result.length; }
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
         emit({ kind: "tool", id: c.id, name, args: raw, result });
         return result;
@@ -313,6 +354,7 @@ export function createHarness(o: Options) {
         results.push(...(safe(batch[0]) ? await pool(batch.map((c) => () => exec(c)), MAX_PARALLEL) : await pool(batch.map((c) => () => exec(c)), 1)));
         i = j;
       }
+      if (ingress > 300) { emit({ kind: "trim", saved: ingress, what: "tool output condensed" }); } ingress = 0;
       m.tool_calls.forEach((c, i) => msgs.push({ role: "tool", tool_call_id: c.id, content: results[i] }));
       if (done !== undefined) return end(done, true, step + 1);
       // No-progress detection: every call this turn failed. Reflect once, then stop instead of burning the budget.

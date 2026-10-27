@@ -31,7 +31,7 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
 }
 
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
-export function codeTools(cwd: string, o: { onChange?: (path: string) => void; mode?: () => PermMode } = {}): Tool[] {
+export function codeTools(cwd: string, o: { onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
   const mode = o.mode;
   const mutating = mode ? { risky: () => (mode() === "default" ? "modify a file" : false), when: () => mode() !== "plan" } : {};
   const root = resolve(cwd);
@@ -74,17 +74,17 @@ export function codeTools(cwd: string, o: { onChange?: (path: string) => void; m
     defineTool<{ path: string; content: string }>({ name: "write_file", description: "Create a file, or fully overwrite one you have already read.",
       schema: { type: "object", required: ["path", "content"], properties: { path: { type: "string" }, content: { type: "string" } } }, ...mutating,
       preview: ({ path, content }) => unifiedDiff(path, existsSync(abs(path)) ? readFileSync(abs(path), "utf8") : null, content).diff,
-      run: ({ path, content }, ctx) => {
+      run: async ({ path, content }, ctx) => {
         mustRead(path);
         const a = abs(path), before = existsSync(a) ? readFileSync(a, "utf8") : null;
         mkdirSync(dirname(a), { recursive: true }); writeFileSync(a, content); readSet.add(a); o.onChange?.(path);
         ctx.emit?.({ kind: "edit", ...unifiedDiff(path, before, content), before: before === null || before.length < 500_000 ? before : undefined });
-        return `wrote ${content.length} chars to ${path}`;
+        return `wrote ${content.length} chars to ${path}` + (await o.check?.() ?? "");
       } }),
     defineTool<{ path: string; old: string; new: string }>({ name: "edit_file", description: "Replace one exact, unique occurrence of `old` with `new` in a file you have read. Shows the result.",
       schema: { type: "object", required: ["path", "old", "new"], properties: { path: { type: "string" }, old: { type: "string" }, new: { type: "string" } } }, ...mutating,
       preview: ({ path, old, new: nw }) => { const s = readFileSync(abs(path), "utf8"); return s.split(old).length === 2 ? unifiedDiff(path, s, s.replace(old, () => nw)).diff : undefined; },
-      run: ({ path, old, new: nw }, ctx) => {
+      run: async ({ path, old, new: nw }, ctx) => {
         mustRead(path);
         const a = abs(path), s = readFileSync(a, "utf8"), n = s.split(old).length - 1;
         if (n !== 1) return `ERROR: \`old\` matched ${n} times; it must match exactly once. Include more surrounding lines.`;
@@ -92,7 +92,7 @@ export function codeTools(cwd: string, o: { onChange?: (path: string) => void; m
         writeFileSync(a, out); o.onChange?.(path);
         ctx.emit?.({ kind: "edit", ...unifiedDiff(path, s, out), before: s.length < 500_000 ? s : undefined });
         const line = s.slice(0, s.indexOf(old)).split("\n").length;
-        return `edited ${path}:\n` + out.split("\n").slice(Math.max(0, line - 3), line + nw.split("\n").length + 2).map((l, i) => `${Math.max(1, line - 2) + i}\t${l}`).join("\n");
+        return `edited ${path}:\n` + out.split("\n").slice(Math.max(0, line - 3), line + nw.split("\n").length + 2).map((l, i) => `${Math.max(1, line - 2) + i}\t${l}`).join("\n") + (await o.check?.() ?? "");
       } }),
     defineTool<{ cmd: string; timeout?: number }>({ name: "sh", description: "Run a shell command in the workspace; returns exit code and output. Dangerous commands need human approval.",
       schema: { type: "object", required: ["cmd"], properties: { cmd: { type: "string" }, timeout: { type: "integer", description: "seconds, default 60" } } },
@@ -139,6 +139,8 @@ export type CodeAgentOptions = {
   cwd: string;
   /** Shell command that must exit 0 (e.g. "npm test") before `finish` is accepted. */
   verify?: string;
+  /** Fast command (typecheck, lint) run after every edit. Only a failure is shown to the model, appended to the edit result, so mistakes are caught one step after they happen. */
+  check?: string;
   approve?: Approve;
   budget?: Budget;
   maxSteps?: number;
@@ -166,7 +168,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const touched = new Set<string>();
   const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
   const mode = o.permissions?.mode;
-  const registry = new Registry([...codeTools(o.cwd, { onChange: (p) => touched.add(p), mode }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
+  const registry = new Registry([...codeTools(o.cwd, { onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
   let todos: { content: string; status: "pending" | "in_progress" | "done" }[] = [];
   if (o.chat) {
     registry.add(
