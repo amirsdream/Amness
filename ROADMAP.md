@@ -69,7 +69,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | L12 | `amness tune`: bounded self-improvement with held-out gates | P3 | L | [ ] |
 | L13 | Parallel worktree agents with a test-gated merge | P3 | L | [ ] |
 | L14 | Benchmark adapters with leak audit and cost per solve | P3 | L | [~] |
-| G23 | README: shorter landing page, details moved to docs/ (see below) | P1 | M | [ ] |
+| G23 | README: shorter landing page, details moved to docs/ (see below) | P1 | M | [x] |
 
 ---
 
@@ -277,7 +277,7 @@ Each item lists the **evidence** (and how well I could check it: *read* = I read
 
 Items marked *read* rest on a page or abstract I fetched. Items marked *snippet* rest on search-result summaries only and must be re-checked against the paper before we copy any number or design detail. The percentages above are the papers' own results, not measurements of Amness; each Track B item has a **Measure** step precisely so we find out what holds on our own tasks.
 
-### G23. README for new visitors (feedback received 2026-10-28, to do next session)
+### G23. README for new visitors (feedback received 2026-10-28; done)
 - **Tighten the opening.** The description in the first paragraph packs many features into one long sentence: lead with the main benefit, then summarise the few key differentiators.
 - **List "The agent loop" in the contents** (it is a major section but missing from the contents line).
 - **Make it less overwhelming.** The README is about 470 lines and is both landing page and manual. Keep quick start, core usage, safety and limitations in `README.md`; move the deep feature and evaluation material (hooks, permissions, sandbox, skills, subagents, routing, memory internals, eval statistics, benchmarks, replay, tracing) into `docs/` pages and link them.
@@ -301,6 +301,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G23**: README cut from 476 to ~300 lines: a benefit-first opening and a short differentiator paragraph, a complete contents line, a 'More than a chat' index linking to docs/features.md, docs/agent-loop.md, docs/architecture.md and docs/evaluation.md (all feature text kept, nothing deleted), and a concrete local-model setup (Ollama, LM Studio, vLLM, llama.cpp). All relative links and anchors checked.
 - **G13**: amness --worktree [name] (own branch under .amness/worktrees, removed on exit when untouched), /review [base] (read-only reviewer over commits + uncommitted + untracked vs the base branch), /pr [draft] (model-drafted title/body shown first, gh pr create only after confirmation, push offered separately). src/gitflow.ts, src/worktree.ts, test/gitflow.test.ts (fake gh, local bare origin).
 - **L10**: shell commands are reversible in git repositories: a working-tree snapshot (git tree object via a private index, ignored files excluded) is taken before the first mutating command of a turn, /undo and /rewind restore changed/deleted files and remove created ones after restoring tool edits; commands with effects beyond the workspace (push, publish, kubectl, db writes, ssh, writes outside) are flagged 'cannot be undone' in the approval dialog and listed on undo. src/snapshot.ts, test/snapshot.test.ts. Not covered: ignored files, non-git workspaces, overlay filesystems.
 - **L9** (partly): taint tracking: a shell command containing 3+ consecutive words (or a 24+ char token) copied verbatim from an untrusted tool result needs approval regardless of mode or allow rules (taint: ask|deny|off); floor/deny/ask/allow layering with /policy explaining decisions; capability rules for web tools via the existing rule syntax. Adversarial suite built (amness eval --builtin adversarial --variants full,full-taint); attack success on a REAL model not measured.
