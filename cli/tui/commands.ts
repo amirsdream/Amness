@@ -6,7 +6,8 @@ import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
 import { estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
 import { codeBlocks } from "./clipboard.ts";
-import { caseFromWorkspace, formatMining, Hooks, Permissions, SANDBOX_MODES, cacheWaste, projectConfigFingerprint, sandboxHelp, sandboxKind, type SandboxMode } from "../../src/index.ts";
+import { execFile } from "node:child_process";
+import { caseFromWorkspace, commitLog, createPr, currentBranch, defaultBase, diffForReview, draftPr, hasUpstream, pushBranch, reviewWork, formatMining, Hooks, Permissions, SANDBOX_MODES, cacheWaste, projectConfigFingerprint, sandboxHelp, sandboxKind, type SandboxMode } from "../../src/index.ts";
 import { loadState, saveState } from "../state.ts";
 import { tokenReport } from "./tokens.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
@@ -196,6 +197,29 @@ export function buildCommands(): Cmd[] {
     { name: "reviewer", help: "independent skeptical reviewer: criteria before the work, a check before it is accepted (costs extra model calls)", args: "[on|off]", run: (a, arg) => {
       if (!arg) return void a.say(`reviewer is ${a.cfg.review ? "on" : "off"}. /reviewer on: a fresh, read-only reviewer writes acceptance criteria before a task and checks the work against them before it can finish (at most two rounds). Roughly +2 to +4 model calls per task.`, dim);
       a.cfg.review = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`reviewer ${arg === "on" ? "on" : "off"}`, dim);
+    } },
+    { name: "review", help: "a read-only review of your changes (vs the base branch, or /review <base>)", args: "[base]", run: async (a, arg) => {
+      let r; try { r = await diffForReview(a.cwd, arg || undefined); } catch (e) { return void a.say(`not a git repository, or git failed: ${(e as Error).message}`, red); }
+      if (!r.diff.trim()) return void a.say(`no changes against ${r.against} to review`, dim);
+      a.say(`reviewing ${r.diff.split("\n").filter((l) => l.startsWith("diff --git")).length} changed file(s) against ${r.against}…`, dim);
+      const v = await reviewWork({ model: a.roles.review ?? a.model, cwd: a.cwd, task: "Review these changes as a careful colleague would before they are merged.", contract: ["the change does what its code and commit messages suggest, without introducing bugs", "edge cases and error paths are handled", "nothing unrelated or leftover (debug code, secrets, commented-out code) is included", "behaviour that changed is covered by tests, or the missing tests are named"], summary: "(a human asked for a review; there is no author summary)", diffs: r.diff.slice(0, 60_000), commands: "", verify: a.verify, budget: a.budget });
+      a.commit(["", v.inconclusive ? `  ${yellow("?")} ${dim("the reviewer gave no usable verdict; try again, or use /reviewer on for tasks")}` : v.pass ? `  ${green("✔")} ${bold("review: no problems found")}` : `  ${yellow("✖")} ${bold(`review: ${v.findings.length} finding${v.findings.length === 1 ? "" : "s"}`)}`, ...v.findings.map((f) => `    ${yellow("•")} ${f}`)]);
+    } },
+    { name: "pr", help: "draft a pull request from your branch and create it with gh after you confirm (/pr draft for a draft PR)", args: "[draft]", run: async (a, arg) => {
+      const have = await new Promise<boolean>((res) => execFile("gh", ["--version"], (e) => res(!e)));
+      if (!have) return void a.say("the GitHub CLI (gh) is needed to create pull requests: https://cli.github.com", yellow);
+      const branch = await currentBranch(a.cwd), base = await defaultBase(a.cwd);
+      if (!base) return void a.say("could not find a base branch (no origin/HEAD, main or master)", red);
+      if (branch === base.replace(/^origin\//, "") || branch === "HEAD") return void a.say(`you are on ${branch}; make a branch for your changes first`, yellow);
+      const { diff } = await diffForReview(a.cwd, base), log = await commitLog(a.cwd, base);
+      if (!diff.trim() && !log) return void a.say(`nothing to open a pull request for against ${base}`, dim);
+      a.say("drafting the pull request…", dim);
+      let d; try { d = await draftPr(a.roles.compact ?? a.model, { diff, log, branch }); } catch (e) { return void a.say((e as Error).message, red); }
+      a.commit(["", bold(`  ${d.title}`), dim(`  ${branch} → ${base.replace(/^origin\//, "")}`), "", ...d.body.split("\n").map((l) => "  " + l)]);
+      const choice = await a.pick("Create this pull request on GitHub?", [{ label: "Create it", value: "pr" }, { label: "Create it as a draft", value: "draft" }, { label: "Cancel", value: "no" }]);
+      if (!choice || choice === "no") return void a.say("not created", dim);
+      if (!(await hasUpstream(a.cwd))) { const push = await a.pick("The branch is not on the remote yet. Push it now (git push -u origin HEAD)?", [{ label: "Yes, push it", value: "y" }, { label: "No", value: "n" }]); if (push !== "y") return void a.say("not created: push the branch first", dim); try { await pushBranch(a.cwd); } catch (e) { return void a.say(`push failed: ${(e as Error).message}`, red); } }
+      try { const url = await createPr(a.cwd, d, { base, draft: choice === "draft" || arg === "draft" }); a.say(`created: ${url}`, green); } catch (e) { a.say(`gh failed: ${(e as Error).message}`, red); }
     } },
     { name: "report", help: "recurring problems in your session traces · /report case <name> turns the last request into an eval task", args: "[case <name>]", run: async (a, arg) => {
       const [sub, name] = arg.split(/\s+/);

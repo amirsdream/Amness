@@ -323,11 +323,11 @@ test("# saves a memory note; ! runs a shell command now and feeds its output to 
 });
 
 test("custom slash commands from .amness/commands/*.md: listed in the popup, $ARGUMENTS substituted, project overrides user", async () => {
-  const t = rig([say("reviewed")], { files: { ".amness/commands/review.md": "---\ndescription: Review the current diff\n---\nReview the working-tree changes. Focus on: $ARGUMENTS\nBe brief.\n", ".amness/commands/ship.md": "# Ship it\nRun the tests and summarise.\n" } }); await t.start();
-  await t.type("/rev"); assert.match(plain(t.screen()), /\/review\s+Review the current diff \(project\)/);
+  const t = rig([say("audited")], { files: { ".amness/commands/audit.md": "---\ndescription: Audit the current diff\n---\nReview the working-tree changes. Focus on: $ARGUMENTS\nBe brief.\n", ".amness/commands/ship.md": "# Ship it\nRun the tests and summarise.\n" } }); await t.start();
+  await t.type("/aud"); assert.match(plain(t.screen()), /\/audit\s+Audit the current diff \(project\)/);
   await t.key("\x15"); await t.type("/sh"); assert.match(plain(t.screen()), /\/ship\s+Ship it \(project\)/);
-  await t.key("\x15"); await t.type("/review security and secrets"); await t.key(KEY.enter); await t.key(KEY.enter);
-  assert.ok(await t.until(() => t.idle() && t.has("reviewed")));
+  await t.key("\x15"); await t.type("/audit security and secrets"); await t.key(KEY.enter); await t.key(KEY.enter);
+  assert.ok(await t.until(() => t.idle() && t.has("audited")));
   assert.equal(t.seen[0].msgs.at(-1)!.content, "Review the working-tree changes. Focus on: security and secrets\nBe brief.");
   await t.key(KEY.ctrlD);
 });

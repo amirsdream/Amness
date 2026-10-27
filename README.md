@@ -56,6 +56,7 @@ amness                              # start a conversation
 amness "fix the failing test"       # start with a prompt
 amness -c                           # continue the last conversation in this directory
 amness --inline                     # use the inline renderer (your terminal's scrollback)
+amness --worktree try-x             # work in a fresh git worktree on its own branch
 amness menu                         # classic menu: guided demo, evals, research agent, settings
 amness demo                         # guided demo, no API key needed
 amness eval --selftest              # check the evaluation suite itself (no API key needed)
@@ -142,6 +143,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/agents` | custom subagents available to the task tool |
 | `/skills` | skills found (SKILL.md folders) |
 | `/procs` | background processes the agent started (`/procs stop <id>`) |
+| `/review [base]` · `/pr [draft]` | read-only review of your changes · draft and (after you confirm) create a pull request with gh |
 | `/report [case <name>]` | recurring problems in your traces; turn the last request into an eval task |
 | `/reviewer [on\|off]` | independent reviewer: acceptance criteria first, a check before work is accepted |
 | `/policy` | why recent actions were allowed, asked or refused |
@@ -152,6 +154,8 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/theme` · `/sidebar` · `/details` · `/diffmode` · `/mouse` · `/ui` | appearance and interface: theme (live preview), sidebar, expand tool details, stacked/split diffs, mouse on/off, full-screen/inline |
 
 **Project instructions.** `AGENTS.md` (or `CLAUDE.md` / `GEMINI.md`) in the project root, and `~/.amness/AGENTS.md`, are added to the first message of a conversation, framed as repository guidance rather than user requests and capped at 8k characters each. A folder's own file is shown the first time the agent reads or edits something there (and only then, at the end of that result, so the cached prefix is untouched). `/status` lists what was loaded; `/init` has the agent write one.
+
+**Branches, review and pull requests.** `amness --worktree [name]` starts the session in a fresh git worktree on its own branch (`amness/<name>`, under `.amness/worktrees/`), so your main checkout is never touched; on exit an untouched worktree is removed, otherwise you are told where the work is and how to merge it. `/review [base]` gives your changes (commits on the branch plus uncommitted and untracked files, against the repository's base branch) to a read-only reviewer that can run only your tests, build and lint, and lists its findings. `/pr [draft]` drafts a title and description from the commits and the diff, **shows them to you**, and only after you confirm runs `gh pr create` (offering to push the branch first, again only if you agree). Needs the GitHub CLI (`gh`) for PRs; nothing is sent anywhere before a confirmation.
 
 **Undoing what commands did.** `/undo` and `/rewind` already restored files the edit tools changed. In a git repository they now also undo **shell commands**: before the first command of a turn that may change files, Amness records the working tree (tracked and untracked files, ignored ones excluded) as a git tree object using a private index file, so your index, branches and history are never touched, and `/undo` puts it back exactly: changed and deleted files restored, files the command created removed. Effects that leave the working tree cannot be taken back (a `git push`, a publish, `kubectl apply`, a database write, an `ssh` command, writes outside the project), so such commands are flagged **"cannot be undone"** in the approval dialog and listed when you undo the turn. Ignored files (`node_modules`, build output) are not restored, and without git there is no shell snapshot.
 
@@ -201,7 +205,7 @@ Precedence: **built-in floor > deny > ask > allow > the permission mode.** Shell
 
 Events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `Stop`. The event arrives as JSON on stdin. Exit `0` allows; exit `2` blocks (stderr goes to the model, or for `UserPromptSubmit` back to you); stdout can be plain text (added as context) or JSON (`{"context": "..."}`, `{"args": {...}}` to rewrite a tool call, `{"decision": "block", "reason": "..."}`). Hooks run without your API keys in their environment, time out after 10 s, and a crash only warns unless the hook sets `"failClosed": true`. **Project hooks run commands on your machine, so Amness asks before running a repository's hooks and remembers your answer for that exact file** (headless runs need `--trust-project`). `/hooks` shows what is active.
 
-**Your own commands.** Put `review.md` in `.amness/commands/` (or `~/.amness/commands/`) and `/review <args>` runs it as a prompt (`$ARGUMENTS` is substituted; a `description:` front-matter line shows in the popup). Commit the folder to share it with your team.
+**Your own commands.** Put `audit.md` in `.amness/commands/` (or `~/.amness/commands/`) and `/audit <args>` runs it as a prompt (`$ARGUMENTS` is substituted; a `description:` front-matter line shows in the popup). Commit the folder to share it with your team.
 
 **Memory.** Plain markdown notes in `<project>/.amness/memory` and `~/.amness/memory`, indexed by `MEMORY.md`; edit them like any file. What makes it more than a notebook:
 

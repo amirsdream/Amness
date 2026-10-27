@@ -45,7 +45,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G10 | Code index / repo map | P2 | M | [x] |
 | G11 | Language-server diagnostics after edits | P2 | M | [ ] |
 | G12 | Tracing (JSONL trace file, OpenTelemetry export, cache-miss cost) | P2 | S–M | [x] |
-| G13 | Git worktrees, `/review`, pull-request helper | P2 | M | [ ] |
+| G13 | Git worktrees, `/review`, pull-request helper | P2 | M | [x] |
 | G14 | Better loop detection (cycles, not only exact repeats) | P2 | S | [x] |
 | G15 | Prompt-injection and secrets hardening | P2 | M | [x] |
 | G16 | Editor integration (ACP server, VS Code) | P3 | L | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G13**: amness --worktree [name] (own branch under .amness/worktrees, removed on exit when untouched), /review [base] (read-only reviewer over commits + uncommitted + untracked vs the base branch), /pr [draft] (model-drafted title/body shown first, gh pr create only after confirmation, push offered separately). src/gitflow.ts, src/worktree.ts, test/gitflow.test.ts (fake gh, local bare origin).
 - **L10**: shell commands are reversible in git repositories: a working-tree snapshot (git tree object via a private index, ignored files excluded) is taken before the first mutating command of a turn, /undo and /rewind restore changed/deleted files and remove created ones after restoring tool edits; commands with effects beyond the workspace (push, publish, kubectl, db writes, ssh, writes outside) are flagged 'cannot be undone' in the approval dialog and listed on undo. src/snapshot.ts, test/snapshot.test.ts. Not covered: ignored files, non-git workspaces, overlay filesystems.
 - **L9** (partly): taint tracking: a shell command containing 3+ consecutive words (or a 24+ char token) copied verbatim from an untrusted tool result needs approval regardless of mode or allow rules (taint: ask|deny|off); floor/deny/ask/allow layering with /policy explaining decisions; capability rules for web tools via the existing rule syntax. Adversarial suite built (amness eval --builtin adversarial --variants full,full-taint); attack success on a REAL model not measured.
 - **G15**: untrusted tool output (web, MCP) wrapped as data; shell commands parsed through quoting/escape/IFS/nested sh -c and eval tricks for the floor and risk checks, decode-and-run payloads always ask; secrets masked in tool output and never written to traces; Amness's own keys removed from child environments (credential-looking ones too under the sandbox). src/secrets.ts, src/permissions.ts, test/secrets.test.ts, test/taint.test.ts.

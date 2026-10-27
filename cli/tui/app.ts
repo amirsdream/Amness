@@ -93,6 +93,7 @@ export class App {
     this.buildAgent();
   }
 
+  private warnedShadow = new Set<string>();
   /** Built-in commands plus the user's own (.amness/commands/*.md). Built-ins win name clashes. */
   get cmds(): Cmd[] {
     if (Date.now() - this.customAt > 2000) {
@@ -100,6 +101,7 @@ export class App {
       this.customCmds = loadCustomCommands([{ dir: join(this.cwd, ".amness", "commands"), scope: "project" }, { dir: join(home(), "commands"), scope: "user" }]);
     }
     const names = new Set(this.builtin.flatMap((c) => [c.name, c.alias ?? ""]));
+    for (const c of this.customCmds) if (names.has(c.name) && !this.warnedShadow.has(c.name)) { this.warnedShadow.add(c.name); this.note(`your custom /${c.name} is hidden by the built-in /${c.name}; rename its file to use it`); }
     return [...this.builtin, ...this.customCmds.filter((c) => !names.has(c.name))];
   }
 

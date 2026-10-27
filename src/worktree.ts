@@ -35,3 +35,17 @@ export async function applyDiff(cwd: string, diff: string): Promise<string | und
   if (!diff.trim()) return undefined;
   try { await git(cwd, ["apply", "--check", "--whitespace=nowarn", "-"], diff + "\n"); await git(cwd, ["apply", "--whitespace=nowarn", "-"], diff + "\n"); return undefined; } catch (e) { return (e as Error).message; }
 }
+
+/** A named, persistent worktree on its own branch (`amness/<name>`) inside the repository's `.amness/worktrees/`, for a whole working session. */
+export async function createSessionWorktree(repo: string, name: string): Promise<{ dir: string; branch: string; repo: string; /** the commit it branched from */ base: string }> {
+  const root = (await git(repo, ["rev-parse", "--show-toplevel"])).trim(), clean = name.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  if (!clean) throw new Error("the worktree needs a name made of letters, numbers, . _ or -");
+  const dir = join(root, ".amness", "worktrees", clean), branch = `amness/${clean}`;
+  const base = (await git(root, ["rev-parse", "HEAD"])).trim();
+  await git(root, ["worktree", "add", "-b", branch, dir, "HEAD"]);
+  return { dir, branch, repo: root, base };
+}
+/** True when nothing has changed in `dir` (no modified, staged or untracked files) and the branch has no commits beyond `base`. */
+export async function worktreeIsUntouched(dir: string, base: string): Promise<boolean> {
+  try { if ((await git(dir, ["status", "--porcelain"])).trim()) return false; const ahead = (await git(dir, ["rev-list", "--count", `${base}..HEAD`]).catch(() => "0")).trim(); return ahead === "0"; } catch { return false; }
+}

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { caseFromWorkspace, formatMining, formatReplay, replayFile, Budget, MemoryStore, effortsFor, type RunResult, codeVariants, createCodeAgent, createDeepAgent, evaluate, loadMcp, readBundle, startLive, type Approve, type Event, type Model } from "../src/index.ts";
+import { createSessionWorktree, isRepo, removeWorktree, worktreeIsUntouched, caseFromWorkspace, formatMining, formatReplay, replayFile, Budget, MemoryStore, effortsFor, type RunResult, codeVariants, createCodeAgent, createDeepAgent, evaluate, loadMcp, readBundle, startLive, type Approve, type Event, type Model } from "../src/index.ts";
 import { createModel } from "./model.ts";
 import { detectVerify } from "./detect.ts";
 import { HELP, runHeadless } from "./headless.ts";
@@ -368,6 +368,7 @@ const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
   amness -p "task" [flags]     one-shot, non-interactive (same as: amness run)
   amness run [flags] "task"    headless mode for CI/scripts (amness run --help)
   amness menu                  the classic menu (demo, evals, research, settings…)
+  amness --worktree [name]     work in a fresh git worktree on its own branch (your checkout stays untouched)
   amness --inline | --full     choose the interface (default: full-screen; AMNESS_UI or /ui also work)
   amness eval [flags]          compare harness variants statistically (amness eval --help)
   amness demo                  guided demo, no API key needed
@@ -401,19 +402,30 @@ async function startChat(argv: string[]) {
   let resume: string | undefined;
   const rest: string[] = [];
   const envUi = process.env.AMNESS_UI === "inline" || process.env.AMNESS_UI === "full" ? process.env.AMNESS_UI : undefined;
-  let ui: "full" | "inline" | undefined = envUi ?? cfg.ui;
+  let ui: "full" | "inline" | undefined = envUi ?? cfg.ui, wtName: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "-c" || argv[i] === "--continue") resume = "last";
     else if (argv[i] === "--resume") resume = argv[++i] ?? "last";
+    else if (argv[i] === "--worktree") wtName = argv[i + 1] && !argv[i + 1].startsWith("-") ? argv[++i] : `session-${new Date().toISOString().slice(5, 16).replace(/\D/g, "")}`;
     else if (argv[i] === "--inline") ui = "inline";
     else if (argv[i] === "--full") ui = "full";
     else rest.push(argv[i]);
   }
   if (!(await ensureReady())) return;
+  let wt: Awaited<ReturnType<typeof createSessionWorktree>> | undefined;
+  if (wtName) {
+    if (!(await isRepo(process.cwd()))) { console.error(red("✗ --worktree needs a git repository with at least one commit")); process.exitCode = 2; return; }
+    try { wt = await createSessionWorktree(process.cwd(), wtName); process.chdir(wt.dir); console.log(dim(`worktree ${wt.dir} on branch ${wt.branch} (your main checkout is untouched)`)); } catch (e) { console.error(red("✗ " + (e as Error).message)); process.exitCode = 2; return; }
+  }
   const tiny = (process.stdout.columns ?? 80) < 60 || (process.stdout.rows ?? 24) < 14;
   if (process.env.TERM === "dumb" || tiny) ui = "inline";
   const app = new App({ cfg, cwd: process.cwd(), version: VERSION, resume, ui: ui ?? "full", prompt: rest.join(" ").trim() || undefined });
   process.exitCode = await app.start();
+  if (wt) {
+    process.chdir(wt.repo);
+    if (await worktreeIsUntouched(wt.dir, wt.base)) { await removeWorktree({ dir: wt.dir, repo: wt.repo }); execFileSync("git", ["branch", "-D", wt.branch], { cwd: wt.repo, stdio: "ignore" }); console.log(dim(`worktree ${wt.branch} had no changes: removed`)); }
+    else console.log(`${green("✓")} work is in ${wt.dir} on branch ${bold(wt.branch)}\n${dim(`merge it with: git merge ${wt.branch}   ·   remove it with: git worktree remove ${wt.dir}`)}`);
+  }
 }
 
 // ------------------------------------------------------------------ main
