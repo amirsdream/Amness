@@ -1,5 +1,6 @@
 import { type Schema, validate, parseLooseJson } from "./schema.ts";
 
+import { ProgressTracker, type TurnFacts } from "./progress.ts";
 export type ToolCall = { id: string; type?: "function"; function: { name: string; arguments: string } };
 export type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
 export type Message = { role: "system" | "user" | "assistant" | "tool"; content: string | null; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: Usage;
@@ -91,7 +92,7 @@ export class Budget {
 
 export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string; /** from the built-in safety floor: "don't ask again" shortcuts must not skip this prompt */ floor?: boolean }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
-export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger";
+export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation";
 
 export type Options = {
   model: Model;
@@ -118,6 +119,8 @@ export type Options = {
   onHandoff?: (note: string) => void;
   /** Rules that allow, force-ask or deny a call before the permission mode is consulted (see `Permissions`). Deny wins; allow skips the prompt. */
   permissions?: { check(tool: string, args: Record<string, any>): { action: "allow" | "ask" | "deny" | "none"; rule?: string; reason?: string; floor?: boolean } };
+  /** Turns without any objective improvement (failing-test count, new files edited, new code) before the loop reflects, then stops. Default 8; 0 switches it off. */
+  stagnationTurns?: number;
   /** Claims ledger (see `Ledger`): records edits and commands, and rejects a `finish` whose summary claims things that did not happen. */
   ledger?: { onEdit(e: { path: string; added: number; removed: number; created: boolean }): void; onCommand(cmd: string, result: string): void; check(summary: string, o?: { gated?: boolean }): string[]; audit(task: string): { changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] } };
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
@@ -307,7 +310,7 @@ export function createHarness(o: Options) {
   async function run(task: string, opts: { resume?: Message[] } = {}): Promise<RunResult> {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
     const seen = new Map<string, number>(), history: string[] = [];
-    let epoch = 0, ledgerRejects = 0;   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
+    let epoch = 0, ledgerRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
     let sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
@@ -425,9 +428,10 @@ export function createHarness(o: Options) {
         }
         let result: string;
         emit({ kind: "toolstart", id: c.id, name, args: raw });
-        try { const r = await t!.run(args, { registry: reg, step, emit: (ev) => { if (ev.kind === "edit") { epoch++; if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
+        try { const r = await t!.run(args, { registry: reg, step, emit: (ev) => { if (ev.kind === "edit") { epoch++; turnEdits.push({ path: ev.path, diff: ev.diff }); if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
         if (name === "sh" && !off.has("ledger")) o.ledger?.onCommand(String(args.cmd ?? ""), result);
+        turnCalls.push({ name, args, result });
         const post = await hook("PostToolUse", { tool: name, args, result: clip(result, 4000), ok: !/^(ERROR|DENIED)/.test(result) });
         if (post?.context) result += `\n\n[hook] ${clip(post.context, 2000)}`;
         emit({ kind: "tool", id: c.id, name, args: raw, result });
@@ -444,6 +448,15 @@ export function createHarness(o: Options) {
       if (ingress > 300) { emit({ kind: "trim", saved: ingress, what: "tool output condensed" }); } ingress = 0;
       m.tool_calls.forEach((c, i) => msgs.push({ role: "tool", tool_call_id: c.id, content: results[i] }));
       if (done !== undefined) return end(done, true, step + 1);
+      // Stagnation: the loop keeps acting but nothing measurable improves (the model's own confidence says nothing about this).
+      { const facts = { calls: turnCalls, edits: turnEdits }; turnCalls = []; turnEdits = []; const K = o.stagnationTurns ?? 8;
+        if (K > 0 && !off.has("stagnation")) {
+          const why = progress.observe(facts); if (why.length) stagnationWarned = false;
+          if (progress.stale >= K && !stagnationWarned) {
+            stagnationWarned = true; emit({ kind: "nudge", detail: "stagnation: nothing has measurably improved" });
+            msgs.push({ role: "user", content: `For ${progress.stale} turns nothing measurable has improved (${progress.summary()}). Stop and reflect before acting again: what do the latest results actually say, which assumption have you not checked, and what is a different approach? If you cannot make progress, call \`finish\` and explain what blocks you.` });
+          } else if (stagnationWarned && progress.stale >= K + Math.ceil(K / 2)) { emit({ kind: "loop", detail: `stagnation: no measurable progress for ${progress.stale} turns` }); o.checkpoint?.(msgs); return end(`stopped: no measurable progress for ${progress.stale} turns (${progress.summary()})`, false, step + 1, "stuck"); }
+        } }
       // No-progress detection: every call this turn failed. Reflect once, then stop instead of burning the budget.
       if (!off.has("stuck")) {
         failStreak = results.every(isErr) ? failStreak + 1 : 0;

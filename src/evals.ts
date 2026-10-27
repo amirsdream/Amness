@@ -121,7 +121,7 @@ export function formatReport(a: Analysis): string {
 }
 
 // ------------------------------------------------------------------------------------------------------------------ variants
-const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "stuck", "wrapup", "condense", "schedule", "ledger"];
+const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation"];
 export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · no-gate (guards, no verify gate) · full-<guard> to switch one guard off: " + ALL_GUARDS.join(", ");
 
 /** Build a named variant of the code agent. Names: see VARIANT_HELP. */

@@ -56,7 +56,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G21 | Windows support (tested) and a built, tested Docker image | P3 | M | [ ] |
 | G22 | Publish to npm (needs a build step or a bundled runtime) | P3 | M | [ ] |
 | L1 | Grounded finish gate: claims ledger and scope audit | P1 | M | [~] |
-| L2 | Stagnation detection from external signals, not self-report | P1 | M | [ ] |
+| L2 | Stagnation detection from external signals, not self-report | P1 | M | [~] |
 | L3 | Independent skeptical evaluator with a sprint contract | P1 | M | [ ] |
 | L4 | Trace replay: test harness changes without model calls | P1 | M | [ ] |
 | L5 | Failure mining: every bad session becomes an eval task | P2 | M | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **L2** (partly): stagnation detection from objective signals: failure counts parsed from test/build/lint output (Jest, pytest, Go, Cargo, Node runner, tsc, eslint, exit code fallback), first edits, new non-inverse changes, new reads (capped); reflection after K=8 stale turns, stop after 1.5K; 'stagnation' guard for ablation; stagnationTurns option. src/progress.ts, test/progress.test.ts. Not yet measured on a real model (eval variant full-stagnation).
 - **L1** (partly): claims ledger (edits and commands with exit codes recorded from tool events) checks the finish summary: tests-pass needs a passing run after the last edit, build/typecheck claims need a matching command, 'changed file X' needs a recorded edit; rejected with specifics at most twice; audit line after accepted finish (files changed, tests after last edit, test files touched unprompted); 'ledger' guard for ablation; 2 new eval tasks (test-weakening-trap, partial-verify-trap). src/ledger.ts, test/ledger.test.ts. Measuring the false-done rate on a real model is still to do (amness eval --variants full,full-ledger).
 - **G4**: sh_start / sh_read / sh_stop / sh_list with a 200 KB ring buffer, process-group kill, max 5, plan mode hides sh_start, same permission rules and floor as sh; sidebar PROCESSES section, /procs, cleanup on exit. src/procs.ts, test/procs.test.ts.
 - **G14**: cycle detection (2-4 different calls repeating 3x) with a reflection-style refusal; repeat counting now ignores key order and whitespace and resets after any file edit, which also fixes a false positive (re-running the same test command after real edits was being blocked on the third time). src/harness.ts, test/loop.test.ts.

@@ -180,6 +180,8 @@ export type CodeAgentOptions = {
   memory?: boolean | MemoryStore;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
+  /** Turns without any measurable improvement before the loop reflects and then stops (default 8; 0 = off). */
+  stagnationTurns?: number;
   /** Background process tools (sh_start / sh_read / sh_stop / sh_list). Default on. Call `agent.procs?.dispose()` when you are done. */
   background?: boolean;
   /** Lifecycle hooks, e.g. `Hooks.load(cwd, { trustProject: true })`. Nothing runs unless you pass this. */
@@ -255,7 +257,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, system: o.chat ? CHAT_SYSTEM : CODE_SYSTEM, tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal, hooks: o.hooks, ledger: new Ledger({ testCommand: o.verify ?? o.check }), permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal, hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger: new Ledger({ testCommand: o.verify ?? o.check }), permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 },
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 
