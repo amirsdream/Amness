@@ -15,7 +15,7 @@
 
 - [Why](#why) · [Quick start](#quick-start) · [Using the chat](#using-the-chat) · [Providers and models](#providers-and-models)
 - [Headless and CI](#headless-and-ci) · [Use it as a library](#use-it-as-a-library) · [Architecture](#architecture)
-- [Evaluating the harness](#evaluating-the-harness) · [Safety and privacy](#safety-and-privacy) · [Development](#development) · [Limitations](#limitations) · [License](#license)
+- [Evaluating the harness](#evaluating-the-harness) · [Roadmap](ROADMAP.md) · [Safety and privacy](#safety-and-privacy) · [Development](#development) · [Limitations](#limitations) · [License](#license)
 
 ## Why
 
@@ -372,7 +372,7 @@ The method follows recent evaluation practice: harness choice can change cost pe
 - **Data leaves your machine only to the provider you configure** (plus web search/fetch if you use the research agent). There is no telemetry. OpenAI requests are stateless by default (`store: false`).
 - **Keys** come from environment variables or `~/.amness/config.json` (mode 600). They are never written into a project.
 - **File tools are confined to the workspace** and enforce read-before-edit. **Shell commands are not sandboxed:** `sh` can do whatever your user can. The permission prompts are the safeguard, so read them, and prefer `plan` or `default` mode on code you do not trust.
-- **Treat project-supplied context as untrusted.** Memory notes, `.amness/commands/` and `AGENTS.md` from a repository you cloned can contain prompt injection. Notes are presented to the model as hints to verify, and risky actions still need your approval.
+- **Treat project-supplied context as untrusted.** Memory notes and `.amness/commands/` from a repository you cloned can contain prompt injection (and `AGENTS.md` will too once it is loaded automatically; see the roadmap). Notes are presented to the model as hints to verify, and risky actions still need your approval.
 - The browser live view listens on `127.0.0.1` only, rejects foreign `Host` headers, and renders diffs as text, never HTML.
 - `.amness/` holds per-project state (chats, checkpoints, handoffs, memory). Add it to your `.gitignore`, except `memory/` and `commands/` if you want to share those.
 
@@ -394,6 +394,7 @@ The UI tests drive the real `App` with simulated keystrokes and read the screen 
 - Cost figures are estimates (no invoices, cached input assumed at about 10% of the input price, and some models have no price listed).
 - Newer features (cache keep-alive, semantic memory, `amness eval` against a real model) are covered by tests with scripted models and mock servers, but have not been run against live provider APIs. The efficiency numbers quoted from papers are theirs, not measurements of Amness.
 - Semantic memory sends note text and your messages to your provider's embeddings endpoint, and needs an OpenAI-compatible provider (Claude has none).
+- Gaps compared with other harnesses (hooks, OS sandbox, skills, custom subagents, background processes and more) are tracked in [ROADMAP.md](ROADMAP.md). Notably, `AGENTS.md` written by `/init` is not yet loaded automatically.
 - Not on npm yet (see above), and the Docker image is untested.
 - Tool-calling quality with small local models varies widely.
 
