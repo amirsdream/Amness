@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Budget, MemoryStore, Tracer, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
@@ -24,7 +24,7 @@ import { Pager, transcriptLines } from "./pager.ts";
 import { TIPS, at, brandOf, fg, palette, shimmer, sparkline } from "./theme.ts";
 import { contextWindow, estimateCost, fmtCost, fmtDuration, fmtTokens, priceOf } from "./pricing.ts";
 import { Screen, type Out } from "./screen.ts";
-import { SessionStore, newSession, rewind, snapshot, type SessionData, type Turn } from "./session.ts";
+import { SessionStore, newSession, rewindFull, snapshot, type SessionData, type Turn } from "./session.ts";
 import { basename } from "node:path";
 import { cellWidth, clipWidth, wrapAnsi } from "./text.ts";
 import { assistantBlock, editSummary, footer, helpLines, isFailure, renderDiff, todoList, toolCall, toolHeader, toolResult, userMessage, welcome } from "./view.ts";
@@ -81,7 +81,7 @@ export class App {
   done: Promise<number>; private resolveDone!: (n: number) => void;
 
   constructor(o: AppOptions) {
-    this.opts = o; this.cfg = o.cfg; this.cwd = o.cwd; this.version = o.version; this.persist = o.persist ?? true;
+    this.opts = o; this.cfg = o.cfg; this.cwd = o.cwd; this.snaps = new Snapshots(o.cwd); this.version = o.version; this.persist = o.persist ?? true;
     this.io = { input: o.input ?? process.stdin, output: o.output ?? (process.stdout as any) };
     this.ui = o.ui ?? "inline"; this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.cwd);
     if (this.ui === "full") this.full = new FullView(this);
@@ -118,7 +118,7 @@ export class App {
     }
     this.agent = createCodeAgent({
       model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, ...this.profileOptions(), embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, ...this.profileOptions(), embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
   }
@@ -521,7 +521,7 @@ export class App {
       options = [{ label: "Yes" }, { label: "Yes, and accept all edits this session", hint: "shift+tab" }, { label: "No, and tell Amness what to do instead", hint: "esc" }];
     } else if (name === "sh") {
       const danger = riskOf(String(args.cmd)); paint = danger ? yellow : undefined;
-      title = "Run command"; body = [bold(String(args.cmd)), ...(danger ? ["", yellow(`⚠ ${danger}`)] : [])]; question = "Run this command?"; detail = { kind: "command", cmd: String(args.cmd), danger: danger || undefined };
+      const irr = irreversibleReason(String(args.cmd)); title = "Run command"; body = [bold(String(args.cmd)), ...(danger ? ["", yellow(`⚠ ${danger}`)] : []), ...(irr ? [danger ? "" : "", yellow(`⚠ cannot be undone: ${irr}`)].filter((x, i, arr) => x || (i === 0 && arr.length > 1 && !danger)) : [])]; question = "Run this command?"; detail = { kind: "command", cmd: String(args.cmd), danger: danger || undefined };
       const prefix = shPrefix(String(args.cmd));
       const simple = !danger && !/[;&|<>`$()]/.test(String(args.cmd));
       options = [{ label: "Yes" }, ...(simple ? [{ label: `Yes, and don't ask again for ${bold(prefix)} commands`, hint: "this session" }, { label: `Yes, and always allow ${bold(prefix + " *")} in this project`, hint: "saves a rule" }] : []), { label: "No, and tell Amness what to do instead", hint: "esc" }];
@@ -574,12 +574,12 @@ export class App {
   async openRewind() {
     if (this.running || !this.session.turns.length) return;
     const idx = await this.pick("Rewind to before…", this.session.turns.map((t, i) => ({ label: `${i + 1}. ${one(t.text, 60)}`, value: i, hint: `${Object.keys(t.snaps).length} file(s) changed` })).reverse());
-    if (idx !== undefined) this.rewindTo(idx);
+    if (idx !== undefined) await this.rewindTo(idx);
   }
-  rewindTo(idx: number) {
-    const r = rewind(this.session, this.cwd, idx);
+  async rewindTo(idx: number) {
+    const r = await rewindFull(this.session, this.cwd, idx, this.snaps);
     this.pendingEdits.clear(); this.recount(); this.saveSession(); this.rebuildBlocks();
-    this.commit(["", `  ${green("↩")} ${dim(`rewound the conversation to before turn ${idx + 1}`)}${r.restored.length || r.removed.length ? dim(` · restored ${r.restored.length} file(s), removed ${r.removed.length}`) : ""}`]);
+    this.commit(["", `  ${green("↩")} ${dim(`rewound the conversation to before turn ${idx + 1}`)}${r.restored.length || r.removed.length ? dim(` · restored ${r.restored.length} file(s), removed ${r.removed.length}`) : ""}${r.tree ? dim(` · undid shell changes: ${r.tree.restored.length} restored, ${r.tree.removed.length} removed`) : ""}`, ...(r.treeError ? [`  ${yellow("!")} ${dim("could not undo shell changes: " + r.treeError)}`] : []), ...(r.irreversible.length ? [`  ${yellow("!")} ${dim("these commands had effects undo cannot take back:")}`, ...r.irreversible.map((x: string) => `     ${dim(x)}`)] : [])]);
     this.render();
   }
   /** Switch UI mode live. History is kept in the block store, so nothing is lost either way. */
@@ -632,6 +632,13 @@ export class App {
     const ok = await this.pick("This project has its own hooks and/or permission rules (.amness/hooks.json, permissions.json). Hooks run commands on your machine and allow-rules skip prompts. Trust them?", [{ label: "Yes, trust this version of the files", value: "y" }, { label: "No, ignore them (deny and ask rules still apply)", value: "n" }]);
     if (ok === "y") { const st = loadState(); st.hookTrust = { ...(st.hookTrust ?? {}), [this.cwd]: fp }; saveState(st); this.loadHooks(); }
     this.buildAgent();
+  }
+  /** Shell snapshots: before the first command of a turn that may change files, remember the working tree so /undo can put it back. */
+  snaps!: Snapshots;
+  async beforeShell(cmd: string) {
+    const turn = this.session.turns.at(-1); if (!turn) return;
+    const irr = irreversibleReason(cmd); turn.shell ??= { cmds: [], irreversible: [] }; turn.shell.cmds.push(cmd.slice(0, 200)); if (irr) turn.shell.irreversible.push(`${cmd.slice(0, 80)} (${irr})`);
+    if (!turn.shell.tree) turn.shell.tree = await this.snaps.take();
   }
   /** The harness profile for the current model (guards switched off, limits retuned): .amness/profile.json and ~/.amness/profile.json. */
   profile: { profile: Profile; sources: string[] } = { profile: {}, sources: [] };

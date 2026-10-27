@@ -49,7 +49,7 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
 }
 
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
-export function codeTools(cwd: string, o: { /** OS sandbox for shell commands, read each time so it can be switched live */ sandbox?: () => SandboxMode; /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
+export function codeTools(cwd: string, o: { /** called before a command that may change files runs (snapshots, irreversibility notes) */ beforeShell?: (cmd: string) => Promise<void>; /** OS sandbox for shell commands, read each time so it can be switched live */ sandbox?: () => SandboxMode; /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
   const mode = o.mode;
   const mutating = mode ? { risky: () => (mode() === "default" ? "modify a file" : false), when: () => mode() !== "plan" } : {};
   const root = resolve(cwd);
@@ -140,9 +140,10 @@ export function codeTools(cwd: string, o: { /** OS sandbox for shell commands, r
       schema: { type: "object", required: ["cmd"], properties: { cmd: { type: "string" }, timeout: { type: "integer", description: "seconds, default 60" } } },
       risky: shRisk,
       preview: ({ cmd }) => cmd,
-      run: ({ cmd, timeout }, ctx) => {
+      run: async ({ cmd, timeout }, ctx) => {
         if (mode?.() === "plan" && !READONLY_CMD.test(cmd))
           return "ERROR: plan mode is read-only; only inspection commands are allowed (ls, cat, head, tail, grep, find, git status/log/diff/show, wc, pwd). Finish your plan and call exit_plan_mode.";
+        if (o.beforeShell && !READONLY_CMD.test(cmd)) { try { await o.beforeShell(cmd); } catch { /* a failed snapshot must not stop the command */ } }
         return runShell(cmd, root, (timeout ?? 60) * 1000, ctx.signal, o.sandbox?.() ?? "off");
       } }),
   ];
@@ -214,6 +215,8 @@ export type CodeAgentOptions = {
   memory?: boolean | MemoryStore;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
+  /** Called before a command that may change files runs: take a snapshot, note that it cannot be undone. */
+  beforeShell?: (cmd: string) => Promise<void>;
   /** Mask secrets in tool output before the model sees it (default on). */
   redact?: boolean;
   /** Commands that contain text copied from untrusted tool results (web pages, MCP servers): "ask" (default), "deny" or "off". */
@@ -270,7 +273,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
   if (memory && o.embedder) memory.embedder = o.embedder;
   const mode = o.permissions?.mode;
-  const registry = new Registry([...codeTools(o.cwd, { guidance, procs, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
+  const registry = new Registry([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
   const shown = new Set<string>();   // memory notes already in this conversation
   const rescanIndex = () => { if (codeIndex && !registry.get("repo_map") && codeIndex.list().length >= indexMin) registry.add(...indexTools(codeIndex)); };
   rescan(); rescanIndex();

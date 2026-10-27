@@ -2,8 +2,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Message } from "../../src/index.ts";
+import type { Snapshots } from "../../src/index.ts";
 
-export type Turn = { at: number; text: string; t: number; /** path -> content before this turn's first edit (null = file did not exist) */ snaps: Record<string, string | null> };
+export type Turn = { /** shell commands that may have changed files this turn: a working-tree snapshot taken before the first one, and the ones undo cannot take back */ shell?: { tree?: string; cmds: string[]; irreversible: string[] }; at: number; text: string; t: number; /** path -> content before this turn's first edit (null = file did not exist) */ snaps: Record<string, string | null> };
 export type SessionData = {
   id: string; created: string; updated: string; title: string; cwd: string; model: string;
   messages: Message[]; turns: Turn[]; usage: { prompt: number; completion: number; calls: number; /** prompt tokens of each request, newest last */ series?: number[]; /** prompt tokens served from the provider cache / output tokens spent reasoning */ cached?: number; reasoning?: number };
@@ -54,4 +55,12 @@ export function rewind(s: SessionData, cwd: string, idx: number): { restored: st
   }
   s.messages = s.messages.slice(0, target.at); s.turns = s.turns.slice(0, idx);
   return { restored, removed, skipped };
+}
+
+/** Like `rewind`, but first puts the working tree back to the earliest shell snapshot in the turns being undone (undoing what commands did), and reports what could not be undone. */
+export async function rewindFull(s: SessionData, cwd: string, idx: number, snaps?: Snapshots): Promise<ReturnType<typeof rewind> & { tree?: { restored: string[]; removed: string[] }; irreversible: string[]; treeError?: string }> {
+  const undone = s.turns.slice(idx), tree = undone.find((t) => t.shell?.tree)?.shell?.tree, irreversible = undone.flatMap((t) => t.shell?.irreversible ?? []);
+  let treeResult: { restored: string[]; removed: string[] } | undefined, treeError: string | undefined;
+  if (tree && snaps) { try { treeResult = await snaps.restore(tree); } catch (e) { treeError = (e as Error).message; } }
+  return { ...rewind(s, cwd, idx), tree: treeResult, irreversible, treeError };
 }
