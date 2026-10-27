@@ -35,7 +35,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 |---|---|---|---|---|
 | G1 | Load `AGENTS.md` and friends automatically (fixes a bug) | P1 | S | [x] |
 | G2 | Lifecycle hooks | P1 | S | [x] |
-| G3 | Permission rules and a hard deny floor | P1 | S | [ ] |
+| G3 | Permission rules and a hard deny floor | P1 | S | [x] |
 | G4 | Background processes | P1 | M | [ ] |
 | G5 | Better edit formats (patch, multi-edit, fuzzy fallback) | P1 | M | [ ] |
 | G6 | OS-level sandbox for shell commands | P1 | M | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G3**: allow/ask/deny rules (sh(...) with per-piece compound handling, edit(...)/read globs) from project and user files; built-in floor that holds in yolo (no rm -rf of / ~ .., no force-push to main, no .git or policy-file edits, curl|sh and force-push always ask); project allow rules need approval; /permissions; 'always allow' in the approval dialog. src/permissions.ts, test/permissions.test.ts.
 - **G2**: six events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, Stop) via .amness/hooks.json and ~/.amness/hooks.json; block with exit 2, add context or rewrite args with stdout JSON; scrubbed env, timeouts, fail-open or failClosed; project hooks need approval of the exact file (headless: --trust-hooks); /hooks. src/hooks.ts, test/hooks.test.ts.
 - **G1**: AGENTS.md (then CLAUDE.md, GEMINI.md) from the workspace root and the user folder load into the first message; a folder's own file is appended to the first read or edit there (once). Shown in /status. src/guidance.ts, test/guidance.test.ts.
 - 2026-10-27: roadmap deepened with Track B (L1 to L14) from a second round of papers and engineering posts.

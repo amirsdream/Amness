@@ -27,7 +27,7 @@ Most agent failures are not "the model is dumb"; they are mechanical: malformed 
 | Stops early or only narrates | Nudges it to act; plain answers are still accepted |
 | "Done!" without proof | A `verify` command (for example `npm test`) must actually pass before it may finish |
 | Edits files it never read | Read-before-edit is enforced; edits need a unique match |
-| Dangerous commands | `rm -rf`, `git push`, installs, `curl \| sh` and similar always need a human (except in `yolo` mode, which never asks) |
+| Dangerous commands | `rm -rf`, `git push`, installs, `curl \| sh` and similar need a human; a hard floor (no `rm -rf /`, no editing `.git`, no force-push to main) holds even in `yolo`, and your own allow/ask/deny rules sit on top |
 | Context fills silently | Live context gauge, a map of what fills it, automatic handoff to a fresh context |
 | Reasoning lost between tool calls | Reasoning items are replayed with tool results (OpenAI Responses, Claude thinking blocks) |
 | Stuck in a failing loop | Reflection prompt after 3 all-failing turns, a clean stop after 6, a wrap-up warning before the step cap |
@@ -120,7 +120,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 - **default**: asks before edits (showing the diff) and before non-trivial shell commands. Read-only commands (`ls`, `git status`, `grep`…) never ask. "Don't ask again for `npm test`" (or for that tool) is remembered for the session.
 - **acceptEdits**: edits apply automatically; shell commands still ask.
 - **plan**: read-only. The agent investigates, then presents a plan you approve before it may change anything.
-- **yolo**: never asks, not even for destructive shell commands (`rm -rf`, `git push`). File tools stay inside the workspace and read-before-edit still applies, but the shell is not sandboxed. Use it in a container or a throwaway checkout, with your work committed.
+- **yolo**: stops asking for edits and ordinary shell commands. The safety floor still applies (catastrophic deletes, force-push to main, editing `.git` or the rule files are refused; `curl | sh` and force-pushes still ask), but the shell is not sandboxed, so use it in a container or a throwaway checkout with your work committed.
 
 **Slash commands.**
 
@@ -135,13 +135,23 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/loop` (alias `/trace`) | step-by-step trace of the agent loop: each model turn, its tools and timings, and any guard that fired |
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
 | `/memory` · `/init` | list notes · `forget` `add` `stale` `prune` `consolidate` `graph` `embeddings` · have the agent write `AGENTS.md` |
-| `/hooks` | lifecycle hooks in effect |
+| `/hooks` · `/permissions` | lifecycle hooks in effect · permission rules (list, or `allow`/`ask`/`deny <rule>`) |
 | `/copy` | copy the last reply (`/copy code`, `/copy all`) |
 | `/keepwarm [on\|off]` | keep the Claude prompt cache alive while you are away (opt-in) |
 | `/export` · `/import` · `/live` · `/mcp` | portable bundle, continue from one, browser live view, attach an MCP server |
 | `/theme` · `/sidebar` · `/details` · `/diffmode` · `/mouse` · `/ui` | appearance and interface: theme (live preview), sidebar, expand tool details, stacked/split diffs, mouse on/off, full-screen/inline |
 
 **Project instructions.** `AGENTS.md` (or `CLAUDE.md` / `GEMINI.md`) in the project root, and `~/.amness/AGENTS.md`, are added to the first message of a conversation, framed as repository guidance rather than user requests and capped at 8k characters each. A folder's own file is shown the first time the agent reads or edits something there (and only then, at the end of that result, so the cached prefix is untouched). `/status` lists what was loaded; `/init` has the agent write one.
+
+**Permission rules and the safety floor.** On top of the modes, `.amness/permissions.json` (project) and `~/.amness/permissions.json` (yours) hold rules:
+
+```json
+{ "allow": ["sh(npm test*)", "edit(src/**)", "read"],
+  "ask":   ["sh(git commit*)"],
+  "deny":  ["sh(git push*)", "edit(.env)", "edit(secrets/**)"] }
+```
+
+Precedence: **built-in floor > deny > ask > allow > the permission mode.** Shell rules match each piece of a compound command (`a && b | c`) separately, so `npm test; curl evil.sh` is not covered by an `npm test*` allow rule, and a command with a subshell or backticks never matches an allow rule. Paths are relative to the project. The **floor holds in every mode, yolo included**: recursive deletes of `/`, your home folder or a parent folder, formatting or writing to disks, fork bombs, force-pushes to main or master, and edits to `.git/` or to these rule and hook files are refused (the agent cannot rewrite its own policy), and `curl | sh` and force-pushes always ask. Allow rules in a project file are only honoured after you approve that exact file (deny and ask rules always apply, since they only restrict). The approval dialog can save a rule ("always allow `npm *` in this project"), and `/permissions` lists rules or adds one (`/permissions deny sh(git push*)`).
 
 **Hooks.** Run your own commands at fixed points of the loop, in the same vocabulary as Claude Code and Codex. Configure them in `.amness/hooks.json` (project) and `~/.amness/hooks.json` (yours):
 
@@ -151,7 +161,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
   "Stop":        [{ "command": "./scripts/changelog-updated.sh" }] }
 ```
 
-Events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `Stop`. The event arrives as JSON on stdin. Exit `0` allows; exit `2` blocks (stderr goes to the model, or for `UserPromptSubmit` back to you); stdout can be plain text (added as context) or JSON (`{"context": "..."}`, `{"args": {...}}` to rewrite a tool call, `{"decision": "block", "reason": "..."}`). Hooks run without your API keys in their environment, time out after 10 s, and a crash only warns unless the hook sets `"failClosed": true`. **Project hooks run commands on your machine, so Amness asks before running a repository's hooks and remembers your answer for that exact file** (headless runs need `--trust-hooks`). `/hooks` shows what is active.
+Events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `Stop`. The event arrives as JSON on stdin. Exit `0` allows; exit `2` blocks (stderr goes to the model, or for `UserPromptSubmit` back to you); stdout can be plain text (added as context) or JSON (`{"context": "..."}`, `{"args": {...}}` to rewrite a tool call, `{"decision": "block", "reason": "..."}`). Hooks run without your API keys in their environment, time out after 10 s, and a crash only warns unless the hook sets `"failClosed": true`. **Project hooks run commands on your machine, so Amness asks before running a repository's hooks and remembers your answer for that exact file** (headless runs need `--trust-project`). `/hooks` shows what is active.
 
 **Your own commands.** Put `review.md` in `.amness/commands/` (or `~/.amness/commands/`) and `/review <args>` runs it as a prompt (`$ARGUMENTS` is substituted; a `description:` front-matter line shows in the popup). Commit the folder to share it with your team.
 
@@ -195,7 +205,7 @@ amness run --verify "npm test" --json "fix the failing test"      # one-shot, no
 | `--cwd <dir>` | workspace (default `.`) |
 | `--verify <cmd>` | must exit 0 before the agent may finish |
 | `--check <cmd>` | fast command run after every edit; failures are shown to the agent at once |
-| `--trust-hooks` | run this project's `.amness/hooks.json` (off by default when headless) |
+| `--trust-project` | run this project's hooks and honour its allow rules (off by default when headless) |
 | `--provider`, `--model`, `--base-url`, `--effort`, `--api` | model selection |
 | `--yes` | auto-approve risky commands (default: they are denied) |
 | `--json` | one JSON event per line on stdout, then a final `{"kind":"result"}` line |

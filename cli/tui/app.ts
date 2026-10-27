@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Budget, MemoryStore, createCodeAgent, Hooks, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { Budget, MemoryStore, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
@@ -109,7 +109,7 @@ export class App {
     this.model = (this.opts.makeModel ?? ((c) => createModel(c, undefined, { cacheKey })))(this.cfg);
     this.agent = createCodeAgent({
       model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, hooks: this.hooks?.count() ? this.hooks : undefined, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
   }
@@ -479,8 +479,8 @@ export class App {
   // ------------------------------------------------------------------ permission prompts
   approve: Approve = async (req) => {
     const { name, args, preview, reason } = req, w = this.width;
-    if (name === "sh" && this.shAllowed(String(args.cmd))) return true;
-    if (this.toolRules.has(name)) return true;
+    if (!req.floor && name === "sh" && this.shAllowed(String(args.cmd))) return true;
+    if (!req.floor && this.toolRules.has(name)) return true;
     let title = "Permission", body: string[] = [], question = "Allow this?", options: { label: string; hint?: string }[];
     let paint: ((s: string) => string) | undefined, detail: ChoiceDetail | undefined;
     if (name === "exit_plan_mode") {
@@ -494,7 +494,8 @@ export class App {
       const danger = riskOf(String(args.cmd)); paint = danger ? yellow : undefined;
       title = "Run command"; body = [bold(String(args.cmd)), ...(danger ? ["", yellow(`⚠ ${danger}`)] : [])]; question = "Run this command?"; detail = { kind: "command", cmd: String(args.cmd), danger: danger || undefined };
       const prefix = shPrefix(String(args.cmd));
-      options = [{ label: "Yes" }, ...(danger || /[;&|<>`$()]/.test(String(args.cmd)) ? [] : [{ label: `Yes, and don't ask again for ${bold(prefix)} commands`, hint: "this session" }]), { label: "No, and tell Amness what to do instead", hint: "esc" }];
+      const simple = !danger && !/[;&|<>`$()]/.test(String(args.cmd));
+      options = [{ label: "Yes" }, ...(simple ? [{ label: `Yes, and don't ask again for ${bold(prefix)} commands`, hint: "this session" }, { label: `Yes, and always allow ${bold(prefix + " *")} in this project`, hint: "saves a rule" }] : []), { label: "No, and tell Amness what to do instead", hint: "esc" }];
     } else {
       title = name; detail = { kind: "text", text: `${reason ?? "requires approval"}\n${JSON.stringify(args)}` }; body = [reason ?? "requires approval", ...(preview ? ["", preview] : []), "", dim(one(JSON.stringify(args), w - 8))];
       options = [{ label: "Yes" }, { label: `Yes, and don't ask again for ${bold(name)}`, hint: "this session" }, { label: "No, and tell Amness what to do instead", hint: "esc" }];
@@ -508,6 +509,10 @@ export class App {
     if (name === "exit_plan_mode") this.setMode(idx === 0 ? "acceptEdits" : "default");
     else if (idx === 1 && (name === "write_file" || name === "edit_file")) this.setMode("acceptEdits");
     else if (idx === 1 && name === "sh") this.shRules.add(shPrefix(String(args.cmd)));
+    else if (idx === 2 && name === "sh") {
+      this.shRules.add(shPrefix(String(args.cmd)));
+      try { Permissions.addProjectRule(this.cwd, "allow", `sh(${shPrefix(String(args.cmd))} *)`); const fp = projectConfigFingerprint(this.cwd), st = loadState(); if (fp && this.persist) { st.hookTrust = { ...(st.hookTrust ?? {}), [this.cwd]: fp }; saveState(st); } this.loadHooks(); this.note(`saved: allow sh(${shPrefix(String(args.cmd))} *)`); } catch { /* the session rule still applies */ }
+    }
     else if (idx === 1) this.toolRules.add(name);
     return true;
   };
@@ -585,16 +590,17 @@ export class App {
     this.warmTimer.unref?.();
   }
   /** Project hooks run commands on this machine, so a cloned repo's hooks only run after the user approves this exact file. */
-  hooks!: Hooks;
+  hooks!: Hooks; rules!: Permissions;
   loadHooks() {
-    const fp = Hooks.fingerprint(this.cwd), trusted = !!fp && loadState().hookTrust?.[this.cwd] === fp;
+    const fp = projectConfigFingerprint(this.cwd), trusted = !!fp && loadState().hookTrust?.[this.cwd] === fp;
     try { this.hooks = Hooks.load(this.cwd, { trustProject: trusted }); } catch (e) { this.hooks = Hooks.load(this.cwd, { trustProject: false }); this.note(`hooks ignored: ${(e as Error).message}`); }
+    try { this.rules = Permissions.load(this.cwd, { trustProject: trusted }); } catch (e) { this.rules = new Permissions({}, this.cwd); this.note(`permission rules ignored: ${(e as Error).message}`); }
     return { fp, trusted };
   }
   private async askHookTrust() {
     const { fp, trusted } = this.loadHooks();
     if (!fp || trusted || !this.persist) { this.buildAgent(); return; }
-    const ok = await this.pick("This project defines hooks (.amness/hooks.json) that run commands on your machine. Allow them?", [{ label: "Yes, allow this version of the file", value: "y" }, { label: "No, ignore project hooks", value: "n" }]);
+    const ok = await this.pick("This project has its own hooks and/or permission rules (.amness/hooks.json, permissions.json). Hooks run commands on your machine and allow-rules skip prompts. Trust them?", [{ label: "Yes, trust this version of the files", value: "y" }, { label: "No, ignore them (deny and ask rules still apply)", value: "n" }]);
     if (ok === "y") { const st = loadState(); st.hookTrust = { ...(st.hookTrust ?? {}), [this.cwd]: fp }; saveState(st); this.loadHooks(); }
     this.buildAgent();
   }

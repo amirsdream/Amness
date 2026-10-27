@@ -6,7 +6,8 @@ import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
 import { fmtDuration, fmtTokens } from "./pricing.ts";
 import { codeBlocks } from "./clipboard.ts";
-import { Hooks } from "../../src/index.ts";
+import { Hooks, Permissions, projectConfigFingerprint } from "../../src/index.ts";
+import { loadState, saveState } from "../state.ts";
 import { tokenReport } from "./tokens.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
 import { helpLines, renderDiff, toolCall, todoList } from "./view.ts";
@@ -172,6 +173,18 @@ export function buildCommands(): Cmd[] {
     { name: "hooks", help: "lifecycle hooks in effect (.amness/hooks.json, ~/.amness/hooks.json)", live: true, run: (a) => {
       const l = a.hooks.list(), fp = Hooks.fingerprint(a.cwd);
       a.commit(["", bold("  Hooks"), ...(l.length ? l.map((h) => `  ${cyan(h.event.padEnd(16))} ${h.def.match ? dim(`[${h.def.match}] `) : ""}${h.def.command} ${dim(`${h.def.timeout ?? 10}s${h.def.failClosed ? " · fail closed" : ""}`)}`) : [dim("  none active")]), ...(fp && !l.some(() => true) ? [dim("  this project has .amness/hooks.json but it is not approved; restart and allow it")] : []), dim("  exit 0 allows · exit 2 blocks (stderr is shown to the model) · stdout JSON can add context or rewrite arguments")]);
+    } },
+    { name: "permissions", help: "permission rules: list · allow|ask|deny <rule> · e.g. /permissions allow sh(npm test*)", args: "[allow|ask|deny <rule>]", live: true, run: (a, arg) => {
+      const [list, ...rest] = arg.split(/\s+/), rule = rest.join(" ");
+      if (list === "allow" || list === "ask" || list === "deny") {
+        if (!rule) return void a.say(`usage: /permissions ${list} sh(npm test*)  ·  edit(src/**)  ·  read`, dim);
+        try { Permissions.addProjectRule(a.cwd, list, rule); } catch (e) { return void a.say((e as Error).message, red); }
+        const fp = projectConfigFingerprint(a.cwd), st = loadState(); if (fp && st.hookTrust?.[a.cwd]) { st.hookTrust[a.cwd] = fp; saveState(st); }     // you wrote it, so it stays trusted
+        a.loadHooks(); a.buildAgent(); return void a.say(`${list} ${rule} saved to .amness/permissions.json`, dim);
+      }
+      const r = a.rules.rules();
+      a.commit(["", bold("  Permission rules"), ...(["deny", "ask", "allow"] as const).flatMap((k) => r[k].map((x) => `  ${(k === "deny" ? red : k === "ask" ? yellow : green)(k.padEnd(6))} ${x}`)), ...(!r.deny.length && !r.ask.length && !r.allow.length ? [dim("  no rules yet")] : []),
+        "", dim("  always on, in every mode including yolo: no recursive delete of / or ~, no force-push to main, no editing .git or these rule files; curl|sh and force-pushes always ask"), dim("  precedence: that floor > deny > ask > allow > permission mode")]);
     } },
     { name: "check", help: "fast command run after every edit (typecheck, lint); failures go straight back to the model", args: "[cmd|off]", run: (a, arg) => {
       if (!arg) return void a.say(a.check ? `post-edit check: ${cyan(a.check)}` : "no post-edit check set. /check npx tsc --noEmit", dim);

@@ -87,7 +87,7 @@ export class Budget {
   }
 }
 
-export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string }) => Promise<boolean | string> | boolean | string;
+export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string; /** from the built-in safety floor: "don't ask again" shortcuts must not skip this prompt */ floor?: boolean }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
 export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule";
 
@@ -114,6 +114,8 @@ export type Options = {
   rollover?: { afterTokens?: number; afterChars?: number };
   /** Receives each handoff note (persist it; it is also a portable summary of the work so far). */
   onHandoff?: (note: string) => void;
+  /** Rules that allow, force-ask or deny a call before the permission mode is consulted (see `Permissions`). Deny wins; allow skips the prompt. */
+  permissions?: { check(tool: string, args: Record<string, any>): { action: "allow" | "ask" | "deny" | "none"; rule?: string; reason?: string; floor?: boolean } };
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
   hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
@@ -378,11 +380,14 @@ export function createHarness(o: Options) {
         const pre = await hook("PreToolUse", { tool: name, args });
         if (pre?.block) { emit({ kind: "denied", detail: `${name}: blocked by a hook` }); return `BLOCKED BY A HOOK: ${clip(pre.block, 2000)}\nDo not retry the same call; choose another approach or explain what you could not do.`; }
         if (pre?.args) { const e2 = validate(pre.args, t!.schema); if (e2.length) return `ERROR: a hook rewrote the arguments into something invalid (${e2.join("; ")})`; args = pre.args; }
-        const risk = typeof t!.risky === "function" ? t!.risky(args) : t!.risky;
+        const perm = o.permissions?.check(name, args);
+        if (perm?.action === "deny") { emit({ kind: "denied", detail: `${name}: ${perm.reason ?? "denied by a rule"}` }); return `DENIED: ${perm.reason ?? "denied by a permission rule"}. Do not retry this; choose a safer alternative, or finish and explain what you could not do.`; }
+        const base = typeof t!.risky === "function" ? t!.risky(args) : t!.risky;
+        const risk = perm?.action === "ask" ? (perm.floor && typeof base === "string" ? base : perm.reason ?? "requires approval") : perm?.action === "allow" ? false : base;
         if (risk) {
           let preview: string | undefined;
           try { preview = t!.preview?.(args); } catch { /* a broken preview must not block the prompt */ }
-          const ask = approvals.then(() => o.approve?.({ name, args, reason: typeof risk === "string" ? risk : undefined, preview, id: c.id }) ?? false);
+          const ask = approvals.then(() => o.approve?.({ name, args, reason: typeof risk === "string" ? risk : undefined, preview, id: c.id, floor: perm?.floor }) ?? false);
           approvals = ask.catch(() => {});
           const ok = await ask;
           if (ok !== true) {
