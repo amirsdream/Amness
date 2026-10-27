@@ -125,7 +125,7 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
 
   // ---------------------------------------------------------------- tool card
   const sub = !!b.agent && b.agent !== "lead", failed = b.status === "fail", edit = b.edit;
-  const hue = failed ? t.err : (({ read_file: t.tool.read, list_files: t.tool.read, grep: t.tool.read, write_file: t.tool.edit, edit_file: t.tool.edit, sh: t.tool.shell, web_search: t.tool.web, fetch_url: t.tool.web, memory_save: t.tool.memory, memory_forget: t.tool.memory, memory_search: t.tool.read, todo_write: t.tool.plan, exit_plan_mode: t.tool.plan, task: t.tool.explore }) as Record<string, number>)[b.name] ?? (b.name.includes("__") ? t.tool.web : t.tool.generic);
+  const hue = failed ? t.err : (({ read_file: t.tool.read, list_files: t.tool.read, grep: t.tool.read, write_file: t.tool.edit, edit_file: t.tool.edit, apply_patch: t.tool.edit, sh: t.tool.shell, web_search: t.tool.web, fetch_url: t.tool.web, memory_save: t.tool.memory, memory_forget: t.tool.memory, memory_search: t.tool.read, todo_write: t.tool.plan, exit_plan_mode: t.tool.plan, task: t.tool.explore }) as Record<string, number>)[b.name] ?? (b.name.includes("__") ? t.tool.web : t.tool.generic);
   const expanded = c.expandAll ? true : b.expanded ?? (!!edit || failed);
   const bg = failed ? mix(t.surface, t.err, 0.14) : t.surface, spinner = SPIN[c.frame % SPIN.length];
   const label = BOLD(F(failed ? t.err : t.text, toolLabel(b.name))), args = F(t.dim, argSummary(b.name, b.args));

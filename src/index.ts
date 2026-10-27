@@ -22,3 +22,4 @@ export * from "./procs.ts";
 export * from "./ledger.ts";
 export * from "./progress.ts";
 export * from "./review.ts";
+export * from "./patch.ts";

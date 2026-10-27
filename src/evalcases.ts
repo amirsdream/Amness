@@ -118,6 +118,31 @@ export const builtinCases: Case[] = [
     check: "node test.js && node -e \"const a=require('./a'),b=require('./b');process.exit(a.double(5)===10&&b.triple(5)===15?0:1)\"",
     solution: { "a.js": "exports.double = (n) => n * 2;\n", "b.js": "exports.triple = (n) => n * 3;\n" },
   },
+  {
+    name: "change-signature",
+    files: {
+      "greet.js": "exports.greet = (name) => 'Hello, ' + name + '!';\n",
+      "cli.js": "const { greet } = require('./greet'); exports.run = (n) => greet(n);\n",
+      "web.js": "const { greet } = require('./greet'); exports.page = (n) => '<h1>' + greet(n) + '</h1>';\n",
+      "test.js": "const a = require('assert'); a.equal(require('./cli').run('Ada'), 'Hello, Ada!'); a.equal(require('./greet').greet('Bo', 'Hi'), 'Hi, Bo!');\n",
+    },
+    task: "greet(name) must accept an optional second argument, the greeting word (default 'Hello'): greet('Bo', 'Hi') returns 'Hi, Bo!'. Existing callers must keep working and web.js should now pass 'Welcome'. Make test.js pass.",
+    verify: "node test.js",
+    check: "node test.js && node -e \"const w=require('./web');process.exit(w.page('Cy')==='<h1>Welcome, Cy!</h1>'&&require('./cli').run('Di')==='Hello, Di!'?0:1)\"",
+    solution: { "greet.js": "exports.greet = (name, word = 'Hello') => word + ', ' + name + '!';\n", "web.js": "const { greet } = require('./greet'); exports.page = (n) => '<h1>' + greet(n, 'Welcome') + '</h1>';\n" },
+  },
+  {
+    name: "move-constant",
+    files: {
+      "a.js": "const LIMIT = 5; exports.capA = (n) => Math.min(n, LIMIT);\n",
+      "b.js": "const LIMIT = 5; exports.capB = (n) => Math.min(n, LIMIT);\n",
+      "test.js": "const a = require('assert'); a.equal(require('./a').capA(9), 5); a.equal(require('./b').capB(9), 5); a.equal(require('./config').LIMIT, 5);\n",
+    },
+    task: "LIMIT is duplicated in a.js and b.js. Move it into a new config.js that exports LIMIT, and use it from both files (no duplicate definitions left). Make test.js pass.",
+    verify: "node test.js",
+    check: "node test.js && ! grep -q 'const LIMIT' a.js && ! grep -q 'const LIMIT' b.js && grep -q 'LIMIT' config.js",
+    solution: { "config.js": "exports.LIMIT = 5;\n", "a.js": "const { LIMIT } = require('./config'); exports.capA = (n) => Math.min(n, LIMIT);\n", "b.js": "const { LIMIT } = require('./config'); exports.capB = (n) => Math.min(n, LIMIT);\n" },
+  },
 ];
 
 /** Cases from a folder of `*.json` files (`{ name?, files, task, verify?, check }`; `check` is a shell command), so you can evaluate on your own tasks. */

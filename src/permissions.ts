@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { patchPaths } from "./patch.ts";
 
 export type PermConfig = { allow?: string[]; ask?: string[]; deny?: string[] };
 export type Verdict = { action: "allow" | "ask" | "deny" | "none"; rule?: string; reason?: string; /** came from the built-in floor: session shortcuts must not bypass it */ floor?: boolean };
@@ -55,6 +56,7 @@ const WRITES_PROTECTED = /\.amness\/(?:hooks|permissions)\.json/;
 const READONLY_VERB = /^\s*(?:cat|head|tail|less|grep|rg|ls|wc|stat|file|diff)\b/;
 
 export function floorCheck(tool: string, args: Record<string, any>, cwd: string): Verdict {
+  if (tool === "apply_patch") { for (const p of patchPaths(String(args.patch ?? ""))) { const v = floorCheck("edit_file", { path: p }, cwd); if (v.action !== "none") return v; } return { action: "none" }; }
   const kind = kindOf(tool);
   if (kind === "edit" && typeof args.path === "string") {
     const rel = relative(cwd, resolve(cwd, args.path)).split("\\").join("/");
@@ -119,6 +121,10 @@ export class Permissions implements PermissionChecker {
   }
 
   check(tool: string, args: Record<string, any>): Verdict {
+    if (tool === "apply_patch") {        // a patch is judged file by file: any denied file denies it, any "ask" asks, and it is only allowed when every file is
+      const paths = patchPaths(String(args.patch ?? "")), per = paths.map((p) => this.check("edit_file", { path: p }));
+      return per.find((v) => v.action === "deny") ?? per.find((v) => v.action === "ask") ?? (per.length && per.every((v) => v.action === "allow") ? { action: "allow", rule: per[0].rule } : { action: "none" });
+    }
     const floor = floorCheck(tool, args, this.cwd); if (floor.action !== "none") return floor;
     const deny = this.anyMatch(this.cfg.deny, tool, args); if (deny) return { action: "deny", rule: deny, reason: `denied by your permission rule \`${deny}\`` };
     const ask = this.anyMatch(this.cfg.ask, tool, args); if (ask) return { action: "ask", rule: ask, reason: `matches your rule \`${ask}\`, which requires approval` };

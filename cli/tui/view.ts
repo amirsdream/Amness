@@ -5,7 +5,7 @@ import { TIPS, brandOf, fg, gauge, gaugeColor, logo, toolColor } from "./theme.t
 import { cellWidth, clipAnsi, clipWidth, strip, wrapAnsi } from "./text.ts";
 
 const ONE = (s: string, n: number) => { const l = s.replace(/\s+/g, " ").trim(); return cellWidth(l) > n ? clipWidth(l, n - 1) + "…" : l; };
-const NAMES: Record<string, string> = { read_file: "Read", list_files: "List", grep: "Search", write_file: "Write", edit_file: "Update", sh: "Bash", memory_save: "Memory", memory_search: "Memory",
+const NAMES: Record<string, string> = { read_file: "Read", list_files: "List", grep: "Search", write_file: "Write", edit_file: "Update", apply_patch: "Patch", sh: "Bash", memory_save: "Memory", memory_search: "Memory",
   memory_forget: "Memory", web_search: "WebSearch", fetch_url: "Fetch", task: "Explore", todo_write: "Todos", exit_plan_mode: "Plan", create_tool: "CreateTool", finish: "Finish" };
 export const toolLabel = (name: string) => NAMES[name] ?? name;
 
@@ -18,6 +18,7 @@ export function argSummary(name: string, raw: string): string {
     case "grep": return `"${ONE(a.pattern ?? "", 40)}"${a.path ? " in " + a.path : ""}`;
     case "list_files": return a.path ?? ".";
     case "task": return ONE(a.description ?? "", 70);
+    case "apply_patch": { const n = (String(a.patch ?? "").match(/^(?:\*\*\* (?:Update|Add|Delete) File:|\+\+\+ )/gm) ?? []).length; return `${n || "?"} file${n === 1 ? "" : "s"}`; }
     case "web_search": return ONE(a.query ?? "", 70);
     case "fetch_url": return ONE(a.url ?? "", 80);
     case "memory_save": return a.name ?? "";

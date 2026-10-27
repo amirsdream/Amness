@@ -440,12 +440,15 @@ export class App {
         if (!sub) this.stepNow().tools.push({ name: e.name, args: e.args, ms: t ? Date.now() - t.t0 : 0, ok: !bad });
         if (!sub && e.name !== "todo_write") this.activity = [...this.activity, { name: e.name, args: e.args, ms: t ? Date.now() - t.t0 : 0, ok: !bad }].slice(-12);
         let editPath = ""; if ((e.name === "write_file" || e.name === "edit_file") && !bad) { try { editPath = JSON.parse(e.args).path; } catch { /* keep empty */ } }
-        const ed = editPath ? this.pendingEdits.get(editPath) : undefined; if (editPath) this.pendingEdits.delete(editPath);
+        let ed = editPath ? this.pendingEdits.get(editPath) : undefined; if (editPath) this.pendingEdits.delete(editPath);
+        let more: EditEv[] = [];
+        if (e.name === "apply_patch" && !bad) { [ed, ...more] = [...this.pendingEdits.values()]; this.pendingEdits.clear(); editPath = ed?.path ?? ""; }
         this.blocks.toolEnd(e.id ?? "", e.result, ed ? { path: ed.path, created: ed.created, added: ed.added, removed: ed.removed, diff: ed.diff } : undefined);
+        for (const x of more) { const id = `${e.id}#${x.path}`; this.blocks.toolStart(id, "edit_file", JSON.stringify({ path: x.path })); this.blocks.toolEnd(id, `patched ${x.path}`, { path: x.path, created: x.created, added: x.added, removed: x.removed, diff: x.diff }); }
         if (sub) { this.inlineOnly([toolHeader(e.name, e.args, !bad, sub)]); break; }
         if (e.name === "todo_write") break;
         const lines = ["", toolHeader(e.name, e.args, !bad)];
-        if (ed) lines.push(`  ${gray("⎿")}  ${dim(editSummary(ed))}`, ...renderDiff(ed.diff, w));
+        if (ed) { lines.push(`  ${gray("⎿")}  ${dim(editSummary(ed))}`, ...renderDiff(ed.diff, w)); for (const x of more) lines.push(`  ${gray("⎿")}  ${dim(editSummary(x))}`, ...renderDiff(x.diff, w)); }
         else if (!editPath) lines.push(...toolResult(e.name, e.args, e.result, w));
         void t; this.inlineOnly(lines); break;
       }
@@ -499,9 +502,10 @@ export class App {
     if (name === "exit_plan_mode") {
       title = "Ready to code?"; body = renderMarkdown(String(args.plan ?? preview ?? ""), w - 6); question = "Would you like to proceed?"; detail = { kind: "plan", md: String(args.plan ?? preview ?? "") };
       options = [{ label: "Yes, and accept edits automatically" }, { label: "Yes, and ask before each edit" }, { label: "No, keep planning", hint: "tell it what to change" }];
-    } else if (name === "write_file" || name === "edit_file") {
-      title = `${name === "write_file" ? "Write" : "Edit"} ${args.path}`; body = preview ? renderDiff(preview, w - 4, 18).map((l) => l.slice(5)) : [String(args.path)];
-      question = "Apply this change?"; if (preview) detail = { kind: "diff", path: String(args.path), diff: preview };
+    } else if (name === "write_file" || name === "edit_file" || name === "apply_patch") {
+      const target = name === "apply_patch" ? `${(String(args.patch).match(/^(?:\*\*\* (?:Update|Add|Delete) File:|\+\+\+ )/gm) ?? []).length || "?"} file(s)` : String(args.path);
+      title = `${name === "write_file" ? "Write" : name === "apply_patch" ? "Patch" : "Edit"} ${target}`; body = preview ? renderDiff(preview, w - 4, 18).map((l) => l.slice(5)) : [String(args.path)];
+      question = "Apply this change?"; if (preview) detail = { kind: "diff", path: name === "apply_patch" ? target : String(args.path), diff: preview };
       options = [{ label: "Yes" }, { label: "Yes, and accept all edits this session", hint: "shift+tab" }, { label: "No, and tell Amness what to do instead", hint: "esc" }];
     } else if (name === "sh") {
       const danger = riskOf(String(args.cmd)); paint = danger ? yellow : undefined;
@@ -520,7 +524,7 @@ export class App {
     const last = idx === options.length - 1;
     if (last) { const note = await this.askText("What should Amness do instead?"); return note || "the user declined this action"; }
     if (name === "exit_plan_mode") this.setMode(idx === 0 ? "acceptEdits" : "default");
-    else if (idx === 1 && (name === "write_file" || name === "edit_file")) this.setMode("acceptEdits");
+    else if (idx === 1 && (name === "write_file" || name === "edit_file" || name === "apply_patch")) this.setMode("acceptEdits");
     else if (idx === 1 && name === "sh") this.shRules.add(shPrefix(String(args.cmd)));
     else if (idx === 2 && name === "sh") {
       this.shRules.add(shPrefix(String(args.cmd)));

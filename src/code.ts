@@ -1,5 +1,5 @@
 import { exec, execFile } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { applyBundle, collectFiles, readBundle, writeBundle, type Bundle } from "./bundle.ts";
 import { unifiedDiff } from "./diff.ts";
@@ -10,6 +10,7 @@ import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
 import { ProcessManager } from "./procs.ts";
 import { Ledger } from "./ledger.ts";
+import { applyOps, parsePatch, replaceMany } from "./patch.ts";
 import { proposeContract, reviewWork } from "./review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { Permissions, type PermissionChecker } from "./permissions.ts";
@@ -89,18 +90,38 @@ export function codeTools(cwd: string, o: { /** background processes (sh_start, 
         ctx.emit?.({ kind: "edit", ...unifiedDiff(path, before, content), before: before === null || before.length < 500_000 ? before : undefined });
         return `wrote ${content.length} chars to ${path}` + (await o.check?.() ?? "") + (o.guidance?.nested(path) ?? "");
       } }),
-    defineTool<{ path: string; old: string; new: string }>({ name: "edit_file", description: "Replace one exact, unique occurrence of `old` with `new` in a file you have read. Shows the result.",
-      schema: { type: "object", required: ["path", "old", "new"], properties: { path: { type: "string" }, old: { type: "string" }, new: { type: "string" } } }, ...mutating,
-      preview: ({ path, old, new: nw }) => { const s = readFileSync(abs(path), "utf8"); return s.split(old).length === 2 ? unifiedDiff(path, s, s.replace(old, () => nw)).diff : undefined; },
-      run: async ({ path, old, new: nw }, ctx) => {
+    defineTool<{ path: string; old?: string; new?: string; edits?: { old: string; new: string }[] }>({ name: "edit_file", description: "Replace exact, unique text in a file you have read. Give `old` and `new`, or an `edits` list of several replacements applied in order (all or nothing). If the text differs only in indentation it is still matched when unique. Shows the result.",
+      schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, old: { type: "string" }, new: { type: "string" }, edits: { type: "array", items: { type: "object", required: ["old", "new"], properties: { old: { type: "string" }, new: { type: "string" } } } } } }, ...mutating,
+      preview: ({ path, old, new: nw, edits }) => { const s = readFileSync(abs(path), "utf8"), r = replaceMany(s, edits?.length ? edits : old !== undefined && nw !== undefined ? [{ old, new: nw }] : []); return "error" in r ? undefined : unifiedDiff(path, s, r.out).diff; },
+      run: async ({ path, old, new: nw, edits }, ctx) => {
         mustRead(path);
-        const a = abs(path), s = readFileSync(a, "utf8"), n = s.split(old).length - 1;
-        if (n !== 1) return `ERROR: \`old\` matched ${n} times; it must match exactly once. Include more surrounding lines.`;
-        const out = s.replace(old, () => nw);
-        writeFileSync(a, out); o.onChange?.(path);
-        ctx.emit?.({ kind: "edit", ...unifiedDiff(path, s, out), before: s.length < 500_000 ? s : undefined });
-        const line = s.slice(0, s.indexOf(old)).split("\n").length;
-        return `edited ${path}:\n` + out.split("\n").slice(Math.max(0, line - 3), line + nw.split("\n").length + 2).map((l, i) => `${Math.max(1, line - 2) + i}\t${l}`).join("\n") + (await o.check?.() ?? "");
+        const list = edits?.length ? edits : old !== undefined && nw !== undefined ? [{ old, new: nw }] : [];
+        if (!list.length) return "ERROR: give `old` and `new`, or an `edits` list.";
+        const a = abs(path), s = readFileSync(a, "utf8"), r = replaceMany(s, list);
+        if ("error" in r) return `ERROR: ${r.error}`;
+        writeFileSync(a, r.out); o.onChange?.(path);
+        ctx.emit?.({ kind: "edit", ...unifiedDiff(path, s, r.out), before: s.length < 500_000 ? s : undefined });
+        const first = list[0], at = r.out.indexOf(first.new.split("\n")[0] ?? ""), line = at >= 0 ? r.out.slice(0, at).split("\n").length : 1;
+        return `edited ${path}${list.length > 1 ? ` (${list.length} edits)` : ""}${r.fuzzy ? `; ${r.fuzzy} matched ignoring indentation` : ""}:\n` + r.out.split("\n").slice(Math.max(0, line - 3), line + first.new.split("\n").length + 2).map((l, i) => `${Math.max(1, line - 2) + i}\t${l}`).join("\n") + (await o.check?.() ?? "") + (o.guidance?.nested(path) ?? "");
+      } }),
+    defineTool<{ patch: string }>({ name: "apply_patch", description: "Change several files at once with a patch, all or nothing. Format: `*** Begin Patch`, then per file `*** Update File: path` (hunks start with `@@`, lines begin with space, `-` or `+`), `*** Add File: path` (all lines start with `+`) or `*** Delete File: path`, then `*** End Patch`. A unified diff also works. Existing files must have been read first.",
+      schema: { type: "object", required: ["patch"], properties: { patch: { type: "string" } } }, ...mutating,
+      preview: ({ patch }) => { try { const r = applyOps(parsePatch(patch), (p) => (existsSync(abs(p)) ? readFileSync(abs(p), "utf8") : undefined)); return r.errors.length ? undefined : r.applied.map((x) => unifiedDiff(x.path, x.before, x.after ?? "").diff).join("\n"); } catch { return undefined; } },
+      run: async ({ patch }, ctx) => {
+        const ops = parsePatch(patch); if (!ops.length) return "ERROR: no files found in the patch. Use `*** Begin Patch` / `*** Update File: path` ... `*** End Patch`, or a unified diff.";
+        for (const op of ops) { if (op.op !== "add") mustRead(op.path); else abs(op.path); }
+        const r = applyOps(ops, (p) => (existsSync(abs(p)) ? readFileSync(abs(p), "utf8") : undefined));
+        if (r.errors.length) return `ERROR: nothing was changed.\n${r.errors.map((e) => "- " + e).join("\n")}\nRe-read the files if they may differ from what you assumed.`;
+        const lines: string[] = [];
+        for (const x of r.applied) {
+          const a = abs(x.path);
+          if (x.after === null) { rmSync(a, { force: true }); readSet.delete(a); } else { mkdirSync(dirname(a), { recursive: true }); writeFileSync(a, x.after); readSet.add(a); }
+          o.onChange?.(x.path);
+          const ch = unifiedDiff(x.path, x.before, x.after ?? "");
+          ctx.emit?.({ kind: "edit", ...ch, before: x.before === null || x.before.length < 500_000 ? x.before : undefined });
+          lines.push(`${x.after === null ? "deleted" : x.before === null ? "added" : "updated"} ${x.path} (+${ch.added} -${ch.removed})${x.fuzzy ? `, ${x.fuzzy} hunk(s) matched ignoring indentation` : ""}`);
+        }
+        return `patched ${r.applied.length} file(s):\n${lines.join("\n")}` + (await o.check?.() ?? "") + (o.guidance?.nested(r.applied[0].path) ?? "");
       } }),
     ...(o.procs ? bgTools(o.procs, shRisk, mode) : []),
     defineTool<{ cmd: string; timeout?: number }>({ name: "sh", description: "Run a shell command in the workspace; returns exit code and output. Dangerous commands need human approval.",
@@ -134,7 +155,7 @@ function bgTools(procs: ProcessManager, risky: (a: { cmd: string }) => string | 
 export const CODE_SYSTEM = `You are an expert software engineer working autonomously in a repository. Complete the task, then call \`finish\`.
 Workflow:
 1. EXPLORE: list_files / grep / read_file to understand the code before changing it. Reproduce the problem or run the existing tests first when possible.
-2. EDIT: smallest correct change, matching surrounding style. Prefer edit_file over rewriting files. Do not touch unrelated code. Never edit tests to make them pass unless the task says so.
+2. EDIT: smallest correct change, matching surrounding style. Prefer edit_file over rewriting files (several replacements in one file: its \`edits\` list); use apply_patch when one change spans several files. Do not touch unrelated code. Never edit tests to make them pass unless the task says so.
 3. VERIFY: run the tests/build/command that proves it works. Read failures carefully and fix the root cause. If an approach fails twice, rethink.
 4. FINISH: \`finish(summary)\` with what changed, how you verified, and assumptions. It is rejected if verification fails.
 MEMORY: notes from earlier sessions may appear below the task; treat them as hints to verify. When you learn something durable that is NOT obvious from the code (the real test command, a convention the user insists on, a correction), save it with memory_save. Never save secrets or task-progress chatter.
