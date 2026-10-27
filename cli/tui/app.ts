@@ -154,7 +154,7 @@ export class App {
     try { if (this.full) this.full.leave(); else { this.screen.clear(); if (this.screen.alt) this.screen.leaveAlt(); } this.io.output.write(PASTE_OFF + "\x1b[?25h"); this.io.input.setRawMode?.(false); this.io.input.pause?.(); this.io.input.off?.("data", this.onData); } catch { /* terminal already gone */ }
   };
   exit(code = 0) {
-    this.stopWarm();
+    this.stopWarm(); this.agent.procs?.killAllNow(); void this.tracer?.close();
     if (this.running) this.ac?.abort();
     this.saveSession(); this.restore();
     const hint = this.session.turns.length ? dim(`Resume this conversation with: amness -c   (session ${this.session.id})`) : "";

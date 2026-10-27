@@ -65,5 +65,5 @@ export async function runHeadless(argv: string[]): Promise<number> {
   } catch (e) {
     if (json) console.log(JSON.stringify({ kind: "error", message: (e as Error).message })); else console.error("error: " + (e as Error).message);
     return 1;
-  } finally { await tracer?.close(); await live?.close(); }
+  } finally { await agent.procs?.dispose(); await tracer?.close(); await live?.close(); }
 }

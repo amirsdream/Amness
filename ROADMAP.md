@@ -36,7 +36,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G1 | Load `AGENTS.md` and friends automatically (fixes a bug) | P1 | S | [x] |
 | G2 | Lifecycle hooks | P1 | S | [x] |
 | G3 | Permission rules and a hard deny floor | P1 | S | [x] |
-| G4 | Background processes | P1 | M | [ ] |
+| G4 | Background processes | P1 | M | [x] |
 | G5 | Better edit formats (patch, multi-edit, fuzzy fallback) | P1 | M | [ ] |
 | G6 | OS-level sandbox for shell commands | P1 | M | [ ] |
 | G7 | Skills (`SKILL.md`) | P2 | S–M | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G4**: sh_start / sh_read / sh_stop / sh_list with a 200 KB ring buffer, process-group kill, max 5, plan mode hides sh_start, same permission rules and floor as sh; sidebar PROCESSES section, /procs, cleanup on exit. src/procs.ts, test/procs.test.ts.
 - **G14**: cycle detection (2-4 different calls repeating 3x) with a reflection-style refusal; repeat counting now ignores key order and whitespace and resets after any file edit, which also fixes a false positive (re-running the same test command after real edits was being blocked on the third time). src/harness.ts, test/loop.test.ts.
 - **G12**: always-on JSONL trace per session (.amness/traces), optional OTLP/HTTP export with GenAI attributes (AMNESS_OTLP, --trace), cache-waste figure (tokens re-read at full price and estimated dollars) in /loop. src/trace.ts, test/trace.test.ts.
 - **G3**: allow/ask/deny rules (sh(...) with per-piece compound handling, edit(...)/read globs) from project and user files; built-in floor that holds in yolo (no rm -rf of / ~ .., no force-push to main, no .git or policy-file edits, curl|sh and force-push always ask); project allow rules need approval; /permissions; 'always allow' in the approval dialog. src/permissions.ts, test/permissions.test.ts.

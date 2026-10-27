@@ -171,6 +171,12 @@ export function buildCommands(): Cmd[] {
       if (!arg) return void a.say(`keep-warm is ${a.cfg.keepWarm ? "on" : "off"}. Claude drops its prompt cache after 5 idle minutes; with this on, a tiny re-send every ~4.5 minutes (at most 3 per break) keeps it. Only affects Claude.`, dim);
       a.cfg.keepWarm = arg === "on"; a.saveConfig(); if (!a.cfg.keepWarm) a.stopWarm(); a.say(`keep-warm ${a.cfg.keepWarm ? "on" : "off"}${a.cfg.keepWarm && a.cfg.provider !== "anthropic" ? dim("  (only Claude needs it; OpenAI requests already ask for 24h cache retention)") : ""}`, dim);
     } },
+    { name: "procs", help: "background processes the agent started (stop one with /procs stop <id>)", args: "[stop <id>]", live: true, run: async (a, arg) => {
+      const [sub, id] = arg.split(/\s+/);
+      if (sub === "stop" && id) { try { const p = await a.agent.procs!.stop(id); return void a.say(`stopped ${p.id} (${p.name})`, dim); } catch (e) { return void a.say((e as Error).message, red); } }
+      const l = a.agent.procs?.list() ?? [];
+      a.commit(["", bold("  Background processes"), ...(l.length ? l.map((p) => `  ${(p.status === "running" ? green : dim)(p.id.padEnd(4))} ${p.name.padEnd(28)} ${dim(`${p.status}${p.status === "exited" ? ` (${p.code})` : ""} · pid ${p.pid ?? "?"} · ${Math.round((Date.now() - p.startedAt) / 1000)}s`)}`) : [dim("  none")])]);
+    } },
     { name: "hooks", help: "lifecycle hooks in effect (.amness/hooks.json, ~/.amness/hooks.json)", live: true, run: (a) => {
       const l = a.hooks.list(), fp = Hooks.fingerprint(a.cwd);
       a.commit(["", bold("  Hooks"), ...(l.length ? l.map((h) => `  ${cyan(h.event.padEnd(16))} ${h.def.match ? dim(`[${h.def.match}] `) : ""}${h.def.command} ${dim(`${h.def.timeout ?? 10}s${h.def.failClosed ? " · fail closed" : ""}`)}`) : [dim("  none active")]), ...(fp && !l.some(() => true) ? [dim("  this project has .amness/hooks.json but it is not approved; restart and allow it")] : []), dim("  exit 0 allows · exit 2 blocks (stderr is shown to the model) · stdout JSON can add context or rewrite arguments")]);

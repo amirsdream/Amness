@@ -10,7 +10,7 @@ export type PermConfig = { allow?: string[]; ask?: string[]; deny?: string[] };
 export type Verdict = { action: "allow" | "ask" | "deny" | "none"; rule?: string; reason?: string; /** came from the built-in floor: session shortcuts must not bypass it */ floor?: boolean };
 export type PermissionChecker = { check(tool: string, args: Record<string, any>): Verdict };
 
-const SHELL = new Set(["sh"]), EDIT = new Set(["edit_file", "write_file", "apply_patch"]), READ = new Set(["read_file", "grep", "list_files"]);
+const SHELL = new Set(["sh", "sh_start"]), EDIT = new Set(["edit_file", "write_file", "apply_patch"]), READ = new Set(["read_file", "grep", "list_files"]);
 const kindOf = (tool: string) => (SHELL.has(tool) ? "sh" : EDIT.has(tool) ? "edit" : READ.has(tool) ? "read" : tool);
 
 /** `*` matches within a path segment... except in commands, where it matches anything; `**` crosses folders. */
