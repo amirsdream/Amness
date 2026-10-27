@@ -1,6 +1,6 @@
 // The claims ledger: what actually happened (files changed, commands run and their exit codes), recorded from tool events, never from the model's own words.
 // At `finish` the model's summary is checked against it, because agents that grade their own work accept plausible-sounding progress as real progress.
-export type LedgerEdit = { path: string; added: number; removed: number; created: boolean; seq: number };
+export type LedgerEdit = { path: string; added: number; removed: number; created: boolean; seq: number; diff?: string };
 export type LedgerCmd = { cmd: string; code: number | null; test: boolean; build: boolean; failedOutput: boolean; seq: number };
 export type Audit = { changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] };
 
@@ -15,7 +15,11 @@ export class Ledger {
   constructor(o: { testCommand?: string } = {}) { if (o.testCommand) this.extraTest = new RegExp(o.testCommand.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+")); }
   reset() { this.edits = []; this.cmds = []; this.seq = 0; }
 
-  onEdit(e: { path: string; added: number; removed: number; created: boolean }) { this.edits.push({ path: e.path, added: e.added, removed: e.removed, created: e.created, seq: ++this.seq }); }
+  onEdit(e: { path: string; added: number; removed: number; created: boolean; diff?: string }) { this.edits.push({ path: e.path, added: e.added, removed: e.removed, created: e.created, seq: ++this.seq, diff: e.diff?.slice(0, 6000) }); }
+  /** Every change made so far as diffs (capped), for a reviewer. */
+  diffs(max = 24_000): string { let out = ""; for (const e of this.edits) { const d = `### ${e.path}${e.created ? " (new)" : ""}\n${e.diff ?? `+${e.added} -${e.removed}`}\n`; if (out.length + d.length > max) { out += `[... ${this.edits.length} edits in total; the rest are not shown]\n`; break; } out += d; } return out; }
+  /** The last few commands with their outcome. */
+  recentCommands(n = 8): string { return this.cmds.slice(-n).map((c) => `- ${c.cmd.slice(0, 120)} → exit ${c.code ?? "?"}${c.failedOutput ? " (failures in output)" : ""}`).join("\n"); }
   /** Record a shell command from its tool result (`exit=N\n...`). */
   onCommand(cmd: string, result: string) {
     const m = /^exit=(\d+)/.exec(result), code = m ? Number(m[1]) : /^exit=/.test(result) ? null : null;

@@ -109,7 +109,7 @@ export class App {
     this.model = (this.opts.makeModel ?? ((c) => createModel(c, undefined, { cacheKey })))(this.cfg);
     this.agent = createCodeAgent({
       model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
   }
@@ -450,6 +450,7 @@ export class App {
         void t; this.inlineOnly(lines); break;
       }
       case "todos": this.todos = e.todos; break;
+      case "review": if (!sub) { this.stepNow().notes.push(e.pass ? "reviewer: no problems" : "reviewer: " + e.findings.join("; ").slice(0, 200)); if (!e.pass) this.notify("warn", `reviewer found ${e.findings.length} problem${e.findings.length === 1 ? "" : "s"}: ${one(e.findings.join("; "), 300)}`, [dim(`  ✖ reviewer: ${one(e.findings.join("; "), w - 16)}`)]); else this.note("reviewer: no problems found"); } break;
       case "audit": if (!sub && (e.changed.length || e.notes.length)) {
         const line = `${e.changed.length} file${e.changed.length === 1 ? "" : "s"} changed${e.testsAfterLastEdit === true ? " · tests passed after the last edit" : ""}`;
         this.stepNow().notes.push("audit: " + line + (e.notes.length ? " · " + e.notes.join("; ") : ""));

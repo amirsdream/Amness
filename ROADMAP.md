@@ -57,7 +57,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G22 | Publish to npm (needs a build step or a bundled runtime) | P3 | M | [ ] |
 | L1 | Grounded finish gate: claims ledger and scope audit | P1 | M | [~] |
 | L2 | Stagnation detection from external signals, not self-report | P1 | M | [~] |
-| L3 | Independent skeptical evaluator with a sprint contract | P1 | M | [ ] |
+| L3 | Independent skeptical evaluator with a sprint contract | P1 | M | [~] |
 | L4 | Trace replay: test harness changes without model calls | P1 | M | [ ] |
 | L5 | Failure mining: every bad session becomes an eval task | P2 | M | [ ] |
 | L6 | Cache-aware per-step model routing | P2 | L | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **L3** (partly): opt-in independent reviewer: acceptance criteria written in a fresh context before task-like messages and shown to the builder; before a finish is accepted a read-only reviewer (run_check limited to test/build/lint commands) judges the diff against them; findings go back, max two rounds, inconclusive never blocks; can use a different model; /reviewer, --review, eval variant full+review. src/review.ts, test/review.test.ts. Value on real tasks still to be measured (amness eval --variants full,full+review).
 - **L2** (partly): stagnation detection from objective signals: failure counts parsed from test/build/lint output (Jest, pytest, Go, Cargo, Node runner, tsc, eslint, exit code fallback), first edits, new non-inverse changes, new reads (capped); reflection after K=8 stale turns, stop after 1.5K; 'stagnation' guard for ablation; stagnationTurns option. src/progress.ts, test/progress.test.ts. Not yet measured on a real model (eval variant full-stagnation).
 - **L1** (partly): claims ledger (edits and commands with exit codes recorded from tool events) checks the finish summary: tests-pass needs a passing run after the last edit, build/typecheck claims need a matching command, 'changed file X' needs a recorded edit; rejected with specifics at most twice; audit line after accepted finish (files changed, tests after last edit, test files touched unprompted); 'ledger' guard for ablation; 2 new eval tasks (test-weakening-trap, partial-verify-trap). src/ledger.ts, test/ledger.test.ts. Measuring the false-done rate on a real model is still to do (amness eval --variants full,full-ledger).
 - **G4**: sh_start / sh_read / sh_stop / sh_list with a 200 KB ring buffer, process-group kill, max 5, plan mode hides sh_start, same permission rules and floor as sh; sidebar PROCESSES section, /procs, cleanup on exit. src/procs.ts, test/procs.test.ts.

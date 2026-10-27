@@ -122,13 +122,13 @@ export function formatReport(a: Analysis): string {
 
 // ------------------------------------------------------------------------------------------------------------------ variants
 const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation"];
-export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · no-gate (guards, no verify gate) · full-<guard> to switch one guard off: " + ALL_GUARDS.join(", ");
+export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · no-gate (guards, no verify gate) · full-<guard> to switch one guard off: " + ALL_GUARDS.join(", ");
 
 /** Build a named variant of the code agent. Names: see VARIANT_HELP. */
 export function harnessVariant(model: Model, name: string, o: { maxSteps?: number; maxTokens?: number } = {}): Variant {
   const m = /^full-(.+)$/.exec(name), dropped = m ? (m[1] as Guard) : undefined;
   if (dropped && !ALL_GUARDS.includes(dropped)) throw new Error(`unknown guard "${dropped}" in variant "${name}". Guards: ${ALL_GUARDS.join(", ")}`);
-  if (!dropped && !["baseline", "full", "full+check", "no-gate"].includes(name)) throw new Error(`unknown variant "${name}". Known: ${VARIANT_HELP}`);
+  if (!dropped && !["baseline", "full", "full+check", "full+review", "no-gate"].includes(name)) throw new Error(`unknown variant "${name}". Known: ${VARIANT_HELP}`);
   return {
     name,
     async run(c, dir) {
@@ -136,7 +136,7 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
       const off = name === "baseline" ? ALL_GUARDS : dropped ? [dropped] : [];
       const r = await createCodeAgent({
         model, cwd: dir, budget, maxSteps: o.maxSteps ?? 30, off, memory: false,
-        verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined,
+        verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined, review: name === "full+review" || undefined,
         onEvent: (e: Event) => { if (e.kind !== "text" && e.kind !== "thinking" && e.kind !== "assistant" && e.kind !== "toolstart" && e.kind !== "phase") events[e.kind] = (events[e.kind] ?? 0) + 1; },
       }).run(c.task);
       return { text: r.text, steps: r.steps, tokens: budget.tokens, events, prompt: budget.promptTokens, cached: budget.cachedTokens };
@@ -154,7 +154,7 @@ export function variantNames(spec: string): string[] {
   for (const p of spec.split(",").map((s) => s.trim()).filter(Boolean)) {
     if (p === "ab") out.push("baseline", "full");
     else if (p === "ablate") out.push("full", ...ALL_GUARDS.map((g) => `full-${g}`));
-    else if (p === "all") out.push("baseline", "no-gate", "full", "full+check", ...ALL_GUARDS.map((g) => `full-${g}`));
+    else if (p === "all") out.push("baseline", "no-gate", "full", "full+check", "full+review", ...ALL_GUARDS.map((g) => `full-${g}`));
     else out.push(p);
   }
   return [...new Set(out)];

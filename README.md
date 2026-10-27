@@ -136,6 +136,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
 | `/memory` · `/init` | list notes · `forget` `add` `stale` `prune` `consolidate` `graph` `embeddings` · have the agent write `AGENTS.md` |
 | `/procs` | background processes the agent started (`/procs stop <id>`) |
+| `/reviewer [on\|off]` | independent reviewer: acceptance criteria first, a check before work is accepted |
 | `/hooks` · `/permissions` | lifecycle hooks in effect · permission rules (list, or `allow`/`ask`/`deny <rule>`) |
 | `/copy` | copy the last reply (`/copy code`, `/copy all`) |
 | `/keepwarm [on\|off]` | keep the Claude prompt cache alive while you are away (opt-in) |
@@ -216,6 +217,7 @@ amness run --verify "npm test" --json "fix the failing test"      # one-shot, no
 | `--json` | one JSON event per line on stdout, then a final `{"kind":"result"}` line |
 | `--bundle <file>` / `--export <file>` | continue from / write a portable session bundle |
 | `--live [port]` | serve the browser live view |
+| `--review` | independent reviewer (extra model calls) |
 | `--trace <file>` | JSONL trace of every loop event (`AMNESS_OTLP` for OpenTelemetry export) |
 | `--max-tokens <n>` · `--no-memory` | hard token cap · disable memory |
 
@@ -350,6 +352,7 @@ Each turn: steer (messages you typed meanwhile) → budget check → compaction 
 - **Guards.** Repeat-call detection (the same call, normalised, with nothing edited in between; re-running tests after an edit is fine), cycle detection (2 to 4 different calls repeating three times, such as an edit flipped back and forth around a test run), a nudge when the model announces an action instead of taking it, a wrap-up warning three steps before the step cap, and no-progress detection (a reflection prompt after 3 all-failing turns, a clean stop after 6).
 - **Stagnation is judged from objective signals.** A loop that keeps acting while nothing measurable improves gets a structured reflection after 8 such turns and a clean stop after 12. "Improves" means: the failing-test, error or lint count reaches a new low (parsed from Jest, pytest, Go, Cargo, the Node runner, `tsc`, `eslint`...), a file is edited for the first time, an edit adds a change that is not the undo of an earlier one, or something new is read (capped). The model's own confidence counts for nothing. Tune with `stagnationTurns`; `off: ["stagnation"]` switches it off for ablations.
 - **Claims are checked against a record.** The harness records what really happened (files edited, commands run and their exit codes) and compares the `finish` summary with it: "all tests pass" needs a passing test run *after the last edit*, "build is clean" needs a successful build or typecheck, and a file named as changed must have been edited. A mismatch is rejected with the specifics (at most twice, so it can never deadlock). Accepted runs end with an audit line: files changed, whether tests passed after the final edit, test files touched when the task did not mention tests. Agents that judge their own work accept plausible progress as real progress ([When Do Agent Loops Mistake Stagnation for Progress?](https://arxiv.org/abs/2607.25152)); this is the cheap external check.
+- **Independent reviewer (opt-in, `/reviewer on` or `--review`).** Builders overpraise their own work, and a separate judge is easier to make sceptical than a builder is to make self-critical ([Anthropic's long-running harness write-up](https://www.anthropic.com/engineering/harness-design-long-running-apps)). Before a task-like message, a fresh context writes 3 to 7 testable acceptance criteria that the builder sees; before a `finish` is accepted (after the ledger and your `verify` command), a read-only reviewer that can run only the project's own test, build and lint commands checks the diff against them. Findings go back to the builder; after two rounds the work is accepted and flagged, and an unusable verdict never blocks. It costs roughly two to four extra model calls per task and can use a different model (`review: { model }`), so it is off by default; measure it with `amness eval --variants full,full+review`.
 - **Done means verified.** `finish` passes through your `verify` gate (tests, build) and is rejected with feedback until it holds.
 
 ### Prompt cache and memory

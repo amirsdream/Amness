@@ -75,6 +75,8 @@ export type Event =
   /** A lifecycle hook ran: what it did (blocked, added context, warned). */
   | { kind: "hook"; event: string; detail: string; blocked: boolean }
   /** What the run really did, from recorded facts (not the model's words): shown after an accepted finish. */
+  /** The independent reviewer's verdict on a finish. */
+  | { kind: "review"; pass: boolean; findings: string[]; inconclusive?: boolean }
   | { kind: "audit"; changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] }
   | { kind: "finish"; summary: string };
 
@@ -92,7 +94,7 @@ export class Budget {
 
 export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string; /** from the built-in safety floor: "don't ask again" shortcuts must not skip this prompt */ floor?: boolean }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
-export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation";
+export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation" | "review";
 
 export type Options = {
   model: Model;
@@ -121,8 +123,10 @@ export type Options = {
   permissions?: { check(tool: string, args: Record<string, any>): { action: "allow" | "ask" | "deny" | "none"; rule?: string; reason?: string; floor?: boolean } };
   /** Turns without any objective improvement (failing-test count, new files edited, new code) before the loop reflects, then stops. Default 8; 0 switches it off. */
   stagnationTurns?: number;
+  /** An independent reviewer consulted before a finish is accepted (after the ledger and the verify gate). A failing review sends its findings back; at most twice, then the work is accepted and flagged. */
+  reviewer?: (ctx: { task: string; summary: string; messages: Message[] }) => Promise<{ pass: boolean; findings: string[]; inconclusive?: boolean }>;
   /** Claims ledger (see `Ledger`): records edits and commands, and rejects a `finish` whose summary claims things that did not happen. */
-  ledger?: { onEdit(e: { path: string; added: number; removed: number; created: boolean }): void; onCommand(cmd: string, result: string): void; check(summary: string, o?: { gated?: boolean }): string[]; audit(task: string): { changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] } };
+  ledger?: { onEdit(e: { path: string; added: number; removed: number; created: boolean; diff?: string }): void; onCommand(cmd: string, result: string): void; check(summary: string, o?: { gated?: boolean }): string[]; audit(task: string): { changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] } };
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
   hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
@@ -310,7 +314,7 @@ export function createHarness(o: Options) {
   async function run(task: string, opts: { resume?: Message[] } = {}): Promise<RunResult> {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
     const seen = new Map<string, number>(), history: string[] = [];
-    let epoch = 0, ledgerRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
+    let epoch = 0, ledgerRejects = 0, reviewRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
     let sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
@@ -397,6 +401,12 @@ export function createHarness(o: Options) {
           }
           if (o.verify) emit({ kind: "phase", phase: "verify", step, max });
           const fb = feedback(await o.verify?.(args.summary));
+          if (!fb && o.reviewer && !off.has("review")) {
+            emit({ kind: "phase", phase: "verify", step, max });
+            const v = await o.reviewer({ task, summary: String(args.summary ?? ""), messages: msgs }).catch(() => ({ pass: true, findings: [] as string[], inconclusive: true }));
+            emit({ kind: "review", pass: v.pass, findings: v.findings, inconclusive: v.inconclusive });
+            if (!v.pass && reviewRejects < 2) { reviewRejects++; const detail = `an independent reviewer found problems:\n${v.findings.map((f) => `- ${f}`).join("\n")}`; emit({ kind: "rejected", detail }); return `REJECTED: ${clip(detail, 3000)}\nFix these (or explain precisely why a finding is wrong), then finish again.`; }
+          }
           if (!fb) { done = args.summary; if (o.ledger && !off.has("ledger")) emit({ kind: "audit", ...o.ledger.audit(task) }); emit({ kind: "finish", summary: args.summary }); return "accepted"; }
           emit({ kind: "rejected", detail: fb });
           return `REJECTED: ${clip(fb, 3000)}\nFix the problem, then finish again.`;

@@ -193,6 +193,10 @@ export function buildCommands(): Cmd[] {
       a.commit(["", bold("  Permission rules"), ...(["deny", "ask", "allow"] as const).flatMap((k) => r[k].map((x) => `  ${(k === "deny" ? red : k === "ask" ? yellow : green)(k.padEnd(6))} ${x}`)), ...(!r.deny.length && !r.ask.length && !r.allow.length ? [dim("  no rules yet")] : []),
         "", dim("  always on, in every mode including yolo: no recursive delete of / or ~, no force-push to main, no editing .git or these rule files; curl|sh and force-pushes always ask"), dim("  precedence: that floor > deny > ask > allow > permission mode")]);
     } },
+    { name: "reviewer", help: "independent skeptical reviewer: criteria before the work, a check before it is accepted (costs extra model calls)", args: "[on|off]", run: (a, arg) => {
+      if (!arg) return void a.say(`reviewer is ${a.cfg.review ? "on" : "off"}. /reviewer on: a fresh, read-only reviewer writes acceptance criteria before a task and checks the work against them before it can finish (at most two rounds). Roughly +2 to +4 model calls per task.`, dim);
+      a.cfg.review = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`reviewer ${arg === "on" ? "on" : "off"}`, dim);
+    } },
     { name: "check", help: "fast command run after every edit (typecheck, lint); failures go straight back to the model", args: "[cmd|off]", run: (a, arg) => {
       if (!arg) return void a.say(a.check ? `post-edit check: ${cyan(a.check)}` : "no post-edit check set. /check npx tsc --noEmit", dim);
       a.setCheck(arg === "off" ? undefined : arg); a.say(arg === "off" ? "post-edit check off" : `post-edit check → ${cyan(arg)}`, dim);

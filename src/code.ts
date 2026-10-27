@@ -10,6 +10,7 @@ import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
 import { ProcessManager } from "./procs.ts";
 import { Ledger } from "./ledger.ts";
+import { proposeContract, reviewWork } from "./review.ts";
 import type { HookRunner } from "./hooks.ts";
 import { Permissions, type PermissionChecker } from "./permissions.ts";
 
@@ -180,6 +181,8 @@ export type CodeAgentOptions = {
   memory?: boolean | MemoryStore;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
+  /** An independent, skeptical reviewer (a fresh context that cannot edit): it writes acceptance criteria before the work and checks the result against them before a finish is accepted. Costs extra model calls; off by default. `model` lets it be a different model. */
+  review?: boolean | { model?: Model };
   /** Turns without any measurable improvement before the loop reflects and then stops (default 8; 0 = off). */
   stagnationTurns?: number;
   /** Background process tools (sh_start / sh_read / sh_stop / sh_list). Default on. Call `agent.procs?.dispose()` when you are done. */
@@ -253,11 +256,22 @@ export function createCodeAgent(o: CodeAgentOptions) {
     }
     return { context: parts.length ? `[hook context]\n${parts.join("\n")}` : undefined };
   };
+  const ledger = new Ledger({ testCommand: o.verify ?? o.check });
+  const reviewModel: Model = (typeof o.review === "object" && o.review.model) || o.model;
+  let contract: string[] = [];
+  /** Acceptance criteria for a task-like message (reviewer on): written first, shown to the builder, checked at the end. */
+  const withContract = async (text: string, force = false): Promise<string> => {
+    if (!o.review) return text;
+    contract = [];
+    if (!force && !(text.length >= 25 && /\b(fix|add|implement|refactor|change|update|create|write|build|make|rename|remove|migrate|optimi[sz]e|support|bug|test|handle)/i.test(text))) return text;
+    contract = await proposeContract(reviewModel, text, o.budget);
+    return contract.length ? `${text}\n\n## Acceptance criteria (an independent reviewer will check these before your work is accepted)\n${contract.map((c, i) => `${i + 1}. ${c}`).join("\n")}` : text;
+  };
   const sessionFile = resolve(o.cwd, ".amness/handoff.md");
   let task = "";
   const h = createHarness({
     model: o.model, system: o.chat ? CHAT_SYSTEM : CODE_SYSTEM, tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal, hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger: new Ledger({ testCommand: o.verify ?? o.check }), permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal, hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 },
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 
@@ -283,6 +297,7 @@ ${note}
       let text = userText;
       const gate = await promptHooks(history.length === 0, userText); if (gate.block) return { text: gate.block, finished: false, steps: 0, messages: history, stopped: "blocked" as const, tokens: 0 };
       if (gate.context) text += "\n\n" + gate.context;
+      text = await withContract(text);
       if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
       if (!history.length && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
       if (!history.length && memory) { shown.clear(); const ctx = memory.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
@@ -302,6 +317,7 @@ ${note}
       let prompt = t;
       const gate = await promptHooks(!resume, t); if (gate.block) return { text: gate.block, finished: false, steps: 0, messages: resume ?? [], stopped: "blocked" as const, tokens: 0 };
       if (gate.context) prompt += "\n\n" + gate.context;
+      prompt = await withContract(prompt, true);
       if (opts.bundle) {
         const b = typeof opts.bundle === "string" ? readBundle(opts.bundle) : opts.bundle;
         const r = applyBundle(b, { cwd: o.cwd, memory, overwrite: opts.overwrite });
