@@ -55,8 +55,11 @@ const FLOOR_ASK: [RegExp, string][] = [
 const WRITES_PROTECTED = /\.amness\/(?:hooks|permissions)\.json/;
 const READONLY_VERB = /^\s*(?:cat|head|tail|less|grep|rg|ls|wc|stat|file|diff)\b/;
 
+/** The text of an apply_patch call: inline, or read from the patch file it names (so rules and the floor see the real paths). */
+const patchOf = (args: Record<string, any>, cwd: string): string => { if (typeof args.patch === "string") return args.patch; try { return typeof args.file === "string" ? readFileSync(resolve(cwd, args.file), "utf8") : ""; } catch { return ""; } };
+
 export function floorCheck(tool: string, args: Record<string, any>, cwd: string): Verdict {
-  if (tool === "apply_patch") { for (const p of patchPaths(String(args.patch ?? ""))) { const v = floorCheck("edit_file", { path: p }, cwd); if (v.action !== "none") return v; } return { action: "none" }; }
+  if (tool === "apply_patch") { for (const p of patchPaths(patchOf(args, cwd))) { const v = floorCheck("edit_file", { path: p }, cwd); if (v.action !== "none") return v; } return { action: "none" }; }
   const kind = kindOf(tool);
   if (kind === "edit" && typeof args.path === "string") {
     const rel = relative(cwd, resolve(cwd, args.path)).split("\\").join("/");
@@ -122,7 +125,7 @@ export class Permissions implements PermissionChecker {
 
   check(tool: string, args: Record<string, any>): Verdict {
     if (tool === "apply_patch") {        // a patch is judged file by file: any denied file denies it, any "ask" asks, and it is only allowed when every file is
-      const paths = patchPaths(String(args.patch ?? "")), per = paths.map((p) => this.check("edit_file", { path: p }));
+      const paths = patchPaths(patchOf(args, this.cwd)), per = paths.map((p) => this.check("edit_file", { path: p }));
       return per.find((v) => v.action === "deny") ?? per.find((v) => v.action === "ask") ?? (per.length && per.every((v) => v.action === "allow") ? { action: "allow", rule: per[0].rule } : { action: "none" });
     }
     const floor = floorCheck(tool, args, this.cwd); if (floor.action !== "none") return floor;

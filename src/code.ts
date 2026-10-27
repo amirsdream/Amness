@@ -11,6 +11,8 @@ import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
 import { ProcessManager } from "./procs.ts";
 import { Ledger } from "./ledger.ts";
+import { AGENT_TOOLS, WRITE_TOOLS, isWriter, loadAgents, type AgentDef } from "./agents.ts";
+import { applyDiff, createWorktree, isRepo, removeWorktree, worktreeDiff, type Worktree } from "./worktree.ts";
 import { loadSkills, skillsBlock, skillTool, type Skill } from "./skills.ts";
 import { applyOps, parsePatch, replaceMany } from "./patch.ts";
 import { proposeContract, reviewWork } from "./review.ts";
@@ -50,6 +52,7 @@ export function codeTools(cwd: string, o: { /** OS sandbox for shell commands, r
   const root = resolve(cwd);
   const shRisk = ({ cmd }: { cmd: string }): string | false => (!mode ? riskOf(cmd) : mode() === "yolo" ? false : riskOf(cmd) || (READONLY_CMD.test(cmd) ? false : "run a shell command"));
   const readSet = new Set<string>();
+  const patchText = (a: { patch?: string; file?: string }): string => { if (a.patch) return a.patch; if (!a.file) throw new Error("give `patch` or `file`"); return readFileSync(abs(a.file), "utf8"); };
   const abs = (p: string) => {
     const a = resolve(root, p);
     if (a !== root && !a.startsWith(root + sep)) throw new Error(`path escapes the workspace: ${p}`);
@@ -109,10 +112,11 @@ export function codeTools(cwd: string, o: { /** OS sandbox for shell commands, r
         const first = list[0], at = r.out.indexOf(first.new.split("\n")[0] ?? ""), line = at >= 0 ? r.out.slice(0, at).split("\n").length : 1;
         return `edited ${path}${list.length > 1 ? ` (${list.length} edits)` : ""}${r.fuzzy ? `; ${r.fuzzy} matched ignoring indentation` : ""}:\n` + r.out.split("\n").slice(Math.max(0, line - 3), line + first.new.split("\n").length + 2).map((l, i) => `${Math.max(1, line - 2) + i}\t${l}`).join("\n") + (await o.check?.() ?? "") + (o.guidance?.nested(path) ?? "");
       } }),
-    defineTool<{ patch: string }>({ name: "apply_patch", description: "Change several files at once with a patch, all or nothing. Format: `*** Begin Patch`, then per file `*** Update File: path` (hunks start with `@@`, lines begin with space, `-` or `+`), `*** Add File: path` (all lines start with `+`) or `*** Delete File: path`, then `*** End Patch`. A unified diff also works. Existing files must have been read first.",
-      schema: { type: "object", required: ["patch"], properties: { patch: { type: "string" } } }, ...mutating,
-      preview: ({ patch }) => { try { const r = applyOps(parsePatch(patch), (p) => (existsSync(abs(p)) ? readFileSync(abs(p), "utf8") : undefined)); return r.errors.length ? undefined : r.applied.map((x) => unifiedDiff(x.path, x.before, x.after ?? "").diff).join("\n"); } catch { return undefined; } },
-      run: async ({ patch }, ctx) => {
+    defineTool<{ patch?: string; file?: string }>({ name: "apply_patch", description: "Change several files at once with a patch, all or nothing. Format: `*** Begin Patch`, then per file `*** Update File: path` (hunks start with `@@`, lines begin with space, `-` or `+`), `*** Add File: path` (all lines start with `+`) or `*** Delete File: path`, then `*** End Patch`. A unified diff also works. Existing files must have been read first. Instead of `patch` you can pass `file`: a patch file inside the workspace (a subagent's saved result).",
+      schema: { type: "object", properties: { patch: { type: "string" }, file: { type: "string" } } }, ...mutating,
+      preview: (a) => { try { const patch = patchText(a); const r = applyOps(parsePatch(patch), (p) => (existsSync(abs(p)) ? readFileSync(abs(p), "utf8") : undefined)); return r.errors.length ? undefined : r.applied.map((x) => unifiedDiff(x.path, x.before, x.after ?? "").diff).join("\n"); } catch { return undefined; } },
+      run: async (a, ctx) => {
+        let patch: string; try { patch = patchText(a); } catch (e) { return `ERROR: ${(e as Error).message}`; }
         const ops = parsePatch(patch); if (!ops.length) return "ERROR: no files found in the patch. Use `*** Begin Patch` / `*** Update File: path` ... `*** End Patch`, or a unified diff.";
         for (const op of ops) { if (op.op !== "add") mustRead(op.path); else abs(op.path); }
         const r = applyOps(ops, (p) => (existsSync(abs(p)) ? readFileSync(abs(p), "utf8") : undefined));
@@ -207,6 +211,10 @@ export type CodeAgentOptions = {
   memory?: boolean | MemoryStore;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
+  /** Discover custom subagents (.amness/agents/*.md, .claude/agents/*.md; project and home) for the `task` tool. Default on. */
+  agents?: boolean;
+  /** Models that agents can name in their front matter (`model: fast`). */
+  agentModels?: Record<string, Model>;
   /** Discover SKILL.md folders (.amness/skills, .agents/skills, .claude/skills; project and home) and offer them through the `skill` tool. Default on. */
   skills?: boolean;
   /** Run shell commands under an OS sandbox: "workspace" (writes only in the project and temp/cache folders, `.git` read-only) or "strict" (also no network). A getter lets you switch it live. */
@@ -238,6 +246,10 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const touched = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
   const sbx = o.sandbox, sandboxMode: () => SandboxMode = typeof sbx === "function" ? sbx : () => sbx ?? "off";
+  let agentList: AgentDef[] = []; const agentWarnings: string[] = []; let patchCount = 0;
+  const agentOf = (name?: string) => (name && name !== "explore" ? agentList.find((a) => a.name === name) : undefined);
+  const rescanAgents = () => { if (o.agents === false) return; const r = loadAgents(o.cwd); agentList = r.agents; agentWarnings.splice(0, agentWarnings.length, ...r.warnings); };
+  rescanAgents();
   let skillList: Skill[] = []; const skillWarnings: string[] = [];
   const rescan = () => { if (o.skills === false) return; const r = loadSkills(o.cwd); skillList = r.skills; skillWarnings.splice(0, skillWarnings.length, ...r.warnings); if (skillList.length && !registry.get("skill")) registry.add(skillTool(() => skillList)); };
   const procs = o.background === false ? undefined : new ProcessManager(resolve(o.cwd), { sandbox: sandboxMode });
@@ -257,16 +269,36 @@ export function createCodeAgent(o: CodeAgentOptions) {
           properties: { content: { type: "string" }, status: { type: "string", enum: ["pending", "in_progress", "done"] } } } } } },
         run: ({ todos: t }, ctx) => { todos = t; ctx.emit?.({ kind: "todos", todos: t }); return "todo list updated"; },
       }),
-      defineTool<{ description: string }>({
-        name: "task", readOnly: true, parallel: true,
-        description: "Delegate an investigation to a read-only explorer subagent with its own fresh context. Give it a complete brief (it sees nothing else). Use for broad searches or questions that need reading many files; you get back only its summary. Several calls in one turn run in parallel.",
-        schema: { type: "object", required: ["description"], properties: { description: { type: "string", description: "complete brief: the question, where to look, what to report" } } },
-        run: async ({ description }, ctx) => {
-          const r = await createHarness({
-            model: o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 20, budget: o.budget, signal: ctx.signal,
-            onEvent: (e) => o.onEvent?.({ ...e, agent: "explore" } as unknown as Event),
-          }).run(description);
-          return r.text || "(the explorer returned nothing)";
+      defineTool<{ description: string; agent?: string }>({
+        name: "task", readOnly: true, parallel: true, concurrent: ({ agent }) => { const d = agentOf(agent); return !d || !isWriter(d) || d.isolation === "worktree"; },
+        get description() { return `Delegate work to a subagent with its own fresh context: it sees only your brief and returns only its summary, so give it a complete brief (the question, where to look, what to report). Default: a read-only explorer for broad searches or questions that need reading many files; several calls in one turn run in parallel.${agentList.length ? ` Other agents (pass \`agent\`): ${agentList.map((a) => `${a.name}: ${a.description}${isWriter(a) ? (a.isolation === "worktree" ? " [edits in an isolated copy and returns a patch]" : " [can edit files]") : ""}`).join("; ")}.` : ""}`; },
+        schema: { type: "object", required: ["description"], properties: { description: { type: "string", description: "complete brief: the question or job, where to look, what to report" }, agent: { type: "string", description: "which agent (default: the read-only explorer)" } } },
+        run: async ({ description, agent }, ctx) => {
+          const d = agentOf(agent);
+          if (agent && agent !== "explore" && !d) return `ERROR: unknown agent "${agent}". Available: explore${agentList.map((a) => ", " + a.name).join("")}`;
+          const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name } as unknown as Event);
+          if (!d) {
+            const r = await createHarness({ model: o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 20, budget: o.budget, signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            return r.text || "(the explorer returned nothing)";
+          }
+          const names = plan ? d.tools.filter((t) => !WRITE_TOOLS.has(t)) : d.tools, isolated = d.isolation === "worktree" && isWriter(d) && !plan;
+          let wt: Worktree | undefined; if (isolated) { if (!(await isRepo(o.cwd))) return "ERROR: isolation: worktree needs a git repository with at least one commit"; wt = await createWorktree(o.cwd); }
+          try {
+            const base = codeTools(wt?.dir ?? o.cwd, { mode: plan ? () => "plan" : (mode ?? (() => "default")), sandbox: sandboxMode }).filter((t) => names.includes(t.name));
+            if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList));
+            const r = await createHarness({
+              model: (d.model && o.agentModels?.[d.model]) || o.model, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
+              budget: o.budget, signal: ctx.signal, approve: o.approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
+            }).run(description);
+            let out = r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`;
+            if (wt) {
+              const diff = await worktreeDiff(wt);
+              if (diff) { const n = ++patchCount, rel = `.amness/agents/out/${d.name}-${Date.now().toString(36)}-${n}.patch`; mkdirSync(dirname(resolve(o.cwd, rel)), { recursive: true }); writeFileSync(resolve(o.cwd, rel), diff + "\n");
+                const files = [...diff.matchAll(/^diff --git a\/(\S+)/gm)].map((m) => m[1]); out += `\n\n${d.name} worked in an isolated copy; nothing in your working tree has changed yet. Its changes (${files.length} file(s): ${files.slice(0, 8).join(", ")}) are saved as a patch: read ${rel}, then apply it with apply_patch({ file: "${rel}" }).`; }
+              else out += `\n\n(${d.name} made no file changes in its isolated copy.)`;
+            }
+            return out;
+          } finally { if (wt) await removeWorktree(wt); }
         },
       }),
       defineTool<{ plan: string }>({
@@ -321,7 +353,7 @@ ${note}
   });
   return {
     /** The live toolbox: add/remove tools between or during runs. */
-    registry, memory, guidance, procs, get skills() { return skillList; }, get skillWarnings() { return skillWarnings; },
+    registry, memory, guidance, procs, get agents() { return agentList; }, get agentWarnings() { return agentWarnings; }, get skills() { return skillList; }, get skillWarnings() { return skillWarnings; },
     /** Keep the provider's prompt cache alive across an idle gap (see createHarness().warm). */
     warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },
@@ -334,7 +366,7 @@ ${note}
       text = await withContract(text);
       if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
       if (!history.length && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
-      if (!history.length) { rescan(); const sb = skillsBlock(skillList); if (sb) text += "\n\n" + sb; }
+      if (!history.length) { rescanAgents(); rescan(); const sb = skillsBlock(skillList); if (sb) text += "\n\n" + sb; }
       if (!history.length && memory) { shown.clear(); const ctx = memory.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
       else if (memory) { const d = memory.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const msgs: Message[] = history.length ? [...history, { role: "user", content: text }]

@@ -29,6 +29,8 @@ export type Tool<A = any> = {
   preview?: (args: A) => string | undefined;
   /** Never changes anything (safe in plan mode, safe to run in a read-only subagent). */
   readOnly?: boolean;
+  /** Per-call answer to "may this run at the same time as other calls?", for tools where it depends on the arguments. Overrides `readOnly`/`parallel` for scheduling. */
+  concurrent?: (args: any) => boolean;
   /** Safe to run at the same time as other calls even though it is not read-only (e.g. a subagent working in its own context). Everything else runs one at a time, in call order. */
   parallel?: boolean;
 };
@@ -447,7 +449,7 @@ export function createHarness(o: Options) {
         emit({ kind: "tool", id: c.id, name, args: raw, result });
         return result;
       };
-      const safe = (c: ToolCall) => { if (off.has("schedule")) return false; const t = reg.get(c.function.name); return !t || t.readOnly === true || t.parallel === true; };
+      const safe = (c: ToolCall) => { if (off.has("schedule")) return false; const t = reg.get(c.function.name); if (!t) return true; if (t.concurrent) { try { return t.concurrent(JSON.parse(c.function.arguments || "{}")); } catch { return false; } } return t.readOnly === true || t.parallel === true; };
       const results: string[] = [];
       for (let i = 0; i < m.tool_calls.length; ) {
         let j = i; while (j < m.tool_calls.length && safe(m.tool_calls[j]) === safe(m.tool_calls[i])) j++;

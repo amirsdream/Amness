@@ -204,6 +204,10 @@ export function buildCommands(): Cmd[] {
       if (arg !== "off" && !kind) return void a.say(`cannot turn the sandbox on: ${sandboxHelp()}`, red);
       a.cfg.sandbox = arg as SandboxMode; a.saveConfig(); a.say(`sandbox ${arg}${arg === "strict" ? dim("  (commands that need the network, like npm install, will fail)") : ""}`, dim);
     } },
+    { name: "agents", help: "custom subagents (.amness/agents/*.md, .claude/agents/*.md) available to the task tool", live: true, run: (a) => {
+      const l = a.agent.agents ?? [], w = a.agent.agentWarnings ?? [];
+      a.commit(["", bold("  Subagents"), `  ${cyan("explore".padEnd(16))} ${dim("[built in · read-only]")} broad searches and questions that need reading many files`, ...l.map((s) => `  ${cyan(s.name.padEnd(16))} ${dim(`[${s.scope} · ${s.tools.join(", ")}${s.isolation ? " · isolated worktree" : ""}${s.model ? " · model " + s.model : ""}]`)} ${s.description}`), ...(!l.length ? [dim("  add .amness/agents/<name>.md (front matter: name, description, tools, model, isolation) to define your own")] : []), ...w.map((x) => "  " + yellow("⚠ ") + dim(x))]);
+    } },
     { name: "skills", help: "skills found (SKILL.md folders in .amness/.agents/.claude skills, project and home)", live: true, run: (a) => {
       const l = a.agent.skills ?? [], w = a.agent.skillWarnings ?? [];
       a.commit(["", bold("  Skills"), ...(l.length ? l.map((s) => `  ${cyan(s.name.padEnd(22))} ${dim(`[${s.scope} · ${s.source}]`)} ${s.description}`) : [dim("  none found. Add .amness/skills/<name>/SKILL.md with a name and description in its front matter.")]), ...w.map((x) => "  " + yellow("⚠ ") + dim(x))]);

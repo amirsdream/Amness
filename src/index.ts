@@ -25,3 +25,5 @@ export * from "./review.ts";
 export * from "./patch.ts";
 export * from "./sandbox.ts";
 export * from "./skills.ts";
+export * from "./worktree.ts";
+export * from "./agents.ts";
