@@ -24,7 +24,7 @@ test("a tool can add tools mid-run via ctx.registry; they appear next turn", asy
   const reg = new Registry([defineTool({ name: "unlock", description: "", schema: { type: "object" }, run: (_a, { registry }) => (registry.add(mk("bonus")), "ok") })]);
   const { model, specs } = scripted(call(["unlock", {}]), call(["bonus", {}]), call(["finish", { summary: "." }]));
   await createHarness({ model, tools: reg }).run("t");
-  assert.deepEqual([names(specs[0]), names(specs[1])], [["unlock", "finish"], ["unlock", "bonus", "finish"]]);
+  assert.deepEqual([names(specs[0]), names(specs[1])], [["unlock", "finish"], ["bonus", "unlock", "finish"]]);   // tool definitions are sorted by name: a stable order keeps the provider cache valid across sessions
 });
 
 test("`when` gates availability per turn", async () => {

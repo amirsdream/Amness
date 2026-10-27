@@ -67,15 +67,17 @@ export type Event =
   | { kind: "rollover"; detail: string }
   /** Context that was shrunk without losing anything current (chars; roughly 4 per token). */
   | { kind: "trim"; saved: number; what: string }
+  /** The request prefix changed since the last call, so the provider's prompt cache will miss from `at` onward (message index; -1 = tool definitions). */
+  | { kind: "cachebreak"; reason: string; at: number }
   /** Where the loop is: lets a UI show live progress. `step` is 0-based; `n` is the number of tool calls in the batch. */
   | { kind: "phase"; phase: "model" | "tools" | "verify" | "compact"; step: number; max: number; n?: number }
   | { kind: "finish"; summary: string };
 
 /** Shared token/time cap. Pass one instance to a harness (and its subagents) to bound the whole run. */
 export class Budget {
-  tokens = 0; promptTokens = 0; completionTokens = 0; calls = 0; t0 = Date.now(); maxTokens: number; maxMs: number;
+  tokens = 0; promptTokens = 0; completionTokens = 0; /** prompt tokens the provider served from its cache */ cachedTokens = 0; calls = 0; t0 = Date.now(); maxTokens: number; maxMs: number;
   constructor(o: { maxTokens?: number; maxMs?: number } = {}) { this.maxTokens = o.maxTokens ?? Infinity; this.maxMs = o.maxMs ?? Infinity; }
-  add(m: Message) { this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
+  add(m: Message) { this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.cachedTokens += m.usage?.cached_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
   get ms() { return Date.now() - this.t0; }
   exceeded(): string | null {
     return this.tokens >= this.maxTokens ? `token budget exhausted (${this.tokens}/${this.maxTokens})`
@@ -214,6 +216,17 @@ export function compact(msgs: Message[], budget = 60_000, keep = 6): number {
   return start - total;
 }
 
+type PrefixSig = { tools: string; msgs: string[] };
+const fnv = (s: string) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + s.length.toString(36); };
+/** Cheap fingerprint of what the provider caches: the tool definitions, then each message in order. */
+export const prefixSignature = (msgs: Message[], specs: ToolSpec[]): PrefixSig => ({ tools: fnv(JSON.stringify(specs)), msgs: msgs.map((m) => fnv((m.content ?? "") + (m.tool_calls ? JSON.stringify(m.tool_calls) : "") + (m.tool_call_id ?? ""))) });
+/** Where (and why) this request stops matching the previous one. Pure appends return undefined: that is the cache-friendly case. */
+export function firstCacheBreak(prev: PrefixSig | undefined, now: PrefixSig): { reason: string; at: number } | undefined {
+  if (!prev) return undefined;
+  if (prev.tools !== now.tools) return { reason: "the tool list changed (mode switch or a tool was loaded), which invalidates the whole cache", at: -1 };
+  for (let i = 0; i < Math.min(prev.msgs.length, now.msgs.length); i++) if (prev.msgs[i] !== now.msgs[i]) return { reason: `earlier history was rewritten at message ${i} (compaction, handoff or edit)`, at: i };
+  return now.msgs.length < prev.msgs.length ? { reason: "history was shortened (handoff or rewind)", at: now.msgs.length } : undefined;
+}
 const MAX_PARALLEL = 5;
 const isErr = (r: string) => /^(ERROR|DENIED|REJECTED)\b/.test(r);
 /** Run `fns` with at most `n` in flight; results keep input order. */
@@ -248,7 +261,7 @@ export function createHarness(o: Options) {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
     const seen = new Map<string, number>();
     const max = o.maxSteps ?? 30;
-    let ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
+    let sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     for (let step = 0; step < max; step++) {
@@ -258,7 +271,7 @@ export function createHarness(o: Options) {
       if (over) { emit({ kind: "budget", detail: over }); return end(`stopped: ${over}`, false, step, "budget"); }
       const visible = reg.visible({ step, messages: msgs }), names = new Set(visible.map((t) => t.name));
       const menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => t.deferred && !reg.loaded.has(t.name)) : [];
-      const specs = [...visible.map(spec), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 80)}`).join("\n") }] : []), FINISH];
+      const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 80)}`).join("\n") }] : []), FINISH];
       const r = o.rollover, size = msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0);
       if (r && step > 0 && (lastPrompt >= (r.afterTokens ?? Infinity) || size >= (r.afterChars ?? Infinity))) {
         const note = await makeHandoff(o.model, specs, msgs, o.budget);
@@ -273,10 +286,16 @@ export function createHarness(o: Options) {
       }
       o.checkpoint?.(msgs);
       emit({ kind: "phase", phase: "compact", step, max });
-      if (!off.has("compact") && !o.model.appendOnly) { const s = supersede(msgs, 6, (n) => reg.get(n)?.readOnly === true) + compact(msgs, o.contextBudget); if (s > 0) emit({ kind: "trim", saved: s, what: "stale tool output" }); }
+      // Editing old messages breaks the provider's prompt-cache prefix from that point on, and cached input is ~10x cheaper than fresh input,
+      // so history is only rewritten when the window needs it, and then all stages at once (one break), cutting well below the budget (hysteresis).
+      if (!off.has("compact") && !o.model.appendOnly && msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) > (o.contextBudget ?? 60_000)) {
+        const s = supersede(msgs, 6, (n) => reg.get(n)?.readOnly === true) + compact(msgs, o.contextBudget);
+        if (s > 0) emit({ kind: "trim", saved: s, what: "stale tool output" });
+      }
       const key = [...names].sort().join(",");
       if (step > 0 && key !== shown) emit({ kind: "tools", detail: key });
       shown = key;
+      { const sig = prefixSignature(msgs, specs), brk = firstCacheBreak(sent, sig); sent = sig; if (brk) emit({ kind: "cachebreak", ...brk }); }
       emit({ kind: "phase", phase: "model", step, max });
       let m: Message;
       let streamed = false;

@@ -77,14 +77,16 @@ export function buildCommands(): Cmd[] {
       a.session.messages = r.messages; a.lastPrompt = 0; a.saveSession(); a.noticeUntil = 0; a.rebuildBlocks();
       a.commit(["", `  ${green("✓")} ${dim("conversation compacted into a handoff note")}`, ...r.note.split("\n").slice(0, 8).map((l) => "    " + dim(l))]);
     } },
-    { name: "memory", help: "list notes · /memory forget <name> · /memory add <text>", args: "[forget|add]", run: async (a, arg) => {
+    { name: "memory", help: "list notes · forget <name> · add <text> · stale · prune", args: "[forget|add|stale|prune]", run: async (a, arg) => {
       const m = a.memory; if (!m) return void a.say("memory is disabled", yellow);
       const [sub, ...rest] = arg.split(/\s+/), tail = rest.join(" ");
       if (sub === "forget" && tail) return void a.say(m.forget(tail) ? `forgot ${tail}` : `no note named ${tail}`, dim);
       if (sub === "add" && tail) return a.remember(tail);
+      if (sub === "stale") { const st = m.stale(); return void a.commit(st.length ? ["", bold("  Never-used notes (older than 90 days, surfaced at most once)"), ...st.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}] last used ${e.used ?? e.updated}`)}`), dim("  /memory prune moves them to an archive folder (reversible)")] : ["", dim("  no stale notes")]); }
+      if (sub === "prune") { const gone = m.prune(); return void a.say(gone.length ? `archived ${gone.length} stale note${gone.length === 1 ? "" : "s"}: ${gone.join(", ")} (moved to memory/archive/)` : "nothing stale to archive", dim); }
       const all = m.list();
       if (!all.length) return void a.say("no memory notes yet. Use `# note` or ask me to remember something.", dim);
-      a.commit(["", bold("  Memory"), ...all.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}]`)} ${e.description}`)]);
+      a.commit(["", bold("  Memory"), ...all.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}]${e.hits ? ` · used ${e.hits}×` : ""}`)} ${e.description}`)]);
     } },
     { name: "resume", help: "continue an earlier conversation", alias: "sessions", run: async (a) => {
       const list = a.store.list().filter((s) => s.id !== a.session.id);
@@ -121,7 +123,7 @@ export function buildCommands(): Cmd[] {
     { name: "loop", alias: "trace", help: "step-by-step trace of the agent loop: model turns, tools, guards", live: true, run: (a) => {
       const T = a.trace; if (!T.length) return a.say(dim("no loop activity yet: send a task first"));
       const tot = T.reduce((n, s) => n + s.completion + s.prompt, 0), ms = T.reduce((n, s) => n + s.ms, 0);
-      const out = ["", bold(`Agent loop · ${T.length} turn${T.length === 1 ? "" : "s"} · ${fmtDuration(ms)} · ${fmtTokens(tot)} tokens`), dim(`${a.trimmed ? `trimmed ~${fmtTokens(Math.round(a.trimmed / 4))} tokens of stale or noisy output · ` : ""}each turn: the model answers, its tool calls run, results go back; guards are shown where they fired`), ""];
+      const out = ["", bold(`Agent loop · ${T.length} turn${T.length === 1 ? "" : "s"} · ${fmtDuration(ms)} · ${fmtTokens(tot)} tokens`), dim(`${a.trimmed ? `trimmed ~${fmtTokens(Math.round(a.trimmed / 4))} tokens of stale or noisy output · ` : ""}${a.cacheBreaks ? `${a.cacheBreaks} cache break${a.cacheBreaks === 1 ? "" : "s"} · ` : ""}each turn: the model answers, its tool calls run, results go back; guards are shown where they fired`), ""];
       for (const s of T) {
         const pad = String(s.n).padStart(2);
         out.push(`${cyan(`${pad} ●`)} ${bold("model")} ${dim(`${fmtDuration(s.ms)} · ${fmtTokens(s.prompt)} in · ${fmtTokens(s.completion)} out${s.cached ? ` · ${fmtTokens(s.cached)} cached` : ""}`)}`);

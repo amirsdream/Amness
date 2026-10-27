@@ -154,7 +154,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
   const mode = opts.api ?? "auto";
   // adapter state that self-corrects at runtime
   // optional request fields a server may not know; if it says so we stop sending that one field
-  const OPTIONAL = ["prompt_cache_key", "include", "stream_options", "parallel_tool_calls"], dropped = new Set<string>();
+  const OPTIONAL = ["prompt_cache_key", "prompt_cache_retention", "include", "stream_options", "parallel_tool_calls"], dropped = new Set<string>();
   let useResponses = mode === "responses" || (mode === "auto" && official && isReasoningModel(model));
   let sendSummary = opts.summary ?? true, sendEffort = opts.effort !== undefined, chatNoReasoning = false, flips = 0, chatRefused = false;
 
@@ -188,7 +188,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
       ...(tools.length && { tools: tools.map(toResponsesTool), tool_choice: "auto" }),
       ...(reasoning && Object.keys(reasoning).length && { reasoning }),
       ...(reasoning && !store && { include: ["reasoning.encrypted_content"] }),     // older reasoning models only return the replayable blob when asked; newer ones always do
-      ...(opts.promptCacheKey && official && { prompt_cache_key: opts.promptCacheKey }),
+      ...(opts.promptCacheKey && official && { prompt_cache_key: opts.promptCacheKey, prompt_cache_retention: "24h" }),   // keep the cached prefix alive across idle gaps; dropped automatically if a model refuses it
       ...opts.extra,
     };
     for (const k of dropped) delete body[k];

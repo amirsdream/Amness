@@ -169,6 +169,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
   const mode = o.permissions?.mode;
   const registry = new Registry([...codeTools(o.cwd, { onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
+  const shown = new Set<string>();   // memory notes already in this conversation
   let todos: { content: string; status: "pending" | "in_progress" | "done" }[] = [];
   if (o.chat) {
     registry.add(
@@ -226,7 +227,8 @@ ${note}
     chat(history: Message[], userText: string) {
       task ||= userText;
       let text = userText;
-      if (!history.length && memory) { const ctx = memory.context(userText); if (ctx) text += "\n\n" + ctx; }
+      if (!history.length && memory) { shown.clear(); const ctx = memory.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
+      else if (memory) { const d = memory.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const msgs: Message[] = history.length ? [...history, { role: "user", content: text }]
         : [{ role: "system", content: o.chat ? CHAT_SYSTEM : CODE_SYSTEM }, { role: "user", content: text }];
       return h.run(text, { resume: msgs });

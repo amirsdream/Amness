@@ -17,9 +17,9 @@ export type Case = {
   /** A known-good fix (files to overwrite). Used by `selfTest` to prove the case is solvable and its check is not trivially true. */
   solution?: Record<string, string>;
 };
-export type Outcome = { text: string; steps: number; tokens: number; /** how often each harness event fired during the run (nudge, loop, repair, rejected, trim, ...) */ events?: Record<string, number> };
+export type Outcome = { text: string; steps: number; tokens: number; /** prompt tokens sent, and how many of them the provider served from its cache */ prompt?: number; cached?: number; /** how often each harness event fired during the run (nudge, loop, repair, rejected, trim, ...) */ events?: Record<string, number> };
 export type Variant = { name: string; run: (c: Case, dir: string) => Promise<Outcome> };
-export type Row = { case: string; variant: string; trial: number; pass: boolean; steps: number; tokens: number; ms: number; note?: string; events?: Record<string, number> };
+export type Row = { case: string; variant: string; trial: number; pass: boolean; steps: number; tokens: number; ms: number; note?: string; events?: Record<string, number>; prompt?: number; cached?: number };
 
 /** Run every case x variant x trial in a fresh temp workspace and judge each result with the case's held-out check. `jobs` runs that many sessions at once. */
 export async function evaluate(cases: Case[], variants: Variant[], o: { trials?: number; jobs?: number; onRow?: (r: Row) => void; baseline?: string; k?: number } = {}) {
@@ -31,7 +31,7 @@ export async function evaluate(cases: Case[], variants: Variant[], o: { trials?:
     const row: Row = { case: c.name, variant: v.name, trial, pass: false, steps: 0, tokens: 0, ms: 0 };
     try {
       const out = await v.run(c, dir);
-      Object.assign(row, { steps: out.steps, tokens: out.tokens, events: out.events });
+      Object.assign(row, { steps: out.steps, tokens: out.tokens, events: out.events, prompt: out.prompt, cached: out.cached });
       const j = typeof c.check === "string" ? ((await runShell(c.check, dir, 120_000)).startsWith("exit=0") || "check command failed") : await c.check(dir);
       row.pass = j === true; if (j !== true) row.note = String(j || "failed");
     } catch (e) { row.note = "crashed: " + (e as Error).message; }
@@ -58,7 +58,7 @@ export function formatTable(s: { variant: string; runs: number; passRate: number
 export type VariantStats = {
   variant: string; tasks: number; runs: number; trials: number;
   passRate: number; ci: Interval; /** reliability: chance that k independent attempts at a task all pass */ passPowK: number; k: number;
-  tokensPerSolved: number; steps: number; secs: number; events: Record<string, number>; /** not beaten on both pass rate and cost by another variant */ pareto: boolean;
+  tokensPerSolved: number; /** share of prompt tokens served from the provider cache (NaN when the provider reports none) */ cacheHit: number; steps: number; secs: number; events: Record<string, number>; /** not beaten on both pass rate and cost by another variant */ pareto: boolean;
 };
 export type Comparison = {
   variant: string; vs: string; dPass: number; ci: Interval; wins: number; losses: number; ties: number; p: number; pAdj: number;
@@ -84,7 +84,7 @@ export function analyze(rows: Row[], o: { baseline?: string; k?: number; seed?: 
     const r = rows.filter((x) => x.variant === v), per = of(v), ev: Record<string, number> = {};
     for (const x of r) for (const [e, n] of Object.entries(x.events ?? {})) ev[e] = (ev[e] ?? 0) + n / r.length;
     return { variant: v, tasks: tasks.length, runs: r.length, trials, passRate: frac(per), ci: bootstrap(per, frac, { seed: o.seed }), passPowK: mean(per.filter((x) => x.n >= k).map((x) => passPowK(x.pass, x.n, k))), k,
-      tokensPerSolved: tps(per), steps: mean(r.map((x) => x.steps)), secs: mean(r.map((x) => x.ms)) / 1000, events: ev, pareto: true };
+      tokensPerSolved: tps(per), cacheHit: (() => { const p = r.reduce((n, x) => n + (x.prompt ?? 0), 0); return p ? r.reduce((n, x) => n + (x.cached ?? 0), 0) / p : NaN; })(), steps: mean(r.map((x) => x.steps)), secs: mean(r.map((x) => x.ms)) / 1000, events: ev, pareto: true };
   });
   for (const a of stats) a.pareto = !stats.some((b) => b !== a && b.passRate >= a.passRate && b.tokensPerSolved <= a.tokensPerSolved && (b.passRate > a.passRate || b.tokensPerSolved < a.tokensPerSolved));
   const base = of(baseline), raw = variants.filter((v) => v !== baseline).map((v) => {
@@ -107,8 +107,8 @@ const kfmt = (n: number) => (!Number.isFinite(n) ? "n/a" : Math.abs(n) >= 1000 ?
 export function formatReport(a: Analysis): string {
   const pad = (x: string | number, n: number) => String(x).padEnd(n), out: string[] = [];
   out.push(`${a.tasks} tasks × ${a.trials} trial${a.trials === 1 ? "" : "s"}; intervals are 95% bootstrap over tasks; baseline = ${a.baseline}`, "");
-  out.push([pad("variant", 22), pad("pass [95% CI]", 20), pad(`pass^${a.stats[0]?.k ?? 1}`, 7), pad("tok/solved", 11), pad("steps", 6), pad("secs", 6), "pareto"].join(" "));
-  for (const s of a.stats) out.push([pad(s.variant, 22), pad(`${pct(s.passRate)} [${pct(s.ci.lo)}-${pct(s.ci.hi)}]`, 20), pad(pct(s.passPowK), 7), pad(kfmt(s.tokensPerSolved), 11), pad(s.steps.toFixed(1), 6), pad(s.secs.toFixed(1), 6), s.pareto ? "●" : ""].join(" "));
+  out.push([pad("variant", 22), pad("pass [95% CI]", 20), pad(`pass^${a.stats[0]?.k ?? 1}`, 7), pad("tok/solved", 11), pad("cache", 6), pad("steps", 6), pad("secs", 6), "pareto"].join(" "));
+  for (const s of a.stats) out.push([pad(s.variant, 22), pad(`${pct(s.passRate)} [${pct(s.ci.lo)}-${pct(s.ci.hi)}]`, 20), pad(pct(s.passPowK), 7), pad(kfmt(s.tokensPerSolved), 11), pad(pct(s.cacheHit), 6), pad(s.steps.toFixed(1), 6), pad(s.secs.toFixed(1), 6), s.pareto ? "●" : ""].join(" "));
   if (a.comparisons.length) {
     out.push("", `vs ${a.baseline} (paired by task)`, [pad("variant", 22), pad("Δ pass [95% CI]", 26), pad("W/L/T", 9), pad("p (Holm)", 9), pad("Δ tok/solved", 13), "verdict"].join(" "));
     for (const c of a.comparisons) out.push([pad(c.variant, 22), pad(`${sgn(c.dPass)} [${sgn(c.ci.lo)}, ${sgn(c.ci.hi)}]`, 26), pad(`${c.wins}/${c.losses}/${c.ties}`, 9), pad(c.pAdj.toFixed(3), 9), pad((c.dTokensPerSolved >= 0 ? "+" : "") + kfmt(c.dTokensPerSolved), 13), c.verdict].join(" "));
@@ -139,7 +139,7 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
         verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined,
         onEvent: (e: Event) => { if (e.kind !== "text" && e.kind !== "thinking" && e.kind !== "assistant" && e.kind !== "toolstart" && e.kind !== "phase") events[e.kind] = (events[e.kind] ?? 0) + 1; },
       }).run(c.task);
-      return { text: r.text, steps: r.steps, tokens: budget.tokens, events };
+      return { text: r.text, steps: r.steps, tokens: budget.tokens, events, prompt: budget.promptTokens, cached: budget.cachedTokens };
     },
   };
 }
