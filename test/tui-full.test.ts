@@ -66,3 +66,12 @@ test("full: the run panel and status line follow the loop's phases", async () =>
   await t.until(() => t.idle());
   assert.ok(!t.screen().includes("RUN"));
 });
+
+test("/loop shows a step-by-step trace of turns, tools and guards", async () => {
+  const t = rig([call("read_file", { path: "src/app.ts" }), call("sh", { cmd: "echo hi" }), say("done")], { cols: 120, rows: 40, files, ui: "full" });
+  await t.start(); t.app.setMode("yolo");
+  await t.submit("go"); await t.until(() => t.idle());
+  await t.submit("/loop"); await t.settle(200);
+  const s = t.screen();
+  assert.match(s, /Agent loop · 3 turns/); assert.ok(s.includes("model") && s.includes("Read") && s.includes("replied without tools"), s);
+});

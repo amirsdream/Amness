@@ -44,6 +44,7 @@ const MODES: PermMode[] = ["default", "acceptEdits", "plan"];
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "note";
 const one = (s: string, n: number) => { const l = s.replace(/\s+/g, " ").trim(); return cellWidth(l) > n ? clipWidth(l, n - 1) + "…" : l; };
 
+export type TraceStep = { n: number; t0: number; ms: number; prompt: number; completion: number; cached?: number; parallel?: number; tools: { name: string; args: string; ms: number; ok: boolean }[]; notes: string[] };
 export class App {
   cfg: Config; cwd: string; version: string; persist: boolean;
   io: { input: any; output: Out & { on?: (e: string, f: () => void) => void } };
@@ -55,6 +56,8 @@ export class App {
   verify: string | undefined;
   runSeries: number[] = []; thinkBuf = "";
   phase: { phase: string; step: number; max: number; n?: number } | undefined; activity: { name: string; args: string; ms: number; ok: boolean }[] = [];
+  /** One entry per loop iteration of the conversation so far, for /loop. */
+  trace: TraceStep[] = [];
   running = false; ac: AbortController | undefined; runStart = 0; runTokens = 0; lastPrompt = 0;
   inflight = new Map<string, { name: string; args: string; t0: number; agent?: string }>();
   pendingEdits = new Map<string, EditEv>();
@@ -407,12 +410,13 @@ export class App {
   }
 
   // ------------------------------------------------------------------ events from the agent
+  private stepNow(): TraceStep { if (!this.trace.length) this.trace.push({ n: 1, t0: Date.now(), ms: 0, prompt: 0, completion: 0, tools: [], notes: [] }); return this.trace[this.trace.length - 1]; }
   onEvent(e: Ev) {
     this.live?.onEvent(e as any);
     const sub = e.agent && e.agent !== "lead" ? e.agent : undefined, w = this.width;
     switch (e.kind) {
       case "thinking": if (!sub) { this.thinkBuf = (this.thinkBuf + e.delta).slice(-600); this.blocks.streamThinking(e.delta); } break;
-      case "turn": this.session.usage.prompt += e.prompt; this.session.usage.completion += e.completion; this.session.usage.calls++;
+      case "turn": this.session.usage.prompt += e.prompt; this.session.usage.completion += e.completion; this.session.usage.calls++; if (!sub) { const s = this.stepNow(); s.ms = Date.now() - s.t0; s.prompt = e.prompt; s.completion = e.completion; s.cached = e.cached; }
         this.session.usage.cached = (this.session.usage.cached ?? 0) + e.cached; this.session.usage.reasoning = (this.session.usage.reasoning ?? 0) + e.reasoning;
         this.session.usage.series = [...(this.session.usage.series ?? []), e.prompt].slice(-200); this.runSeries = [...this.runSeries, e.completion].slice(-40); if (!sub) { this.runTokens = e.tokens; this.lastPrompt = e.prompt; } else this.runTokens += e.completion; break;
       case "text": if (!sub) { this.thinkBuf = ""; this.blocks.endThinking(); this.blocks.streamAssistant(e.delta); this.streamBuf += e.delta; this.streamedThisMsg = true; this.flushStream(false); } break;
@@ -422,6 +426,7 @@ export class App {
       case "tool": {
         const t = this.inflight.get(e.id ?? ""); this.inflight.delete(e.id ?? ""); this.idleTimer();
         const bad = isFailure(e.result);
+        if (!sub) this.stepNow().tools.push({ name: e.name, args: e.args, ms: t ? Date.now() - t.t0 : 0, ok: !bad });
         if (!sub && e.name !== "todo_write") this.activity = [...this.activity, { name: e.name, args: e.args, ms: t ? Date.now() - t.t0 : 0, ok: !bad }].slice(-12);
         let editPath = ""; if ((e.name === "write_file" || e.name === "edit_file") && !bad) { try { editPath = JSON.parse(e.args).path; } catch { /* keep empty */ } }
         const ed = editPath ? this.pendingEdits.get(editPath) : undefined; if (editPath) this.pendingEdits.delete(editPath);
@@ -434,13 +439,18 @@ export class App {
         void t; this.inlineOnly(lines); break;
       }
       case "todos": this.todos = e.todos; break;
-      case "phase": if (!sub) this.phase = { phase: e.phase, step: e.step, max: e.max, n: e.n }; break;
+      case "phase": if (!sub) {
+        this.phase = { phase: e.phase, step: e.step, max: e.max, n: e.n };
+        if (e.phase === "model") this.trace = [...this.trace, { n: this.trace.length + 1, t0: Date.now(), ms: 0, prompt: 0, completion: 0, tools: [], notes: [] }].slice(-300);
+        else if (e.phase === "tools") this.stepNow().parallel = e.n;
+        else if (e.phase === "verify") this.stepNow().notes.push("verify gate running");
+      } break;
       case "finish": if (!sub) { this.flushStream(true); this.blocks.summary(e.summary); this.inlineOnly(["", ...renderMarkdown(e.summary, w - 4).map((l, i) => (i ? "    " : "  " + green("✔ ")) + l)]); } break;
-      case "rejected": this.notify("warn", `finish rejected by verification: ${one(e.detail, 300)}`, ["", `  ${yellow("⛔")} ${dim("finish rejected by verification:")} ${one(e.detail, w - 10)}`]); break;
-      case "denied": this.notify("warn", `denied: ${one(e.detail, 300)}`, ["", `  ${red("⊘")} ${dim("denied: " + one(e.detail, w - 14))}`]); break;
-      case "nudge": this.notify("info", "nudged the model to act instead of describing", [dim("  ↻ nudged the model to act instead of describing")]); break;
-      case "repair": this.notify("info", `repaired a malformed tool call: ${one(e.detail, 200)}`, [dim(`  ⚒ repaired a malformed tool call: ${one(e.detail, w - 30)}`)]); break;
-      case "loop": this.notify("info", "blocked a repeated identical call", [dim("  ∞ blocked a repeated identical call")]); break;
+      case "rejected": this.stepNow().notes.push("finish rejected: " + one(e.detail, 120)); this.notify("warn", `finish rejected by verification: ${one(e.detail, 300)}`, ["", `  ${yellow("⛔")} ${dim("finish rejected by verification:")} ${one(e.detail, w - 10)}`]); break;
+      case "denied": this.stepNow().notes.push("denied: " + one(e.detail, 120)); this.notify("warn", `denied: ${one(e.detail, 300)}`, ["", `  ${red("⊘")} ${dim("denied: " + one(e.detail, w - 14))}`]); break;
+      case "nudge": this.stepNow().notes.push("nudged: " + one(e.detail, 80)); this.notify("info", "nudged the model to act instead of describing", [dim("  ↻ nudged the model to act instead of describing")]); break;
+      case "repair": this.stepNow().notes.push("repaired a tool call: " + one(e.detail, 100)); this.notify("info", `repaired a malformed tool call: ${one(e.detail, 200)}`, [dim(`  ⚒ repaired a malformed tool call: ${one(e.detail, w - 30)}`)]); break;
+      case "loop": this.stepNow().notes.push("loop guard: " + one(e.detail, 100)); this.notify("info", "blocked a repeated identical call", [dim("  ∞ blocked a repeated identical call")]); break;
       case "rollover": this.notify("info", "context getting large: continued from a handoff note", [magenta("  ⟳ ") + dim("context getting large: continued from a handoff note")]); break;
       case "budget": this.notify("error", e.detail, ["", `  ${red("$")} ${e.detail}`]); break;
       case "aborted": this.notify("warn", "interrupted. Your progress is kept; send a message to continue.", ["", `  ${yellow("⏹")} ${dim("interrupted. Your progress is kept; send a message to continue.")}`]); break;
@@ -506,9 +516,9 @@ export class App {
   askText(prompt: string, o: { secret?: boolean; initial?: string } = {}): Promise<string | undefined> {
     return new Promise((res) => { this.overlay = new InputOverlay(prompt, (v) => { this.overlay = null; this.render(); res(v); }, o); this.render(); });
   }
-  showText(lines: string[]) { return new Promise<void>((res) => { this.overlay = new TextOverlay(lines, () => { this.overlay = null; this.render(); res(); }); this.render(); }); }
+  showText(lines: string[], title?: string) { return new Promise<void>((res) => { this.overlay = new TextOverlay(lines, () => { this.overlay = null; this.render(); res(); }, title); this.render(); }); }
   openPager(lines: string[], title = "transcript", start: "top" | "bottom" = title === "transcript" ? "bottom" : "top") {
-    if (this.full) { void this.showText(lines); return; }                       // the full-screen UI shows these as a scrollable modal
+    if (this.full) { void this.showText(lines, title); return; }                       // the full-screen UI shows these as a scrollable modal
     this.screen.enterAlt();
     this.pager = new Pager(lines, this.io.output, () => { this.pager = null; this.screen.leaveAlt(); this.render(); }, title, start);
   }
@@ -543,7 +553,7 @@ export class App {
   private rebuildBlocksIfEmpty() { if (!this.blocks.blocks.length && this.session.messages.length) this.blocks.loadMessages(this.session.messages); }
   rebuildBlocks() { this.blocks.loadMessages(this.session.messages); this.full?.invalidate(); }
   async resumeById(id: string) { const s = this.store.load(id); if (!s) return; this.loadSession(s); this.rebuildBlocks(); this.render(); }
-  newConversation() { this.saveSession(); this.session = newSession(this.cwd, this.cfg.model); this.edits = []; this.lastPrompt = 0; this.todos = []; this.pendingContext = []; this.blocks.clear(); this.full?.invalidate(); this.buildAgent(); }
+  newConversation() { this.saveSession(); this.session = newSession(this.cwd, this.cfg.model); this.edits = []; this.trace = []; this.lastPrompt = 0; this.todos = []; this.pendingContext = []; this.blocks.clear(); this.full?.invalidate(); this.buildAgent(); }
   loadSession(s: SessionData) { this.saveSession(); this.session = s; this.recount(); this.edits = []; }
   saveSession() { if (this.persist && this.session.turns.length) try { this.session.model = this.cfg.model; this.store.save(this.session); } catch { /* read-only dir */ } }
   saveHistory() { if (!this.persist) return; try { mkdirSync(home(), { recursive: true }); writeFileSync(join(home(), "history.json"), JSON.stringify(this.editor.history.slice(0, 200))); } catch { /* ignore */ } }

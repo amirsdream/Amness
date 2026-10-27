@@ -84,7 +84,7 @@ export function drawModal(c: Canvas, t: Theme, o: Overlay, frame: number): Modal
   }
 
   if (o instanceof TextOverlay) {
-    const w = Math.min(c.w - 6, 110), inner = w - 4, visible = Math.min(o.lines.length, c.h - 8), h = visible + 4, { x, y } = card(w, h, t.accent2, "Help", "?");
+    const w = Math.min(c.w - 6, 110), inner = w - 4, visible = Math.min(o.lines.length, c.h - 8), h = visible + 4, { x, y } = card(w, h, t.accent2, o.title[0].toUpperCase() + o.title.slice(1), "?");
     const maxScroll = Math.max(0, o.lines.length - visible); o.scroll = Math.max(0, Math.min(o.scroll, maxScroll));
     o.lines.slice(o.scroll, o.scroll + visible).forEach((l, i) => c.ansi(x + 2, y + 1 + i, fit(l, inner, t.surface), {}, inner));
     c.ansi(x + 2, y + h - 2, F(t.faint, (maxScroll ? "↑↓ scroll  ·  " : "") + "any other key closes"), { bg: t.surface }, inner);

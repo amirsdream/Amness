@@ -120,8 +120,8 @@ export class InputOverlay implements Overlay {
 
 /** Static text (help) closed by any key. */
 export class TextOverlay implements Overlay {
-  lines: string[]; done: () => void; scroll = 0;
-  constructor(lines: string[], done: () => void) { this.lines = lines; this.done = done; }
+  lines: string[]; done: () => void; scroll = 0; title: string;
+  constructor(lines: string[], done: () => void, title = "Help") { this.lines = lines; this.done = done; this.title = title; }
   render(): Drawn { return { lines: [...this.lines, dim("  press any key to close")] }; }
   key(k?: Key) {
     const step = k?.name === "up" ? -1 : k?.name === "down" ? 1 : k?.name === "pageup" ? -10 : k?.name === "pagedown" ? 10 : k?.name === "home" ? -1e6 : k?.name === "end" ? 1e6 : 0;

@@ -4,10 +4,10 @@ import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, type ProviderId } from "../config.ts";
 import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
-import { fmtDuration } from "./pricing.ts";
+import { fmtDuration, fmtTokens } from "./pricing.ts";
 import { tokenReport } from "./tokens.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
-import { helpLines, renderDiff, todoList } from "./view.ts";
+import { helpLines, renderDiff, toolCall, todoList } from "./view.ts";
 
 export type Cmd = { name: string; help: string; alias?: string; args?: string; /** safe to run while the agent is working */ live?: boolean; run(app: App, args: string): Promise<void> | void };
 
@@ -117,6 +117,19 @@ export function buildCommands(): Cmd[] {
       a.rewindTo(a.session.turns.length - 1);
     } },
     { name: "rewind", help: "go back to an earlier turn", run: (a) => a.openRewind() },
+    { name: "loop", alias: "trace", help: "step-by-step trace of the agent loop: model turns, tools, guards", live: true, run: (a) => {
+      const T = a.trace; if (!T.length) return a.say(dim("no loop activity yet: send a task first"));
+      const tot = T.reduce((n, s) => n + s.completion + s.prompt, 0), ms = T.reduce((n, s) => n + s.ms, 0);
+      const out = ["", bold(`Agent loop · ${T.length} turn${T.length === 1 ? "" : "s"} · ${fmtDuration(ms)} · ${fmtTokens(tot)} tokens`), dim("each turn: the model answers, its tool calls run, results go back; guards are shown where they fired"), ""];
+      for (const s of T) {
+        const pad = String(s.n).padStart(2);
+        out.push(`${cyan(`${pad} ●`)} ${bold("model")} ${dim(`${fmtDuration(s.ms)} · ${fmtTokens(s.prompt)} in · ${fmtTokens(s.completion)} out${s.cached ? ` · ${fmtTokens(s.cached)} cached` : ""}`)}`);
+        s.tools.forEach((x, i) => out.push(`     ${dim(i === s.tools.length - 1 && !s.notes.length ? "└─" : "├─")} ${x.ok ? green("✓") : red("✗")} ${toolCall(x.name, x.args)} ${dim(fmtDuration(x.ms))}${s.parallel && s.parallel > 1 && i === 0 ? dim(`  (${s.parallel} calls this turn)`) : ""}`));
+        s.notes.forEach((n, i) => out.push(`     ${dim(i === s.notes.length - 1 ? "└─" : "├─")} ${yellow("⚑")} ${dim(n)}`));
+        if (!s.tools.length && !s.notes.length) out.push(`     ${dim("└─ replied without tools")}`);
+      }
+      return a.openPager(out, "loop trace");
+    } },
     { name: "tokens", alias: "cost", help: "context window, what fills it, tokens and cost", live: true, run: (a) => {
       a.commit(tokenReport({ model: a.cfg.model, messages: a.session.messages, usage: a.session.usage, series: a.session.usage.series ?? [], lastPrompt: a.lastPrompt, turnTokens: a.runTokens, turnBudget: a.running ? a.cfg.maxTokens : 0, width: a.width,
         toolDefChars: JSON.stringify(a.agent.registry.visible({ step: 0, messages: [] }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }))).length }));

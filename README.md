@@ -76,6 +76,8 @@ No API key yet? Run `amness demo`: a scripted model makes the mistakes real mode
 <tr><td align="center"><sub>Approval modal with the exact diff</sub></td><td align="center"><sub>Command palette (<code>Ctrl+P</code>)</sub></td></tr>
 <tr><td colspan="2"><img src="docs/images/running.png" alt="live run view"></td></tr>
 <tr><td colspan="2" align="center"><sub>Mid-run: the status line, the RUN panel with step progress and running tools</sub></td></tr>
+<tr><td colspan="2"><img src="docs/images/loop.png" alt="/loop trace"></td></tr>
+<tr><td colspan="2" align="center"><sub><code>/loop</code>: the agent loop turn by turn, with tools, timings, tokens and the guards that fired</sub></td></tr>
 <tr><td><img src="docs/images/welcome.png" alt="welcome screen"></td><td><img src="docs/images/daylight.png" alt="daylight light theme"></td></tr>
 <tr><td align="center"><sub>Welcome screen with quick actions</sub></td><td align="center"><sub>Light theme (<code>daylight</code>)</sub></td></tr>
 </table>
@@ -121,6 +123,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/mode` · `/plan` · `/verify <cmd>` | permissions, plan mode, the "done must be proven" command |
 | `/clear` · `/compact` · `/resume` | new conversation, summarise to free context, continue an earlier one |
 | `/undo` · `/rewind` · `/diff` | revert the last turn (files and conversation), go back to a turn, review all changes |
+| `/loop` (alias `/trace`) | step-by-step trace of the agent loop: each model turn, its tools and timings, and any guard that fired |
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
 | `/memory` · `/init` | list/forget/add memory notes · have the agent write `AGENTS.md` |
 | `/export` · `/import` · `/live` · `/mcp` | portable bundle, continue from one, browser live view, attach an MCP server |
