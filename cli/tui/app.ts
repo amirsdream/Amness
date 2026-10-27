@@ -18,6 +18,7 @@ import { Editor } from "./editor.ts";
 import { KeyParser, PASTE_OFF, PASTE_ON, type Key } from "./keys.ts";
 import { renderMarkdown, takeCompleteBlocks } from "./markdown.ts";
 import { expandMentions, attachedNote } from "./mentions.ts";
+import { copyToClipboard } from "./clipboard.ts";
 import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, editKey, type ChoiceDetail, type Overlay, type PickItem } from "./overlays.ts";
 import { Pager, transcriptLines } from "./pager.ts";
 import { TIPS, at, brandOf, fg, palette, shimmer, sparkline } from "./theme.ts";
@@ -559,6 +560,8 @@ export class App {
   saveSession() { if (this.persist && this.session.turns.length) try { this.session.model = this.cfg.model; this.store.save(this.session); } catch { /* read-only dir */ } }
   saveHistory() { if (!this.persist) return; try { mkdirSync(home(), { recursive: true }); writeFileSync(join(home(), "history.json"), JSON.stringify(this.editor.history.slice(0, 200))); } catch { /* ignore */ } }
   saveConfig() { if (this.persist) saveConfig(this.cfg); }
+  /** Put text on the clipboard (OSC 52 plus the platform tool). */
+  copyText(text: string) { if (this.full) this.full.copy(text); else copyToClipboard(this.io.output, text, this.persist); }
   setCheck(cmd: string | undefined) { this.check = cmd; this.buildAgent(); }
   setVerify(cmd: string | undefined) { this.verify = cmd; if (this.persist) { const st = loadState(); if (cmd) st.verifyByDir[this.cwd] = cmd; else delete st.verifyByDir[this.cwd]; saveState(st); } this.buildAgent(); }
   async ensureLive() { if (!this.live) this.live = await startLive({ title: "Amness" }); return this.live; }

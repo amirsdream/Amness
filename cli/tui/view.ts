@@ -143,7 +143,7 @@ export const COMMAND_HELP_WIDTH = 14;
 export function helpLines(cmds: { name: string; help: string }[], width: number): string[] {
   const keys: [string, string][] = [["Enter", "send · queue while working"], ["\\ + Enter / Alt+Enter / Ctrl+J", "new line"], ["Esc", "interrupt · close popup · Esc Esc rewind"],
     ["Ctrl+C", "interrupt · clear input · exit (twice)"], ["Shift+Tab", "cycle permissions: ask → accept edits → plan"], ["↑ ↓", "history · menu"], ["Tab", "accept suggestion"],
-    ["@path", "mention a file"], ["!cmd", "run a shell command now"], ["#note", "remember a note"], ["Ctrl+P", "command palette"], ["Alt+M", "switch model"], ["Ctrl+O", "full transcript"], ["Ctrl+L", "redraw"]];
+    ["@path", "mention a file"], ["!cmd", "run a shell command now"], ["#note", "remember a note"], ["Ctrl+P", "command palette"], ["Alt+M", "switch model"], ["Ctrl+O", "full transcript"], ["Ctrl+L", "redraw"], ["drag / dbl / triple click", "select and copy (Shift+drag: terminal selection)"], ["/copy", "copy the last reply (code · all)"]];
   return [bold("Keys"), ...keys.map(([k, d]) => `  ${cyan(k.padEnd(31))} ${dim(d)}`), "", bold("Commands"),
     ...cmds.map((c) => `  ${cyan(("/" + c.name).padEnd(COMMAND_HELP_WIDTH))} ${dim(c.help)}`)].flatMap((l) => wrapAnsi(l, width - 2, 33));
 }

@@ -86,3 +86,29 @@ test("full: consecutive reads and searches collapse into one 'Explored' row that
   await t.type(mouse(0, x + 1, y + 1)); await t.type(mouse(0, x + 1, y + 1, true)); await t.settle();
   assert.ok(t.has("src/app.ts") && /List\s+\./.test(t.screen()), t.screen());   // opened: one line per call
 });
+
+test("copy: drag selects and copies from the transcript, the sidebar and a modal; double click copies a word; /copy and code-block buttons copy text", async () => {
+  const reply = "Here is the fix:\n\n```ts\nconst answer = 42;\n```\n\nDone with `answer`.";
+  const t = rig([say(reply)], { cols: 132, rows: 40, files, ui: "full" });
+  const clip: string[] = []; (t.app.full as any).copy = (s: string) => void clip.push(s);
+  await t.start(); await t.submit("go"); await t.until(() => t.idle());
+  const rows = () => t.screen().split("\n"), find = (s: string) => { const y = rows().findIndex((r) => r.includes(s)); return { y, x: rows()[y].indexOf(s) }; };
+  // drag across a line of the transcript
+  const f = find("Here is the fix:");
+  await t.type(mouse(0, f.x + 1, f.y + 1)); await t.type(mouse(32, f.x + 8, f.y + 1)); await t.type(mouse(0, f.x + 8, f.y + 1, true)); await t.settle();
+  assert.equal(clip.at(-1), "Here is"); 
+  // double click selects a word
+  const w = find("fix:");
+  for (let i = 0; i < 2; i++) { await t.type(mouse(0, w.x + 2, w.y + 1)); await t.type(mouse(0, w.x + 2, w.y + 1, true)); }
+  assert.equal(clip.at(-1), "fix:");
+  // drag in the sidebar copies only sidebar text
+  const s = find("SESSION"); await t.type(mouse(0, s.x + 1, s.y + 1)); await t.type(mouse(32, s.x + 7, s.y + 1)); await t.type(mouse(0, s.x + 7, s.y + 1, true));
+  assert.equal(clip.at(-1), "SESSION");
+  // the code block's copy button
+  const c = find("copy"); const cx = rows()[c.y].lastIndexOf("copy");
+  await t.type(mouse(0, cx + 2, c.y + 1)); await t.type(mouse(0, cx + 2, c.y + 1, true));
+  assert.equal(clip.at(-1), "const answer = 42;");
+  // /copy variants
+  await t.submit("/copy"); assert.equal(clip.at(-1), reply);
+  await t.submit("/copy code"); assert.equal(clip.at(-1), "const answer = 42;");
+});

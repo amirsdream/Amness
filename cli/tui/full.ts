@@ -1,5 +1,5 @@
 // The full-screen UI: header, scrollable transcript, sidebar, input panel, modals, toasts and mouse handling, drawn on a cell canvas.
-import { spawn } from "node:child_process";
+import { copyToClipboard } from "./clipboard.ts";
 import { basename } from "node:path";
 import type { App } from "./app.ts";
 import { A, mix, type Cell } from "./ansi.ts";
@@ -43,8 +43,10 @@ export class FullView {
   private items: { b: Block; r: Rendered; start: number; group?: boolean }[] = [];
   /** Groups of quiet tool calls (reads, searches) the user has opened, by the id of the first call. */
   private groupOpen = new Set<number>();
-  private sel?: { ax: number; ay: number; hx: number; hy: number; done: boolean };
-  private down?: { x: number; y: number; moved: boolean };
+  private sel?: { ax: number; ay: number; hx: number; hy: number; done: boolean; /** "lines" flows through the transcript; "block" is a rectangle (sidebar, modals, anywhere else) */ mode: "lines" | "block" };
+  private down?: { x: number; y: number; moved: boolean; mode: "lines" | "block" };
+  private lastClick = { t: 0, x: -1, y: -1, n: 0 };
+  private sideX = 1e9; private mainW = 80; private toastBase = 20;
   private lastWheel = 0;
   private ctxCache?: { key: string; map: { label: string; pct: number; color: number }[] };
   private forceFull = true;
@@ -82,6 +84,7 @@ export class FullView {
 
     this.drawHeader(c, t, W);
     this.drawTranscript(c, t, 0, trY, mainW, trH, now);
+    this.sideX = sbW ? mainW : 1e9; this.mainW = mainW; this.toastBase = statusY;
     if (sbW) this.drawSidebar(c, t, mainW, trY, sbW, H - 1 - trY);
     if (status) this.drawStatus(c, t, 1, statusY, mainW - 2, now);
     this.drawInput(c, t, 1, inputY, mainW - 2, inputH);
@@ -190,6 +193,7 @@ export class FullView {
   }
   private hitClick(h: Hit, b: Block, group = false) {
     const before = this.total;
+    if (h.kind === "copy" && h.text !== undefined) { this.copy(h.text); this.toast(`copied code block (${h.text.length} characters)`, "ok"); return; }
     if (group) { if (this.groupOpen.has(b.id)) this.groupOpen.delete(b.id); else this.groupOpen.add(b.id); }
     else if (h.kind === "toggle") this.app.blocks.toggle(b.id);
     else if (b.kind === "tool") { b.more = true; this.app.blocks.version++; }
@@ -234,6 +238,7 @@ export class FullView {
         this.regions.push({ x: rx, y: ry, w: lw, h: 1, kind: "recent", click: () => void app.resumeById(s.id) }); ry++;
       }
     }
+    const hint = F(t.faint, "drag to select & copy  ·  Shift+drag for the terminal's own selection  ·  /copy copies the last reply"); c.ansi(x0 + Math.max(0, Math.floor((w - 94) / 2)), Math.min(y0 + h - 2, ry + 4), hint);
     const tip = F(t.faint, "tip  ") + F(t.dim, TIPS[this.tipIdx]); c.ansi(x0 + Math.max(0, Math.floor((w - cellWidth(TIPS[this.tipIdx]) - 5) / 2)), Math.min(y0 + h - 2, ry + 2), tip);
   }
 
@@ -322,7 +327,7 @@ export class FullView {
   private drawToasts(c: Canvas, t: Theme, W: number) {
     this.toasts.forEach((ts, i) => {
       const col = ts.kind === "ok" ? t.ok : ts.kind === "warn" ? t.warn : ts.kind === "error" ? t.err : t.accent2, icon = ts.kind === "ok" ? "✓" : ts.kind === "warn" ? "⚠" : ts.kind === "error" ? "✗" : "●";
-      const text = ` ${icon} ${ts.text} `, w = cellWidth(text) + 2, x = W - w - 2, y = 2 + i * 3;
+      const n = this.toasts.length, text = clipWidth(` ${icon} ${ts.text} `, Math.max(10, this.mainW - 6)), w = cellWidth(text) + 2, x = 2, y = this.toastBase - 3 * (n - i);   // bottom-left of the transcript: never covers the header or sidebar
       c.box(x, y, w, 3, { border: col, bg: t.surface2, style: "round" }); c.text(x + 1, y + 1, text, { fg: t.text, bg: t.surface2 });
       c.text(x + 2, y + 1, icon, { fg: col, bg: t.surface2 });
     });
@@ -330,6 +335,7 @@ export class FullView {
   private drawSelection(c: Canvas, t: Theme) {
     const s = this.sel; if (!s) return;
     const [a, b] = ordered(s);
+    if (s.mode === "block") { const lo = Math.min(s.ax, s.hx), hi = Math.max(s.ax, s.hx); for (let y = a.y; y <= b.y; y++) c.tint(lo, y, hi - lo + 1, 1, t.selection); return; }
     for (let y = a.y; y <= b.y; y++) { const x0 = y === a.y ? a.x : this.viewX, x1 = y === b.y ? b.x : this.viewX + this.viewW - 2; c.tint(x0, y, x1 - x0 + 1, 1, t.selection); }
   }
 
@@ -347,26 +353,42 @@ export class FullView {
     if (e.button !== "left") return;
     const inTr = e.x >= this.viewX && e.x < this.viewX + this.viewW - 1 && e.y >= this.viewTop && e.y < this.viewTop + this.viewH;
     if (e.action === "press") {
-      this.down = { x: e.x, y: e.y, moved: false }; this.sel = undefined;
+      const inTr0 = !app.overlay && e.x >= this.viewX && e.x < this.viewX + this.viewW - 1 && e.y >= this.viewTop && e.y < this.viewTop + this.viewH;
+      this.down = { x: e.x, y: e.y, moved: false, mode: inTr0 ? "lines" : "block" }; this.sel = undefined;
       if (this.input(e)) return;
     } else if (e.action === "drag" && this.down) {
-      if (!app.overlay && (inTr || this.sel) && (Math.abs(e.x - this.down.x) + Math.abs(e.y - this.down.y) > 0)) {
+      if (Math.abs(e.x - this.down.x) + Math.abs(e.y - this.down.y) > 0) {
         this.down.moved = true;
-        const y = Math.max(this.viewTop, Math.min(this.viewTop + this.viewH - 1, e.y)), x = Math.max(this.viewX, Math.min(this.viewX + this.viewW - 2, e.x));
-        this.sel = { ax: this.down.x, ay: Math.max(this.viewTop, Math.min(this.viewTop + this.viewH - 1, this.down.y)), hx: x, hy: y, done: false };
-        if (e.y < this.viewTop) this.scrollBy(1); else if (e.y >= this.viewTop + this.viewH) this.scrollBy(-1);
+        const lines = this.down.mode === "lines";
+        const y = lines ? Math.max(this.viewTop, Math.min(this.viewTop + this.viewH - 1, e.y)) : Math.max(0, Math.min(this.canvas.h - 1, e.y)), x = lines ? Math.max(this.viewX, Math.min(this.viewX + this.viewW - 2, e.x)) : Math.max(0, Math.min(this.canvas.w - 1, e.x));
+        this.sel = { ax: this.down.x, ay: lines ? Math.max(this.viewTop, Math.min(this.viewTop + this.viewH - 1, this.down.y)) : this.down.y, hx: x, hy: y, done: false, mode: this.down.mode };
+        if (lines) { if (e.y < this.viewTop) this.scrollBy(1); else if (e.y >= this.viewTop + this.viewH) this.scrollBy(-1); }
         app.render();
       }
     } else if (e.action === "release" && this.down) {
       const d = this.down; this.down = undefined;
       if (d.moved && this.sel) { this.sel.done = true; this.copySelection(); app.render(); return; }
-      if (!d.moved) this.click(e.x, e.y);
+      if (d.moved) return;
+      const now = Date.now(), n = now - this.lastClick.t < 450 && this.lastClick.x === e.x && this.lastClick.y === e.y ? this.lastClick.n + 1 : 1;
+      this.lastClick = { t: now, x: e.x, y: e.y, n };
+      const handled = this.click(e.x, e.y);
+      if (!handled && n >= 2) this.selectAt(e.x, e.y, n >= 3 ? "line" : "word");
     }
+  }
+  /** Double click selects the word under the pointer, triple click the whole line; both copy at once. */
+  private selectAt(x: number, y: number, what: "word" | "line") {
+    const lo = x >= this.sideX ? this.sideX : this.viewX, hi = x >= this.sideX ? this.canvas.w - 1 : this.viewX + this.viewW - 2;
+    const row = this.canvas.readRow(y, lo, hi + 1), at = x - lo; if (at < 0 || at >= row.length) return;
+    let a = 0, z = row.length - 1;
+    if (what === "word") { if (/\s/.test(row[at])) return; a = at; z = at; while (a > 0 && !/\s/.test(row[a - 1])) a--; while (z < row.length - 1 && !/\s/.test(row[z + 1])) z++; }
+    else { while (z > 0 && /\s/.test(row[z])) z--; while (a < z && /\s/.test(row[a])) a++; }
+    this.sel = { ax: lo + a, ay: y, hx: lo + z, hy: y, done: true, mode: "block" }; this.copySelection(); this.app.render();
   }
   /** Clicks inside the input panel move the text cursor. */
   private input(e: MouseEv): boolean { void e; return false; }
-  private click(x: number, y: number) {
-    for (let i = this.regions.length - 1; i >= 0; i--) { const r = this.regions[i]; if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h && r.click) { r.click(); return; } }
+  private click(x: number, y: number): boolean {
+    for (let i = this.regions.length - 1; i >= 0; i--) { const r = this.regions[i]; if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h && r.click) { r.click(); return true; } }
+    return false;
   }
   private modalClick(h: ModalHit) {
     const o = this.app.overlay;
@@ -376,18 +398,15 @@ export class FullView {
   }
   private copySelection() {
     const s = this.sel; if (!s) return; const [a, b] = ordered(s); const lines: string[] = [];
-    for (let y = a.y; y <= b.y; y++) lines.push(this.canvas.readRow(y, y === a.y ? a.x : this.viewX, (y === b.y ? b.x : this.viewX + this.viewW - 2) + 1));
-    const text = lines.join("\n").replace(/\s+$/g, "");
+    for (let y = a.y; y <= b.y; y++) {
+      if (s.mode === "block") lines.push(this.canvas.readRow(y, Math.min(s.ax, s.hx), Math.max(s.ax, s.hx) + 1));
+      else lines.push(this.canvas.readRow(y, y === a.y ? a.x : this.viewX, (y === b.y ? b.x : this.viewX + this.viewW - 2) + 1));
+    }
+    const text = lines.map((l) => l.replace(/\s+$/, "")).join("\n").replace(/\s+$/g, "");
     if (!text) return;
     this.copy(text); this.toast(`copied ${text.length} characters`, "ok");
   }
-  /** Clipboard: OSC 52 (works over SSH in most modern terminals) plus the platform tool when we are local. */
-  copy(text: string) {
-    this.app.io.output.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
-    if (!this.app.persist) return;
-    const cmd = process.platform === "darwin" ? ["pbcopy"] : process.env.WAYLAND_DISPLAY ? ["wl-copy"] : ["xclip", "-selection", "clipboard"];
-    try { const p = spawn(cmd[0], cmd.slice(1), { stdio: ["pipe", "ignore", "ignore"] }); p.on("error", () => {}); p.stdin.on("error", () => {}); p.stdin.end(text); } catch { /* no clipboard tool: OSC 52 only */ }
-  }
+  copy(text: string) { copyToClipboard(this.app.io.output, text, this.app.persist); }
   clearSelection() { if (this.sel) { this.sel = undefined; return true; } return false; }
   /** Scroll keys; returns whether the key was used. */
   key(name: string, ctrl?: boolean): boolean {

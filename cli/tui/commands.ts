@@ -5,6 +5,7 @@ import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, type ProviderId } from "../con
 import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
 import { fmtDuration, fmtTokens } from "./pricing.ts";
+import { codeBlocks } from "./clipboard.ts";
 import { tokenReport } from "./tokens.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
 import { helpLines, renderDiff, toolCall, todoList } from "./view.ts";
@@ -135,6 +136,15 @@ export function buildCommands(): Cmd[] {
         toolDefChars: JSON.stringify(a.agent.registry.visible({ step: 0, messages: [] }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }))).length }));
     } },
     { name: "todos", help: "show the agent's checklist", live: true, run: (a) => a.commit(["", ...(a.todos.length ? todoList(a.todos, a.width) : [dim("  no todo list right now")])]) },
+    { name: "copy", help: "copy the last reply to the clipboard (or: code, all)", args: "[code|all]", live: true, run: (a, arg) => {
+      const bs = a.blocks.blocks, last = [...bs].reverse().find((b) => b.kind === "assistant" || b.kind === "summary");
+      let text = "";
+      if (arg === "all") text = bs.flatMap((b) => b.kind === "user" ? ["> " + b.text, ""] : b.kind === "assistant" || b.kind === "summary" ? [b.text, ""] : b.kind === "tool" ? [`[${b.name} ${b.args.slice(0, 120)}]`] : []).join("\n").trim();
+      else if (arg === "code") { const cb = last && "text" in last ? codeBlocks(last.text) : []; text = cb[cb.length - 1] ?? ""; if (!text) return void a.say("no code block in the last reply", dim); }
+      else text = last && "text" in last ? last.text : "";
+      if (!text) return void a.say("nothing to copy yet", dim);
+      a.copyText(text); a.say(`copied ${text.length} characters to the clipboard`, dim);
+    } },
     { name: "check", help: "fast command run after every edit (typecheck, lint); failures go straight back to the model", args: "[cmd|off]", run: (a, arg) => {
       if (!arg) return void a.say(a.check ? `post-edit check: ${cyan(a.check)}` : "no post-edit check set. /check npx tsc --noEmit", dim);
       a.setCheck(arg === "off" ? undefined : arg); a.say(arg === "off" ? "post-edit check off" : `post-edit check → ${cyan(arg)}`, dim);

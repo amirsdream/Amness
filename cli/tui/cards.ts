@@ -7,6 +7,7 @@ import { B, BOLD, F, ITAL, chip, fit, split, themeSkin } from "./rich.ts";
 import { cellWidth, clipWidth, strip, wrapAnsi } from "./text.ts";
 import type { Theme } from "./themes.ts";
 import { toolLabel, argSummary } from "./view.ts";
+import { codeBlocks } from "./clipboard.ts";
 
 export type RenderCtx = {
   theme: Theme; width: number; now: number; frame: number; expandAll: boolean; live: boolean;
@@ -14,7 +15,7 @@ export type RenderCtx = {
   /** The block above is also a tool call: draw no blank line between them, so a run of tool calls reads as one unit. */
   tight?: boolean;
 };
-export type Hit = { row: number; x0: number; x1: number; kind: "toggle" | "more"; id: number };
+export type Hit = { row: number; x0: number; x1: number; kind: "toggle" | "more" | "copy"; id: number; /** for "copy": what lands on the clipboard */ text?: string };
 export type Rendered = { rows: Cell[][]; hits: Hit[]; text: string[] };
 
 const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -90,6 +91,9 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
     const md = renderMarkdown(b.text || " ", bw - 3, themeSkin(t));
     const cursor = b.streaming && c.live && Math.floor(c.frame / 4) % 2 === 0 ? F(t.accent, "▍") : "";
     (md.length ? md : [""]).forEach((l, i) => rows.push((i === 0 ? F(c.brand.color, BOLD(c.brand.icon)) + "  " : "   ") + l + (i === md.length - 1 || md.length === 0 ? cursor : "")));
+    // each code block's "copy" label is a button: find its header rows (in order) and pair them with the fenced blocks of the source
+    const codes = codeBlocks(b.text); let k = 0;
+    md.forEach((l, i) => { if (k < codes.length && /^ ?[\w+#.-]+\s+copy\s*$/.test(strip(l))) hits.push({ row: rows.length - md.length + i, x0: MARGIN + 3 + bw - 3 - 6, x1: MARGIN + bw, kind: "copy", id: b.id, text: codes[k++] }); });
     return done();
   }
 
