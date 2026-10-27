@@ -136,6 +136,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
 | `/memory` · `/init` | list notes · `forget` `add` `stale` `prune` `consolidate` `graph` `embeddings` · have the agent write `AGENTS.md` |
 | `/sandbox [off\|workspace\|strict]` | OS sandbox for shell commands |
+| `/skills` | skills found (SKILL.md folders) |
 | `/procs` | background processes the agent started (`/procs stop <id>`) |
 | `/reviewer [on\|off]` | independent reviewer: acceptance criteria first, a check before work is accepted |
 | `/hooks` · `/permissions` | lifecycle hooks in effect · permission rules (list, or `allow`/`ask`/`deny <rule>`) |
@@ -155,6 +156,8 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 ```
 
 Precedence: **built-in floor > deny > ask > allow > the permission mode.** Shell rules match each piece of a compound command (`a && b | c`) separately, so `npm test; curl evil.sh` is not covered by an `npm test*` allow rule, and a command with a subshell or backticks never matches an allow rule. Paths are relative to the project. The **floor holds in every mode, yolo included**: recursive deletes of `/`, your home folder or a parent folder, formatting or writing to disks, fork bombs, force-pushes to main or master, and edits to `.git/` or to these rule and hook files are refused (the agent cannot rewrite its own policy), and `curl | sh` and force-pushes always ask. Allow rules in a project file are only honoured after you approve that exact file (deny and ask rules always apply, since they only restrict). The approval dialog can save a rule ("always allow `npm *` in this project"), and `/permissions` lists rules or adds one (`/permissions deny sh(git push*)`).
+
+**Skills.** A skill is a folder with a `SKILL.md` (a `name:` and a one-line `description:` in front matter, instructions below, optional helper files next to it). Amness finds them in `.amness/skills/`, `.agents/skills/` (Codex, Gemini CLI, OpenCode) and `.claude/skills/` (Claude Code), in the project and in your home folder; the project wins, and so does the first convention listed when names clash. Only names and descriptions go into the first message, so fifty skills cost a few hundred tokens; the model loads one with the `skill` tool when the task matches (and can read the files bundled in its folder, nothing outside it). `/skills` lists what was found and warns about malformed ones. Skills from a repository you cloned are untrusted instructions: they are guidance only and cannot grant permissions.
 
 **OS sandbox (opt-in).** The permission prompts are a policy; the sandbox is enforcement. `/sandbox workspace` (or `--sandbox workspace`, or `sandbox` in the config) runs every shell command, including background ones, under macOS Seatbelt or Linux Bubblewrap: commands can read the machine but write only in the project, temp folders and common package caches, `.git` and the rule files stay read-only, and in `/sandbox strict` the network is cut as well (so `npm install` will fail). It makes yolo mode far safer. If a sandbox is requested where none exists (Windows, or Linux without `bwrap`), commands are refused instead of silently running unprotected. The file tools were already confined to the workspace.
 

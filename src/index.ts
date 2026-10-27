@@ -24,3 +24,4 @@ export * from "./progress.ts";
 export * from "./review.ts";
 export * from "./patch.ts";
 export * from "./sandbox.ts";
+export * from "./skills.ts";

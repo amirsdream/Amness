@@ -204,6 +204,10 @@ export function buildCommands(): Cmd[] {
       if (arg !== "off" && !kind) return void a.say(`cannot turn the sandbox on: ${sandboxHelp()}`, red);
       a.cfg.sandbox = arg as SandboxMode; a.saveConfig(); a.say(`sandbox ${arg}${arg === "strict" ? dim("  (commands that need the network, like npm install, will fail)") : ""}`, dim);
     } },
+    { name: "skills", help: "skills found (SKILL.md folders in .amness/.agents/.claude skills, project and home)", live: true, run: (a) => {
+      const l = a.agent.skills ?? [], w = a.agent.skillWarnings ?? [];
+      a.commit(["", bold("  Skills"), ...(l.length ? l.map((s) => `  ${cyan(s.name.padEnd(22))} ${dim(`[${s.scope} · ${s.source}]`)} ${s.description}`) : [dim("  none found. Add .amness/skills/<name>/SKILL.md with a name and description in its front matter.")]), ...w.map((x) => "  " + yellow("⚠ ") + dim(x))]);
+    } },
     { name: "check", help: "fast command run after every edit (typecheck, lint); failures go straight back to the model", args: "[cmd|off]", run: (a, arg) => {
       if (!arg) return void a.say(a.check ? `post-edit check: ${cyan(a.check)}` : "no post-edit check set. /check npx tsc --noEmit", dim);
       a.setCheck(arg === "off" ? undefined : arg); a.say(arg === "off" ? "post-edit check off" : `post-edit check → ${cyan(arg)}`, dim);
