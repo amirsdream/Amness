@@ -25,7 +25,7 @@ Rule for Track B: **no item ships as a default until the eval runner shows it he
 | 5. Trust | G6, L9, L10 | Needs the sandbox and permission engine from phase 1 |
 | 6. Compounding | L11, L12, L13 | Needs measurement (phase 3) and trust (phase 5) to be safe |
 
-Legend: **P1** do first · **P2** next · **P3** later. Effort: S (hours), M (a day or two), L (several days).
+Legend: `[x]` done, `[~]` partly done (see the Done log for what is left), `[ ]` not started. **P1** do first · **P2** next · **P3** later. Effort: S (hours), M (a day or two), L (several days).
 
 How to use this file: say "do G1" (or "do the next one"), and the item is built, tested, ticked here, and pushed. Add new gaps at the bottom with the next free id.
 
@@ -44,7 +44,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G9 | Model routing (cheap model for exploring and compacting) | P2 | S–M | [ ] |
 | G10 | Code index / repo map | P2 | M | [ ] |
 | G11 | Language-server diagnostics after edits | P2 | M | [ ] |
-| G12 | Tracing (JSONL trace file, OpenTelemetry export, cache-miss cost) | P2 | S–M | [ ] |
+| G12 | Tracing (JSONL trace file, OpenTelemetry export, cache-miss cost) | P2 | S–M | [x] |
 | G13 | Git worktrees, `/review`, pull-request helper | P2 | M | [ ] |
 | G14 | Better loop detection (cycles, not only exact repeats) | P2 | S | [ ] |
 | G15 | Prompt-injection and secrets hardening | P2 | M | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G12**: always-on JSONL trace per session (.amness/traces), optional OTLP/HTTP export with GenAI attributes (AMNESS_OTLP, --trace), cache-waste figure (tokens re-read at full price and estimated dollars) in /loop. src/trace.ts, test/trace.test.ts.
 - **G3**: allow/ask/deny rules (sh(...) with per-piece compound handling, edit(...)/read globs) from project and user files; built-in floor that holds in yolo (no rm -rf of / ~ .., no force-push to main, no .git or policy-file edits, curl|sh and force-push always ask); project allow rules need approval; /permissions; 'always allow' in the approval dialog. src/permissions.ts, test/permissions.test.ts.
 - **G2**: six events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact, Stop) via .amness/hooks.json and ~/.amness/hooks.json; block with exit 2, add context or rewrite args with stdout JSON; scrubbed env, timeouts, fail-open or failClosed; project hooks need approval of the exact file (headless: --trust-hooks); /hooks. src/hooks.ts, test/hooks.test.ts.
 - **G1**: AGENTS.md (then CLAUDE.md, GEMINI.md) from the workspace root and the user folder load into the first message; a folder's own file is appended to the first read or edit there (once). Shown in /status. src/guidance.ts, test/guidance.test.ts.

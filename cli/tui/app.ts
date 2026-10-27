@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Budget, MemoryStore, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { Budget, MemoryStore, Tracer, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
@@ -415,8 +415,15 @@ export class App {
 
   // ------------------------------------------------------------------ events from the agent
   private stepNow(): TraceStep { if (!this.trace.length) this.trace.push({ n: 1, t0: Date.now(), ms: 0, prompt: 0, completion: 0, tools: [], notes: [] }); return this.trace[this.trace.length - 1]; }
+  /** The session's trace (local JSONL file, plus an OpenTelemetry collector when AMNESS_OTLP is set). */
+  tracer?: Tracer; private tracerFor = "";
+  private trace_(e: Ev) {
+    if (!this.persist) return;
+    if (!this.tracer || this.tracerFor !== this.session.id) { void this.tracer?.close(); this.tracerFor = this.session.id; this.tracer = new Tracer({ file: join(this.cwd, ".amness", "traces", `${this.session.id}.jsonl`), otlp: process.env.AMNESS_OTLP, sessionId: this.session.id, model: this.cfg.model }); }
+    this.tracer.event(e as any);
+  }
   onEvent(e: Ev) {
-    this.live?.onEvent(e as any);
+    this.live?.onEvent(e as any); this.trace_(e);
     const sub = e.agent && e.agent !== "lead" ? e.agent : undefined, w = this.width;
     switch (e.kind) {
       case "thinking": if (!sub) { this.thinkBuf = (this.thinkBuf + e.delta).slice(-600); this.blocks.streamThinking(e.delta); } break;

@@ -1,7 +1,7 @@
 // Non-interactive mode for CI, scripts and containers:  amness run [flags] "task"
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Budget, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, type Approve, type Event } from "../src/index.ts";
+import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, loadConfig, ready, type ProviderId } from "./config.ts";
 import { formatEvent } from "./format.ts";
 import { createModel } from "./model.ts";
@@ -10,6 +10,7 @@ export const HELP = `usage: amness run [flags] "task"
   --cwd <dir>          workspace (default .)
   --verify <cmd>       command that must exit 0 before the agent may finish
   --trust-project      run this project's .amness/hooks.json and honour its allow rules (hooks execute commands; off by default in headless runs)
+  --trace <file>       write a JSONL trace of every loop event (also AMNESS_OTLP=<collector url> for OpenTelemetry export)
   --check <cmd>        fast command run after every edit; failures are shown to the agent immediately
   --provider <id>      ${Object.keys(PROVIDERS).join(" | ")}    --model <id>    --base-url <url>    --effort none|low|medium|high|xhigh|max   --api auto|responses|chat
   --bundle <file>      continue from a portable session bundle (any provider/model)
@@ -50,9 +51,10 @@ export async function runHeadless(argv: string[]): Promise<number> {
   const approve: Approve = yes ? () => true : () => "non-interactive run: risky commands are denied unless --yes is passed";
   const budget = new Budget({ maxTokens });
   const model = createModel(cfg);
+  const tracer = val("--trace") || process.env.AMNESS_OTLP ? new Tracer({ file: val("--trace") ? resolve(val("--trace")!) : undefined, otlp: process.env.AMNESS_OTLP, sessionId: `run-${Date.now()}`, model: cfg.model }) : undefined;
   const agent = createCodeAgent({
     model, cwd, verify, check, approve, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
-    onEvent: (e: Event) => { live?.onEvent(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
+    onEvent: (e: Event) => { live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
   try {
     const r = await agent.run(task, { bundle });
@@ -63,5 +65,5 @@ export async function runHeadless(argv: string[]): Promise<number> {
   } catch (e) {
     if (json) console.log(JSON.stringify({ kind: "error", message: (e as Error).message })); else console.error("error: " + (e as Error).message);
     return 1;
-  } finally { await live?.close(); }
+  } finally { await tracer?.close(); await live?.close(); }
 }
