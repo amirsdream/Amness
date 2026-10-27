@@ -27,3 +27,4 @@ export * from "./sandbox.ts";
 export * from "./skills.ts";
 export * from "./worktree.ts";
 export * from "./agents.ts";
+export * from "./route.ts";

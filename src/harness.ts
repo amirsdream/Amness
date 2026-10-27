@@ -129,6 +129,8 @@ export type Options = {
   reviewer?: (ctx: { task: string; summary: string; messages: Message[] }) => Promise<{ pass: boolean; findings: string[]; inconclusive?: boolean }>;
   /** Claims ledger (see `Ledger`): records edits and commands, and rejects a `finish` whose summary claims things that did not happen. */
   ledger?: { onEdit(e: { path: string; added: number; removed: number; created: boolean; diff?: string }): void; onCommand(cmd: string, result: string): void; check(summary: string, o?: { gated?: boolean }): string[]; audit(task: string): { changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] } };
+  /** Model for the handoff note written when the context rolls over (often a cheaper one). Default: `model`. */
+  compactModel?: Model;
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
   hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
@@ -332,7 +334,7 @@ export function createHarness(o: Options) {
       const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 80)}`).join("\n") }] : []), FINISH];
       const r = o.rollover, size = msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0);
       if (r && step > 0 && (lastPrompt >= (r.afterTokens ?? Infinity) || size >= (r.afterChars ?? Infinity))) {
-        const note = await makeHandoff(o.model, specs, msgs, o.budget);
+        const note = await makeHandoff(o.compactModel ?? o.model, specs, msgs, o.budget);
         const first = (msgs.find((x) => x.role === "user")?.content ?? "").split(HANDOFF_MARK)[0];
         msgs.splice(1, msgs.length, { role: "user", content: `${first}${HANDOFF_MARK} (you are continuing, not starting over)\n${note}` });
         seen.clear(); nudges = 0; lastPrompt = 0;

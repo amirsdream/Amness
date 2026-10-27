@@ -93,7 +93,7 @@ export function buildCommands(): Cmd[] {
       if (sub === "graph") { const all = m.list(), rows = all.map((e) => [e, m.neighbors(e, all)] as const).filter(([, n]) => n.length); return void a.commit(rows.length ? ["", bold("  Related notes"), ...rows.map(([e, n]) => `  ${cyan(e.name.padEnd(24))} ${dim("↔")} ${n.map((x) => x.name).join(", ")}`), dim("  links come from [[name]] mentions and from notes that keep being retrieved together")] : ["", dim("  no links yet. Mention [[other-note]] in a note, or keep using memory: notes retrieved together get linked.")]); }
       if (sub === "consolidate") {
         a.say("asking the model to tidy memory (merge duplicates, archive obsolete notes)…", dim);
-        const plan = await m.consolidate(a.model);
+        const plan = await m.consolidate(a.roles.compact ?? a.model);
         if (!plan.merges.length && !plan.archive.length) return void a.say("memory looks tidy: nothing to merge or archive", dim);
         const lines = [...plan.merges.map((x) => `merge ${x.from.join(", ")} → ${x.keep}`), ...plan.archive.map((n) => `archive ${n}`)];
         a.commit(["", bold("  Proposed memory clean-up"), ...lines.map((l) => "  " + l), dim("  nothing is deleted: replaced notes move to memory/archive/")]);
@@ -196,6 +196,14 @@ export function buildCommands(): Cmd[] {
     { name: "reviewer", help: "independent skeptical reviewer: criteria before the work, a check before it is accepted (costs extra model calls)", args: "[on|off]", run: (a, arg) => {
       if (!arg) return void a.say(`reviewer is ${a.cfg.review ? "on" : "off"}. /reviewer on: a fresh, read-only reviewer writes acceptance criteria before a task and checks the work against them before it can finish (at most two rounds). Roughly +2 to +4 model calls per task.`, dim);
       a.cfg.review = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`reviewer ${arg === "on" ? "on" : "off"}`, dim);
+    } },
+    { name: "models", help: "use other models for some jobs: /models explore|compact|review <model|off> · /models fallback <model|off>", args: "[role model]", run: (a, arg) => {
+      const [role, id] = arg.split(/\s+/), roles = ["explore", "compact", "review"];
+      if (!role) { const m = a.cfg.models ?? {}; return void a.commit(["", bold("  Models"), `  ${dim("main".padEnd(10))} ${a.cfg.model}`, ...roles.map((r) => `  ${dim(r.padEnd(10))} ${(m as Record<string, string | undefined>)[r] ?? dim("(main model)")}`), `  ${dim("fallback".padEnd(10))} ${a.cfg.fallback ?? dim("(none)")}`, dim("  e.g. /models explore gpt-6.1-luna   (a cheaper model for read-only exploration)")]); }
+      if (role !== "fallback" && !roles.includes(role)) return void a.say("usage: /models explore|compact|review|fallback <model id | off>", red);
+      if (!id) return void a.say(`usage: /models ${role} <model id | off>`, red);
+      if (role === "fallback") a.cfg.fallback = id === "off" ? undefined : id; else a.cfg.models = { ...(a.cfg.models ?? {}), [role]: id === "off" ? undefined : id };
+      a.saveConfig(); a.buildAgent(); a.say(`${role} → ${id === "off" ? "main model" : id}`, dim);
     } },
     { name: "sandbox", help: "OS sandbox for shell commands: off · workspace · strict (no network)", args: "[off|workspace|strict]", run: (a, arg) => {
       const kind = sandboxKind();

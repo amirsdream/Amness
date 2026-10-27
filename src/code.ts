@@ -12,6 +12,7 @@ import { Guidance } from "./guidance.ts";
 import { ProcessManager } from "./procs.ts";
 import { Ledger } from "./ledger.ts";
 import { AGENT_TOOLS, WRITE_TOOLS, isWriter, loadAgents, type AgentDef } from "./agents.ts";
+import type { Roles } from "./route.ts";
 import { applyDiff, createWorktree, isRepo, removeWorktree, worktreeDiff, type Worktree } from "./worktree.ts";
 import { loadSkills, skillsBlock, skillTool, type Skill } from "./skills.ts";
 import { applyOps, parsePatch, replaceMany } from "./patch.ts";
@@ -215,6 +216,8 @@ export type CodeAgentOptions = {
   agents?: boolean;
   /** Models that agents can name in their front matter (`model: fast`). */
   agentModels?: Record<string, Model>;
+  /** Different models for different jobs: `explore` (the read-only explorer), `compact` (handoff notes and /compact), `review` (the independent reviewer). Unset roles use `model`. */
+  models?: Roles;
   /** Discover SKILL.md folders (.amness/skills, .agents/skills, .claude/skills; project and home) and offer them through the `skill` tool. Default on. */
   skills?: boolean;
   /** Run shell commands under an OS sandbox: "workspace" (writes only in the project and temp/cache folders, `.git` read-only) or "strict" (also no network). A getter lets you switch it live. */
@@ -278,7 +281,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
           if (agent && agent !== "explore" && !d) return `ERROR: unknown agent "${agent}". Available: explore${agentList.map((a) => ", " + a.name).join("")}`;
           const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name } as unknown as Event);
           if (!d) {
-            const r = await createHarness({ model: o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 20, budget: o.budget, signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 20, budget: o.budget, signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
             return r.text || "(the explorer returned nothing)";
           }
           const names = plan ? d.tools.filter((t) => !WRITE_TOOLS.has(t)) : d.tools, isolated = d.isolation === "worktree" && isWriter(d) && !plan;
@@ -323,7 +326,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
     return { context: parts.length ? `[hook context]\n${parts.join("\n")}` : undefined };
   };
   const ledger = new Ledger({ testCommand: o.verify ?? o.check });
-  const reviewModel: Model = (typeof o.review === "object" && o.review.model) || o.model;
+  const reviewModel: Model = (typeof o.review === "object" && o.review.model) || o.models?.review || o.model;
   let contract: string[] = [];
   /** Acceptance criteria for a task-like message (reviewer on): written first, shown to the builder, checked at the end. */
   const withContract = async (text: string, force = false): Promise<string> => {
@@ -336,7 +339,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const sessionFile = resolve(o.cwd, ".amness/handoff.md");
   let task = "";
   const h = createHarness({
-    model: o.model, system: o.chat ? CHAT_SYSTEM : CODE_SYSTEM, tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
+    model: o.model, compactModel: o.models?.compact, system: o.chat ? CHAT_SYSTEM : CODE_SYSTEM, tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
     budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal, hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 },
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
@@ -402,13 +405,13 @@ ${note}
     /** Replace a long conversation by a model-written handoff note (same mechanism as automatic rollover, on demand). */
     async compact(messages: Message[]): Promise<{ messages: Message[]; note: string }> {
       const specs = registry.visible({ step: 0, messages }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }));
-      const note = await makeHandoff(o.model, specs, messages, o.budget);
+      const note = await makeHandoff(o.models?.compact ?? o.model, specs, messages, o.budget);
       const first = (messages.find((m) => m.role === "user")?.content ?? task).split("\n\n## Handoff from your earlier context")[0];
       return { note, messages: [messages[0], { role: "user", content: `${first}\n\n## Handoff from your earlier context (you are continuing, not starting over)\n${note}` }] };
     },
     /** Package the work so far for another machine / model / day. Asks the model for a handoff note unless one is supplied. */
     async exportBundle(result: { messages: Message[]; finished: boolean; text: string }, path?: string, handoff?: string): Promise<{ bundle: Bundle; path?: string }> {
-      const note = handoff ?? (await makeHandoff(o.model, registry.visible({ step: 0, messages: result.messages }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema })), result.messages, o.budget));
+      const note = handoff ?? (await makeHandoff(o.models?.compact ?? o.model, registry.visible({ step: 0, messages: result.messages }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema })), result.messages, o.budget));
       const bundle: Bundle = {
         schema: "amness.session/1", createdAt: new Date().toISOString(), task: result.messages.find((m) => m.role === "user")?.content?.split("\n\n## ")[0] ?? task,
         status: { finished: result.finished, summary: result.text.slice(0, 500) }, handoff: note, memory: memory?.list() ?? [],
