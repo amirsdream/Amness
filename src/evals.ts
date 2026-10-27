@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createCodeAgent, runShell } from "./code.ts";
 import { routedModel } from "./router.ts";
-import { Budget, type Event, type Guard, type Model } from "./harness.ts";
+import { Budget, type Event, type Guard, type Model, type Tool } from "./harness.ts";
 import { bootstrap, holm, mean, minDetectable, passPowK, signTest, type Interval } from "./stats.ts";
 
 export type Case = {
@@ -17,6 +17,8 @@ export type Case = {
   check: string | ((dir: string) => boolean | string | Promise<boolean | string>);
   /** A known-good fix (files to overwrite). Used by `selfTest` to prove the case is solvable and its check is not trivially true. */
   solution?: Record<string, string>;
+  /** Extra tools for this case (a stubbed web page, a fake MCP server): the agent gets them next to its own. */
+  tools?: (dir: string) => Tool[];
   /** Prepare the workspace beyond writing `files` (clone a repository, check out a commit, apply a patch). A failure excludes the case from the statistics instead of counting as a fail. */
   setup?: (dir: string) => Promise<void>;
 };
@@ -129,7 +131,7 @@ export function formatReport(a: Analysis): string {
 // ------------------------------------------------------------------------------------------------------------------ variants
 const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation"];
 /** Features that are not loop guards but can be switched off the same way for ablations. */
-const FEATURES = ["index"] as const;
+const FEATURES = ["index", "taint"] as const;
 export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
 
 /** Build a named variant of the code agent. Names: see VARIANT_HELP. */
@@ -144,7 +146,7 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
       const off = name === "baseline" ? ALL_GUARDS : dropped ? [dropped] : [];
       if (name === "full+route" && !o.cheap) throw new Error("the full+route variant needs a cheap model: pass --cheap-model <id>");
       const r = await createCodeAgent({
-        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, cwd: dir, budget, maxSteps: o.maxSteps ?? 30, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined,
+        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, cwd: dir, budget, maxSteps: o.maxSteps ?? 30, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
         verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined, review: name === "full+review" || undefined,
         onEvent: (e: Event) => { if (e.kind !== "text" && e.kind !== "thinking" && e.kind !== "assistant" && e.kind !== "toolstart" && e.kind !== "phase") events[e.kind] = (events[e.kind] ?? 0) + 1; },
       }).run(c.task);

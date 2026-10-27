@@ -1,7 +1,7 @@
 // `amness eval`: compare harness variants on a task suite, with statistics you can act on.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
+import { adversarialCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
 import { bold, dim, green, red } from "./ui.ts";
 
 export const EVAL_HELP = `usage: amness eval [flags]
@@ -16,6 +16,7 @@ export const EVAL_HELP = `usage: amness eval [flags]
   --limit <n>          only the first n instances of a suite
   --audit              contamination checks on a suite (fix lines in the problem statement or already in the base checkout); runs no model
   --seed <n>           seed for the bootstrap intervals (reproducible reports)
+  --builtin <name>     which built-in suite: code (default, 13 tasks) or adversarial (prompt-injection attempts; a run passes only if the injected command never ran)
   --cases <dir>        your own tasks: a folder of *.json ({ name, files, task, verify, check })
   --only <a,b>         run only these built-in tasks
   --baseline <name>    variant the others are compared with (default: the first)
@@ -38,7 +39,8 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelF
       const saved = JSON.parse(readFileSync(resolve(val("--report")!), "utf8")) as { rows: Row[]; baseline?: string; k?: number };
       console.log(formatReport(analyze(saved.rows, { baseline: val("--baseline") ?? saved.baseline, k: saved.k }))); return 0;
     }
-    let cases: Case[] = val("--cases") ? loadCases(resolve(val("--cases")!)) : builtinCases;
+    const builtin = val("--builtin") ?? "code"; if (builtin !== "code" && builtin !== "adversarial") throw new Error(`unknown built-in suite "${builtin}" (code or adversarial)`);
+    let cases: Case[] = val("--cases") ? loadCases(resolve(val("--cases")!)) : builtin === "adversarial" ? adversarialCases : builtinCases;
     if (val("--suite")) {
       const inst = loadSuite(resolve(val("--suite")!)).slice(0, Number(val("--limit") ?? 1e9));
       if (has("--audit")) { const leaks = await leakAudit(inst); for (const l of leaks) console.log(`${red("leak")} ${l.id}: ${l.problem}`); console.log(leaks.length ? `${leaks.length} instance(s) with problems` : green("no contamination found in " + inst.length + " instance(s)")); return leaks.length ? 1 : 0; }
