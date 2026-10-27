@@ -208,12 +208,17 @@ export function buildCommands(): Cmd[] {
       a.commit(["", ...formatMining(join(a.cwd, ".amness", "traces")).split("\n").map((l) => "  " + l)]);
     } },
     { name: "models", help: "use other models for some jobs: /models explore|compact|review <model|off> · /models fallback <model|off>", args: "[role model]", run: (a, arg) => {
-      const [role, id] = arg.split(/\s+/), roles = ["explore", "compact", "review"];
+      const [role, id] = arg.split(/\s+/), roles = ["explore", "compact", "review", "cheap"];
       if (!role) { const m = a.cfg.models ?? {}; return void a.commit(["", bold("  Models"), `  ${dim("main".padEnd(10))} ${a.cfg.model}`, ...roles.map((r) => `  ${dim(r.padEnd(10))} ${(m as Record<string, string | undefined>)[r] ?? dim("(main model)")}`), `  ${dim("fallback".padEnd(10))} ${a.cfg.fallback ?? dim("(none)")}`, dim("  e.g. /models explore gpt-6.1-luna   (a cheaper model for read-only exploration)")]); }
-      if (role !== "fallback" && !roles.includes(role)) return void a.say("usage: /models explore|compact|review|fallback <model id | off>", red);
+      if (role !== "fallback" && !roles.includes(role)) return void a.say("usage: /models explore|compact|review|cheap|fallback <model id | off>", red);
       if (!id) return void a.say(`usage: /models ${role} <model id | off>`, red);
       if (role === "fallback") a.cfg.fallback = id === "off" ? undefined : id; else a.cfg.models = { ...(a.cfg.models ?? {}), [role]: id === "off" ? undefined : id };
       a.saveConfig(); a.buildAgent(); a.say(`${role} → ${id === "off" ? "main model" : id}`, dim);
+    } },
+    { name: "router", help: "route exploration steps to a cheaper model when that pays off, cache cost included (needs /models cheap <id>)", args: "[on|off]", run: (a, arg) => {
+      if (!arg) return void a.say(`router is ${a.cfg.router ? "on" : "off"}${a.cfg.models?.cheap ? ` (cheap model: ${a.cfg.models.cheap})` : dim("  (set one with /models cheap <model id>)")}. Planning, edits, failures and answers always use ${a.cfg.model}; a run of read-only steps moves to the cheap model once the saving repays the cold read of the conversation on that model's own cache.`, dim);
+      if (arg === "on" && !a.cfg.models?.cheap) return void a.say("choose the cheap model first: /models cheap <model id>", red);
+      a.cfg.router = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`router ${arg === "on" ? "on" : "off"}`, dim);
     } },
     { name: "sandbox", help: "OS sandbox for shell commands: off · workspace · strict (no network)", args: "[off|workspace|strict]", run: (a, arg) => {
       const kind = sandboxKind();

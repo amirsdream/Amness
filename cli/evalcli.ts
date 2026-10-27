@@ -19,6 +19,7 @@ export const EVAL_HELP = `usage: amness eval [flags]
   --cases <dir>        your own tasks: a folder of *.json ({ name, files, task, verify, check })
   --only <a,b>         run only these built-in tasks
   --baseline <name>    variant the others are compared with (default: the first)
+  --cheap-model <id>   the cheaper model for the full+route variant (same provider)
   --jobs <n>           sessions run at once (default 1)
   --max-tokens <n>     token cap per session (default: your configured budget)
   --max-steps <n>      steps per session (default 30)
@@ -27,7 +28,7 @@ export const EVAL_HELP = `usage: amness eval [flags]
   --selftest           check that every task is solvable and its held-out check is sound; runs no model
   --yes                skip the cost confirmation`;
 
-export async function runEval(argv: string[], deps: { model: () => Model; maxTokens: number; confirm: (q: string) => Promise<boolean> }): Promise<number> {
+export async function runEval(argv: string[], deps: { model: () => Model; modelFor?: (id: string) => Model; maxTokens: number; confirm: (q: string) => Promise<boolean> }): Promise<number> {
   const val = (f: string) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; }, has = (f: string) => argv.includes(f);
   if (has("--help") || has("-h")) { console.log(EVAL_HELP); return 0; }
   try {
@@ -50,7 +51,7 @@ export async function runEval(argv: string[], deps: { model: () => Model; maxTok
     }
     const names = variantNames(val("--variants") ?? "ab"), trials = Math.max(1, Number(val("--trials") ?? 3)), jobs = Math.max(1, Number(val("--jobs") ?? 1));
     const maxTokens = Number(val("--max-tokens") ?? deps.maxTokens), maxSteps = Number(val("--max-steps") ?? 30);
-    const model = deps.model(), variants = names.map((n) => harnessVariant(model, n, { maxTokens, maxSteps }));
+    const model = deps.model(), cheap = val("--cheap-model") && deps.modelFor ? deps.modelFor(val("--cheap-model")!) : undefined, variants = names.map((n) => harnessVariant(model, n, { maxTokens, maxSteps, cheap }));
     const runs = cases.length * variants.length * trials;
     console.log(`${bold("plan")}  ${cases.length} tasks × ${variants.length} variants (${names.join(", ")}) × ${trials} trials = ${bold(String(runs))} agent sessions, up to ${maxTokens.toLocaleString()} tokens each`);
     if (!has("--yes") && !(await deps.confirm(`This calls your model up to ${(runs * maxTokens).toLocaleString()} tokens in the worst case. Continue?`))) return 1;

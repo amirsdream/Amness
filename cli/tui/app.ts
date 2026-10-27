@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Budget, MemoryStore, Tracer, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { Budget, MemoryStore, Tracer, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
@@ -22,7 +22,7 @@ import { copyToClipboard } from "./clipboard.ts";
 import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, editKey, type ChoiceDetail, type Overlay, type PickItem } from "./overlays.ts";
 import { Pager, transcriptLines } from "./pager.ts";
 import { TIPS, at, brandOf, fg, palette, shimmer, sparkline } from "./theme.ts";
-import { contextWindow, estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
+import { contextWindow, estimateCost, fmtCost, fmtDuration, fmtTokens, priceOf } from "./pricing.ts";
 import { Screen, type Out } from "./screen.ts";
 import { SessionStore, newSession, rewind, snapshot, type SessionData, type Turn } from "./session.ts";
 import { basename } from "node:path";
@@ -110,7 +110,12 @@ export class App {
     const main = make(this.cfg), fb = this.cfg.fallback && this.cfg.fallback !== this.cfg.model ? make({ ...this.cfg, model: this.cfg.fallback }) : undefined;
     this.model = fb ? withFallback(main, fb, () => this.note(`${this.cfg.model} is unavailable; answering from ${this.cfg.fallback}`)) : main;
     const role = (id?: string) => (id && id !== this.cfg.model ? make({ ...this.cfg, model: id }) : undefined), m = this.cfg.models ?? {};
-    this.roles = { explore: role(m.explore), compact: role(m.compact), review: role(m.review) };
+    this.roles = { explore: role(m.explore), compact: role(m.compact), review: role(m.review), cheap: role(m.cheap) };
+    if (this.cfg.router && this.roles.cheap) {
+      const pm = priceOf(this.cfg.model), pc = priceOf(m.cheap ?? "");
+      this.model = routedModel({ strong: this.model, cheap: this.roles.cheap, prices: pm && pc ? { strong: { input: pm[1], output: pm[2] }, cheap: { input: pc[1], output: pc[2] } } : undefined,
+        onRoute: (d) => { this.lastRoute = `${d.tier === "cheap" ? m.cheap : this.cfg.model}`; if (d.switched) this.stepNow().notes.push(`route → ${d.tier === "cheap" ? m.cheap : this.cfg.model}: ${d.reason}`); } });
+    }
     this.agent = createCodeAgent({
       model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
       signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
@@ -613,7 +618,7 @@ export class App {
     this.warmTimer.unref?.();
   }
   /** Project hooks run commands on this machine, so a cloned repo's hooks only run after the user approves this exact file. */
-  hooks!: Hooks; rules!: Permissions; roles: Roles = {};
+  hooks!: Hooks; rules!: Permissions; roles: Roles = {}; lastRoute = "";
   loadHooks() {
     const fp = projectConfigFingerprint(this.cwd), trusted = !!fp && loadState().hookTrust?.[this.cwd] === fp;
     try { this.hooks = Hooks.load(this.cwd, { trustProject: trusted }); } catch (e) { this.hooks = Hooks.load(this.cwd, { trustProject: false }); this.note(`hooks ignored: ${(e as Error).message}`); }

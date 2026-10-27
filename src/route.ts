@@ -1,7 +1,7 @@
 // Model routing helpers: roles that use different models (explore, compact, review), and a fallback chain that survives an overloaded or unavailable provider.
 import type { Message, Model, ModelOpts, ToolSpec } from "./harness.ts";
 
-export type Roles = Partial<Record<"explore" | "compact" | "review", Model>>;
+export type Roles = Partial<Record<"explore" | "compact" | "review" | "cheap", Model>>;
 
 /** Errors worth trying another model for: rate limits, overload, server errors, timeouts, and network failures (the adapters already retried the same model). */
 export function isRetryable(e: unknown): boolean {
