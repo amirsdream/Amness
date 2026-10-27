@@ -19,6 +19,7 @@ import { getTheme, type Theme } from "./themes.ts";
 import { level as colorLevel, TIPS } from "./theme.ts";
 import { contextMap } from "./tokens.ts";
 import { LOGO_ART } from "./brand.ts";
+import { argSummary, toolLabel } from "./view.ts";
 
 type Region = { x: number; y: number; w: number; h: number; click?: () => void; kind: string };
 type Toast = { text: string; kind: "info" | "ok" | "warn" | "error"; until: number };
@@ -241,6 +242,8 @@ export class FullView {
       usage: { prompt: u.prompt, completion: u.completion, calls: u.calls, cached: u.cached ?? 0, reasoning: u.reasoning ?? 0 }, cost: estimateCost(app.cfg.model, u.prompt, u.completion, u.cached ?? 0),
       todos: app.todos, changes: [...changes.values()].reverse(), tools: app.agent.registry.visible({ step: 0, messages: [] }).length, mcp: app.mcp.length, memory: app.memory?.list().length ?? 0,
       running: app.running, elapsedMs: now - this.startedAt, tip: TIPS[this.tipIdx],
+      run: app.running ? { phase: app.phase?.phase ?? "model", step: app.phase?.step ?? 0, max: app.phase?.max ?? 30, elapsedMs: now - app.runStart, frame: app.frame,
+        live: [...app.inflight.values()].map((x) => ({ label: toolVerb(x.name, x.args), ms: now - x.t0, agent: x.agent })), done: app.activity.map((x) => ({ label: toolVerb(x.name, x.args, true), ok: x.ok, ms: x.ms })) } : undefined,
     }, t, w, h);
     rows.forEach((r, i) => c.put(x0 + 1, y0 + i, r, w - 1));
     for (let i = 0; i < h; i++) c.text(x0, y0 + i, "│", { fg: t.border, bg: t.surface });
@@ -251,10 +254,12 @@ export class FullView {
   private drawStatus(c: Canvas, t: Theme, x: number, y: number, w: number, now: number) {
     const app = this.app, f = app.frame, glyph = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"][f % 10];
     if (app.running) {
-      const verb = app.mode === "plan" ? "Planning" : app.thinkBuf.trim() ? "Thinking" : "Working", chars = [...verb + "…"];
+      const fl = [...app.inflight.values()], ph = app.phase?.phase;
+      const verb = app.overlay ? "Waiting for you" : ph === "verify" ? "Verifying" : ph === "compact" ? "Compacting" : fl.length > 1 ? `Running ${fl.length} tools in parallel` : fl.length === 1 ? toolVerb(fl[0].name, fl[0].args)
+        : app.mode === "plan" ? "Planning" : app.thinkBuf.trim() ? "Thinking" : app.streamBuf ? "Writing" : "Working", chars = [...clipWidth(verb, Math.max(8, w - 44)) + "…"];
       const shim = chars.map((ch, i) => F(mix(t.accent, 0xffffff, Math.max(0, 1 - Math.abs(i - ((f * 0.9) % (chars.length + 8) - 4)) / 3)), ch)).join("");
       const spark = app.runSeries.length > 1 ? " " + F(t.accent2, app.runSeries.slice(-10).map((v) => BARS[Math.min(7, Math.round((v / Math.max(1, ...app.runSeries)) * 7))]).join("")) : "";
-      c.ansi(x + 1, y, F(mix(t.accent, t.accent2, (f % 20) / 20), glyph) + " " + BOLD(shim) + F(t.dim, ` ${fmtDuration(now - app.runStart)} · ↓ ${fmtTokens(app.runTokens)}`) + spark + F(t.faint, "   esc to interrupt"), {}, w - 2);
+      c.ansi(x + 1, y, F(mix(t.accent, t.accent2, (f % 20) / 20), glyph) + " " + BOLD(shim) + F(t.dim, ` ${fmtDuration(now - app.runStart)} · ↓ ${fmtTokens(app.runTokens)}`) + (app.phase ? F(t.faint, ` · step ${app.phase.step + 1}/${app.phase.max}`) : "") + spark + F(t.faint, "   esc to interrupt"), {}, w - 2);
       if (app.thinkBuf.trim() && app.queued.length === 0) { /* reasoning summary lives in the transcript's thinking block */ }
     }
     app.queued.slice(0, 2).forEach((q, i) => c.ansi(x + 1, y + (app.running ? 1 : 0) + i, F(t.warn, "▸ queued ") + F(t.dim, clipWidth(q.text.replace(/\s+/g, " "), w - 14)), {}, w - 2));
@@ -386,6 +391,12 @@ export function gradientText(text: string, stops: number[], phase = 0): string {
   return chars.map((ch, i) => (ch === " " ? ch : F(sample(stops, (i / n + phase) % 1), ch))).join("");
 }
 const sample = (stops: number[], x: number) => { const p = Math.max(0, Math.min(1, x)) * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(p)); return stops.length === 1 ? stops[0] : mix(stops[i], stops[i + 1], p - i); };
+const VERBS: Record<string, string> = { read_file: "Reading", list_files: "Listing", grep: "Searching", write_file: "Writing", edit_file: "Editing", sh: "Running", web_search: "Searching the web for", fetch_url: "Fetching", task: "Delegating", memory_save: "Saving note", memory_search: "Recalling", todo_write: "Planning" };
+/** "Reading src/app.ts": what a tool call is doing, for the status line and the run panel. */
+export function toolVerb(name: string, args: string, past = false): string {
+  const a = argSummary(name, args), v = VERBS[name] ?? toolLabel(name);
+  return past ? `${toolLabel(name)} ${a}`.trim() : `${v} ${a}`.trim();
+}
 const shortPath = (p: string) => { const h = process.env.HOME ?? ""; return h && p.startsWith(h) ? "~" + p.slice(h.length) : p; };
 function ago(iso: string) { const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000); return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 129600 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; }
 void InputOverlay; void ITAL; void BOLD; void split; void estimateCost; void ({} as Cell);

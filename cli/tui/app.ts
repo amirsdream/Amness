@@ -54,6 +54,7 @@ export class App {
   store: SessionStore; session: SessionData; edits: EditEv[] = [];
   verify: string | undefined;
   runSeries: number[] = []; thinkBuf = "";
+  phase: { phase: string; step: number; max: number; n?: number } | undefined; activity: { name: string; args: string; ms: number; ok: boolean }[] = [];
   running = false; ac: AbortController | undefined; runStart = 0; runTokens = 0; lastPrompt = 0;
   inflight = new Map<string, { name: string; args: string; t0: number; agent?: string }>();
   pendingEdits = new Map<string, EditEv>();
@@ -378,7 +379,7 @@ export class App {
     if (!this.session.title) this.session.title = one(text, 60);
     const turn: Turn = { at: this.session.messages.length, text, t: Date.now(), snaps: {} };
     this.session.turns.push(turn);
-    this.running = true; this.ac = new AbortController(); this.runStart = Date.now(); this.runTokens = 0; this.todos = []; this.runSeries = [];
+    this.running = true; this.ac = new AbortController(); this.runStart = Date.now(); this.runTokens = 0; this.todos = []; this.runSeries = []; this.phase = undefined; this.activity = [];
     this.setTitle(`● working · ${basename(this.cwd)}`);
     Object.assign(this.budget, { tokens: 0, calls: 0, t0: Date.now(), maxTokens: this.cfg.maxTokens, maxMs: 60 * 60_000 });
     this.ensureTimer(); this.render();
@@ -421,6 +422,7 @@ export class App {
       case "tool": {
         const t = this.inflight.get(e.id ?? ""); this.inflight.delete(e.id ?? ""); this.idleTimer();
         const bad = isFailure(e.result);
+        if (!sub && e.name !== "todo_write") this.activity = [...this.activity, { name: e.name, args: e.args, ms: t ? Date.now() - t.t0 : 0, ok: !bad }].slice(-12);
         let editPath = ""; if ((e.name === "write_file" || e.name === "edit_file") && !bad) { try { editPath = JSON.parse(e.args).path; } catch { /* keep empty */ } }
         const ed = editPath ? this.pendingEdits.get(editPath) : undefined; if (editPath) this.pendingEdits.delete(editPath);
         this.blocks.toolEnd(e.id ?? "", e.result, ed ? { path: ed.path, created: ed.created, added: ed.added, removed: ed.removed, diff: ed.diff } : undefined);
@@ -432,6 +434,7 @@ export class App {
         void t; this.inlineOnly(lines); break;
       }
       case "todos": this.todos = e.todos; break;
+      case "phase": if (!sub) this.phase = { phase: e.phase, step: e.step, max: e.max, n: e.n }; break;
       case "finish": if (!sub) { this.flushStream(true); this.blocks.summary(e.summary); this.inlineOnly(["", ...renderMarkdown(e.summary, w - 4).map((l, i) => (i ? "    " : "  " + green("✔ ")) + l)]); } break;
       case "rejected": this.notify("warn", `finish rejected by verification: ${one(e.detail, 300)}`, ["", `  ${yellow("⛔")} ${dim("finish rejected by verification:")} ${one(e.detail, w - 10)}`]); break;
       case "denied": this.notify("warn", `denied: ${one(e.detail, 300)}`, ["", `  ${red("⊘")} ${dim("denied: " + one(e.detail, w - 14))}`]); break;

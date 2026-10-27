@@ -64,6 +64,7 @@ No API key yet? Run `amness demo`: a scripted model makes the mistakes real mode
 `amness` opens a **full-screen interface** by default: a header (project, branch, model, mode), a scrollable transcript of cards, a session sidebar, a rounded input panel and a status line.
 
 - **Cards.** Your prompts, assistant replies (themed markdown, code blocks with a copy button, tables), collapsible tool cards with status chips, and syntax-highlighted diffs with line numbers and word-level marks (split view on wide terminals).
+- **Live run view.** While the agent works, the status line says what it is doing ("Reading src/app.ts", "Running 3 tools in parallel", "Verifying", "Waiting for you") with elapsed time, tokens and the step counter, and the sidebar shows a RUN panel: the think → act → verify pipeline, step progress, running tools with timers, and the last finished actions.
 - **Sidebar** (`Ctrl+B`): session, context gauge with a per-request sparkline and breakdown, token usage, todos, changed files, workspace.
 - **Mouse.** Wheel scroll, click a card to collapse or expand it, click header chips (model, mode), click suggestions and modal options, drag to select and copy. A "Jump to bottom" pill and a sticky prompt appear while you are scrolled up.
 - **Modals** for approvals (with the diff, command or plan), the command palette (`Ctrl+P`), pickers and help.
@@ -73,6 +74,8 @@ No API key yet? Run `amness demo`: a scripted model makes the mistakes real mode
 <table>
 <tr><td width="50%"><img src="docs/images/approval.png" alt="approval modal with diff"></td><td width="50%"><img src="docs/images/palette.png" alt="command palette"></td></tr>
 <tr><td align="center"><sub>Approval modal with the exact diff</sub></td><td align="center"><sub>Command palette (<code>Ctrl+P</code>)</sub></td></tr>
+<tr><td colspan="2"><img src="docs/images/running.png" alt="live run view"></td></tr>
+<tr><td colspan="2" align="center"><sub>Mid-run: the status line, the RUN panel with step progress and running tools</sub></td></tr>
 <tr><td><img src="docs/images/welcome.png" alt="welcome screen"></td><td><img src="docs/images/daylight.png" alt="daylight light theme"></td></tr>
 <tr><td align="center"><sub>Welcome screen with quick actions</sub></td><td align="center"><sub>Light theme (<code>daylight</code>)</sub></td></tr>
 </table>

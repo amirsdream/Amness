@@ -65,6 +65,8 @@ export type Event =
   | { kind: "edit"; path: string; created: boolean; added: number; removed: number; diff: string; /** File content before the edit (null = it did not exist); lets a UI offer undo. */ before?: string | null }
   | { kind: "turn"; step: number; tokens: number; prompt: number; completion: number; cached: number; reasoning: number }
   | { kind: "rollover"; detail: string }
+  /** Where the loop is: lets a UI show live progress. `step` is 0-based; `n` is the number of tool calls in the batch. */
+  | { kind: "phase"; phase: "model" | "tools" | "verify" | "compact"; step: number; max: number; n?: number }
   | { kind: "finish"; summary: string };
 
 /** Shared token/time cap. Pass one instance to a harness (and its subagents) to bound the whole run. */
@@ -229,10 +231,12 @@ export function createHarness(o: Options) {
         msgs.push({ role: "user", content: `You have 3 steps left. Stop exploring: finish the most important remaining work, verify it, and call \`finish\` with what is done and what is not.` });
       }
       o.checkpoint?.(msgs);
+      emit({ kind: "phase", phase: "compact", step, max });
       if (!off.has("compact") && !o.model.appendOnly) { supersede(msgs); compact(msgs, o.contextBudget); }
       const key = [...names].sort().join(",");
       if (step > 0 && key !== shown) emit({ kind: "tools", detail: key });
       shown = key;
+      emit({ kind: "phase", phase: "model", step, max });
       let m: Message;
       let streamed = false;
       try { m = await o.model(msgs, specs, { signal: sig(), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); }
@@ -257,6 +261,7 @@ export function createHarness(o: Options) {
       // Scheduling: runs of read-only / parallel-safe calls (reads, searches, subagents) go concurrently, up to MAX_PARALLEL;
       // anything that may change state runs alone, in the order the model issued it. Results keep call order.
       let done: string | undefined;
+      emit({ kind: "phase", phase: "tools", step, max, n: m.tool_calls.length });
       const exec = async (c: ToolCall): Promise<string> => {
         const { name, arguments: raw } = c.function;
         let args: any;
@@ -270,6 +275,7 @@ export function createHarness(o: Options) {
         const errs = schema ? validate(args, schema) : [`unknown tool "${name}". Available: ${[...names, "finish"].join(", ")}`];
         if (errs.length) { emit({ kind: "repair", detail: errs.join("; ") }); return `ERROR: ${errs.join("; ")}`; }
         if (name === "finish") {
+          if (o.verify) emit({ kind: "phase", phase: "verify", step, max });
           const fb = feedback(await o.verify?.(args.summary));
           if (!fb) { done = args.summary; emit({ kind: "finish", summary: args.summary }); return "accepted"; }
           emit({ kind: "rejected", detail: fb });

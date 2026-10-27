@@ -11,6 +11,7 @@ export type SidebarData = {
   ctxPct: number | null; ctxUsed: number; ctxMax: number; series: number[]; map: { label: string; pct: number; color: number }[];
   usage: { prompt: number; completion: number; calls: number; cached: number; reasoning: number }; cost: number | null;
   todos: { content: string; status: string }[]; changes: { path: string; added: number; removed: number; created: boolean; blockId: number }[];
+  run?: { phase: string; step: number; max: number; elapsedMs: number; frame: number; live: { label: string; ms: number; agent?: string }[]; done: { label: string; ok: boolean; ms: number }[] };
   tools: number; mcp: number; memory: number; running: boolean; elapsedMs: number; tip?: string;
 };
 export type SideHit = { row: number; kind: "change" | "todos"; blockId?: number };
@@ -23,6 +24,15 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
   const brand = brandOfModel(d.model, d.provider, t);
 
   push();
+  if (d.run) {
+    const r = d.run, SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", stages = [["model", "think"], ["tools", "act"], ["verify", "verify"]] as const;
+    head("RUN", F(t.dim, `${(r.elapsedMs / 1000).toFixed(0)}s`));
+    push(stages.map(([k, label], i) => (k === r.phase || (r.phase === "compact" && k === "model") ? BOLD(F(t.accent, "● " + label)) : F(t.faint, "○ " + label)) + (i < 2 ? F(t.border, " ─ ") : "")).join(""));
+    const lbl = `step ${r.step + 1}/${r.max}`, bw = Math.max(6, Math.min(24, inner - cellWidth(lbl) - 2)), f = Math.max(1, Math.round(((r.step + 1) / Math.max(1, r.max)) * bw));
+    push(F(r.step + 1 >= r.max - 2 ? t.warn : t.accent2, "▰".repeat(f)) + F(t.border, "▱".repeat(bw - f)) + F(t.dim, "  " + lbl));
+    for (const x of r.live.slice(0, 5)) push(F(t.accent2, SPIN[r.frame % SPIN.length]) + " " + F(t.text, clipWidth(x.label, inner - 9)) + F(t.faint, ` ${fmtMs(x.ms)}`));
+    for (const x of r.done.slice(-4).reverse()) push(F(x.ok ? t.ok : t.err, x.ok ? "✓" : "✗") + " " + F(t.dim, clipWidth(x.label, inner - 9)) + F(t.faint, x.ms >= 50 ? ` ${fmtMs(x.ms)}` : ""));
+  }
   head("SESSION");
   for (const l of wrap(d.title || "New conversation", inner, 2)) push(BOLD(F(t.text, l)));
   push(F(brand.color, brand.icon) + " " + F(t.text, clipWidth(d.model, inner - 4)));
@@ -67,6 +77,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
 }
 
 const tail = (s: string, w: number) => (cellWidth(s) <= w ? s : "…" + s.slice(-(w - 1)));
+const fmtMs = (ms: number) => (ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`);
 const pctColor = (p: number, t: Theme) => (p > 85 ? t.err : p > 60 ? t.warn : t.ok);
 function wrap(s: string, w: number, maxLines: number): string[] {
   const words = s.split(/\s+/), lines: string[] = [""];

@@ -56,3 +56,13 @@ test("blocks: streaming assistant, tool lifecycle", () => {
   const a = s.blocks[1]; assert.ok(a.kind === "assistant" && a.text === "hello");
   assert.equal(s.blocks[2].kind === "tool" && s.blocks[2].status, "ok");
 });
+
+test("full: the run panel and status line follow the loop's phases", async () => {
+  const t = rig([call("sh", { cmd: "sleep 1" }), say("ok")], { cols: 132, rows: 40, files, ui: "full" });
+  await t.start(); t.app.setMode("yolo");
+  await t.submit("go");
+  assert.ok(await t.until(() => t.has("Running sleep 1") && t.has("RUN") && /step \d+\/\d+/.test(t.screen()), 3000), t.screen());
+  assert.ok(t.has("think") && t.has("act") && t.has("verify"));
+  await t.until(() => t.idle());
+  assert.ok(!t.screen().includes("RUN"));
+});
