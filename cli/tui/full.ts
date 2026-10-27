@@ -259,6 +259,7 @@ export class FullView {
       ctxPct: app.ctxPct, ctxUsed: used, ctxMax: win, series: u.series ?? [], map: this.ctxCache.map,
       usage: { prompt: u.prompt, completion: u.completion, calls: u.calls, cached: u.cached ?? 0, reasoning: u.reasoning ?? 0 }, cost: estimateCost(app.cfg.model, u.prompt, u.completion, u.cached ?? 0),
       todos: app.todos, changes: [...changes.values()].reverse(), tools: app.agent.registry.visible({ step: 0, messages: [] }).length, mcp: app.mcp.length, memory: app.memory?.list().length ?? 0,
+      sandbox: app.cfg.sandbox,
       procs: app.agent.procs?.list().map((p) => ({ id: p.id, name: p.name, status: p.status, secs: Math.round((now - p.startedAt) / 1000) })),
       running: app.running, elapsedMs: now - this.startedAt, tip: TIPS[this.tipIdx],
       run: app.running ? { phase: app.phase?.phase ?? "model", step: app.phase?.step ?? 0, max: app.phase?.max ?? 30, elapsedMs: now - app.runStart, frame: app.frame,

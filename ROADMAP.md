@@ -38,7 +38,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G3 | Permission rules and a hard deny floor | P1 | S | [x] |
 | G4 | Background processes | P1 | M | [x] |
 | G5 | Better edit formats (patch, multi-edit, fuzzy fallback) | P1 | M | [x] |
-| G6 | OS-level sandbox for shell commands | P1 | M | [ ] |
+| G6 | OS-level sandbox for shell commands | P1 | M | [~] |
 | G7 | Skills (`SKILL.md`) | P2 | S–M | [ ] |
 | G8 | Custom subagents (and parallel worktree subagents) | P2 | M | [ ] |
 | G9 | Model routing (cheap model for exploring and compacting) | P2 | S–M | [ ] |
@@ -293,6 +293,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G6** (partly): opt-in OS sandbox for sh and sh_start: macOS Seatbelt and Linux Bubblewrap (writes only in the project, temp and cache folders; .git and the rule files read-only; strict also cuts the network); refuses rather than downgrades when unavailable; /sandbox, --sandbox, sidebar indicator, yolo tip. Tested on macOS with real sandbox-exec; the bwrap path is built but untested here (no bwrap on this machine). src/sandbox.ts, test/sandbox.test.ts.
 - **G5**: apply_patch (Codex envelope or unified diff; update/add/delete/move; anchors; all-or-nothing with per-hunk errors; judged file by file by permission rules), edit_file edits list (all-or-nothing) and a unique indentation-tolerant fallback that says so; TUI shows one diff per patched file; 2 new multi-file eval tasks (change-signature, move-constant). src/patch.ts, test/patch.test.ts.
 - **L3** (partly): opt-in independent reviewer: acceptance criteria written in a fresh context before task-like messages and shown to the builder; before a finish is accepted a read-only reviewer (run_check limited to test/build/lint commands) judges the diff against them; findings go back, max two rounds, inconclusive never blocks; can use a different model; /reviewer, --review, eval variant full+review. src/review.ts, test/review.test.ts. Value on real tasks still to be measured (amness eval --variants full,full+review).
 - **L2** (partly): stagnation detection from objective signals: failure counts parsed from test/build/lint output (Jest, pytest, Go, Cargo, Node runner, tsc, eslint, exit code fallback), first edits, new non-inverse changes, new reads (capped); reflection after K=8 stale turns, stop after 1.5K; 'stagnation' guard for ablation; stagnationTurns option. src/progress.ts, test/progress.test.ts. Not yet measured on a real model (eval variant full-stagnation).

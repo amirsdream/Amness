@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Budget, MemoryStore, Tracer, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { Budget, MemoryStore, Tracer, sandboxKind, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
@@ -109,7 +109,7 @@ export class App {
     this.model = (this.opts.makeModel ?? ((c) => createModel(c, undefined, { cacheKey })))(this.cfg);
     this.agent = createCodeAgent({
       model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
   }
@@ -323,7 +323,9 @@ export class App {
     if (m === this.mode) return;
     this.mode = m;
     this.modeNotice = m === "plan" ? "[mode: plan mode is ON. You are read-only. Investigate, then present your plan with exit_plan_mode.]" : this.mode === "yolo" ? "" : `[mode: permission mode is now "${m}"; plan mode is off.]`;
-    if (m === "default") this.note("default mode: asks before edits and commands"); else this.render();    // other modes announce themselves in the footer label
+    if (m === "default") this.note("default mode: asks before edits and commands");
+    else if (m === "yolo" && (this.cfg.sandbox ?? "off") === "off" && sandboxKind()) this.note("tip: /sandbox workspace makes yolo much safer (commands cannot write outside the project)");
+    else this.render();    // other modes announce themselves in the footer label
   }
 
   // ------------------------------------------------------------------ submitting

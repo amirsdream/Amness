@@ -12,6 +12,7 @@ export type SidebarData = {
   usage: { prompt: number; completion: number; calls: number; cached: number; reasoning: number }; cost: number | null;
   todos: { content: string; status: string }[]; changes: { path: string; added: number; removed: number; created: boolean; blockId: number }[];
   run?: { phase: string; step: number; max: number; elapsedMs: number; frame: number; live: { label: string; ms: number; agent?: string }[]; done: { label: string; ok: boolean; ms: number }[] };
+  sandbox?: string;
   procs?: { id: string; name: string; status: string; secs: number }[];
   tools: number; mcp: number; memory: number; running: boolean; elapsedMs: number; tip?: string;
 };
@@ -70,6 +71,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
   }
   if (d.procs?.length) { head("PROCESSES"); for (const p of d.procs.slice(0, 5)) push((p.status === "running" ? F(t.ok, "● ") : F(t.faint, "○ ")) + F(t.text, clipWidth(`${p.id} ${p.name}`, inner - 10)) + F(t.faint, ` ${p.status === "running" ? p.secs + "s" : p.status}`)); }
   head("WORKSPACE");
+  if (d.sandbox && d.sandbox !== "off") push(F(t.ok, "⛨ ") + F(t.dim, `sandbox ${d.sandbox}`));
   push(F(t.dim, `${d.tools} tools`) + (d.mcp ? F(t.faint, ` · ${d.mcp} mcp`) : "") + (d.memory ? F(t.faint, ` · ${d.memory} notes`) : ""));
   if (d.tip) { push(); for (const l of wrap(d.tip, inner, 3)) push(F(t.faint, ITAL(l))); }
 

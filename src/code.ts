@@ -1,4 +1,5 @@
 import { exec, execFile } from "node:child_process";
+import { wrapCommand, type SandboxMode } from "./sandbox.ts";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { applyBundle, collectFiles, readBundle, writeBundle, type Bundle } from "./bundle.ts";
@@ -32,14 +33,17 @@ export const READONLY_CMD = /^\s*(ls|cat|head|tail|wc|pwd|echo|grep|rg|tree|stat
 
 const IGNORE = new Set(["node_modules", ".git", "dist", ".amness", "__pycache__", ".venv"]);
 
-export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSignal): Promise<string> {
-  return new Promise((res) =>
-    exec(cmd, { cwd, timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) =>
-      res(`exit=${err ? (err.name === "AbortError" ? "interrupted" : err.killed ? "timeout" : err.code ?? 1) : 0}\n${out}${errOut}`)));
+export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSignal, sandbox: SandboxMode = "off"): Promise<string> {
+  let wrapped: ReturnType<typeof wrapCommand>;
+  try { wrapped = wrapCommand(cmd, cwd, sandbox); } catch (e) { return Promise.resolve(`exit=126\nERROR: ${(e as Error).message}`); }          // asked for a sandbox we cannot provide: refuse, never run unprotected
+  const done = (err: any, out: string, errOut: string) => `exit=${err ? (err.name === "AbortError" ? "interrupted" : err.killed ? "timeout" : err.code ?? 1) : 0}\n${out}${errOut}`;
+  return new Promise((res) => wrapped
+    ? execFile(wrapped.file, wrapped.args, { cwd, timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut)))
+    : exec(cmd, { cwd, timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut))));
 }
 
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
-export function codeTools(cwd: string, o: { /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
+export function codeTools(cwd: string, o: { /** OS sandbox for shell commands, read each time so it can be switched live */ sandbox?: () => SandboxMode; /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
   const mode = o.mode;
   const mutating = mode ? { risky: () => (mode() === "default" ? "modify a file" : false), when: () => mode() !== "plan" } : {};
   const root = resolve(cwd);
@@ -131,7 +135,7 @@ export function codeTools(cwd: string, o: { /** background processes (sh_start, 
       run: ({ cmd, timeout }, ctx) => {
         if (mode?.() === "plan" && !READONLY_CMD.test(cmd))
           return "ERROR: plan mode is read-only; only inspection commands are allowed (ls, cat, head, tail, grep, find, git status/log/diff/show, wc, pwd). Finish your plan and call exit_plan_mode.";
-        return runShell(cmd, root, (timeout ?? 60) * 1000, ctx.signal);
+        return runShell(cmd, root, (timeout ?? 60) * 1000, ctx.signal, o.sandbox?.() ?? "off");
       } }),
   ];
 }
@@ -202,6 +206,8 @@ export type CodeAgentOptions = {
   memory?: boolean | MemoryStore;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
+  /** Run shell commands under an OS sandbox: "workspace" (writes only in the project and temp/cache folders, `.git` read-only) or "strict" (also no network). A getter lets you switch it live. */
+  sandbox?: SandboxMode | (() => SandboxMode);
   /** An independent, skeptical reviewer (a fresh context that cannot edit): it writes acceptance criteria before the work and checks the result against them before a finish is accepted. Costs extra model calls; off by default. `model` lets it be a different model. */
   review?: boolean | { model?: Model };
   /** Turns without any measurable improvement before the loop reflects and then stops (default 8; 0 = off). */
@@ -228,11 +234,12 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
-  const procs = o.background === false ? undefined : new ProcessManager(resolve(o.cwd));
+  const sbx = o.sandbox, sandboxMode: () => SandboxMode = typeof sbx === "function" ? sbx : () => sbx ?? "off";
+  const procs = o.background === false ? undefined : new ProcessManager(resolve(o.cwd), { sandbox: sandboxMode });
   const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
   if (memory && o.embedder) memory.embedder = o.embedder;
   const mode = o.permissions?.mode;
-  const registry = new Registry([...codeTools(o.cwd, { guidance, procs, onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
+  const registry = new Registry([...codeTools(o.cwd, { guidance, procs, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
   const shown = new Set<string>();   // memory notes already in this conversation
   let todos: { content: string; status: "pending" | "in_progress" | "done" }[] = [];
   if (o.chat) {
