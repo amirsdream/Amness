@@ -69,6 +69,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | L12 | `amness tune`: bounded self-improvement with held-out gates | P3 | L | [ ] |
 | L13 | Parallel worktree agents with a test-gated merge | P3 | L | [ ] |
 | L14 | Benchmark adapters with leak audit and cost per solve | P3 | L | [~] |
+| G23 | README: shorter landing page, details moved to docs/ (see below) | P1 | M | [ ] |
 
 ---
 
@@ -275,6 +276,13 @@ Each item lists the **evidence** (and how well I could check it: *read* = I read
 ## Evidence quality
 
 Items marked *read* rest on a page or abstract I fetched. Items marked *snippet* rest on search-result summaries only and must be re-checked against the paper before we copy any number or design detail. The percentages above are the papers' own results, not measurements of Amness; each Track B item has a **Measure** step precisely so we find out what holds on our own tasks.
+
+### G23. README for new visitors (feedback received 2026-10-28, to do next session)
+- **Tighten the opening.** The description in the first paragraph packs many features into one long sentence: lead with the main benefit, then summarise the few key differentiators.
+- **List "The agent loop" in the contents** (it is a major section but missing from the contents line).
+- **Make it less overwhelming.** The README is about 470 lines and is both landing page and manual. Keep quick start, core usage, safety and limitations in `README.md`; move the deep feature and evaluation material (hooks, permissions, sandbox, skills, subagents, routing, memory internals, eval statistics, benchmarks, replay, tracing) into `docs/` pages and link them.
+- **Give local-model users a concrete setup example** in the Providers section (for example Ollama or LM Studio: base URL, model name, how to select it, which features need a tool-calling model), not only a mention in the quick start.
+**Accept.** A new visitor can reach a working first session from the top of the README in under a minute of reading; every moved section is still linked; no feature loses its documentation.
 
 ## Sources
 
