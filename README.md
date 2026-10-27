@@ -1,13 +1,13 @@
-# amness
+# Amness
 
 **A terminal coding agent for any model, with guardrails.** A full-screen terminal UI with cards, diffs, a session sidebar and mouse support; permission prompts with diffs, plan mode, undo, memory and MCP, built on a small reliability harness that works with OpenAI (Responses API), Claude, and local models.
 
-[![CI](https://github.com/amirsdream/amness/actions/workflows/ci.yml/badge.svg)](https://github.com/amirsdream/amness/actions/workflows/ci.yml)
+[![CI](https://github.com/amirsdream/Amness/actions/workflows/ci.yml/badge.svg)](https://github.com/amirsdream/Amness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933)
 ![Dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
 
-<p align="center"><img src="docs/images/chat.png" alt="amness full-screen interface: cards, diff, sidebar, input panel" width="900"></p>
+<p align="center"><img src="docs/images/chat.png" alt="Amness full-screen interface: cards, diff, sidebar, input panel" width="900"></p>
 
 <sub>The full-screen interface (aurora theme): collapsible tool cards, a diff with word-level marks, the session sidebar and the input panel. Screenshots are rendered from the real UI by the test harness.</sub>
 
@@ -19,9 +19,9 @@
 
 ## Why
 
-Most agent failures are not "the model is dumb"; they are mechanical: malformed tool calls, "I'll now do X" with no action, claiming success without checking, repeating the same call, editing a file it never read, or a context window that quietly fills up. amness puts a mechanical check on each of those, then wraps it in a comfortable terminal UI:
+Most agent failures are not "the model is dumb"; they are mechanical: malformed tool calls, "I'll now do X" with no action, claiming success without checking, repeating the same call, editing a file it never read, or a context window that quietly fills up. Amness puts a mechanical check on each of those, then wraps it in a comfortable terminal UI:
 
-| Problem | What amness does |
+| Problem | What Amness does |
 |---|---|
 | Bad tool arguments | Validates against the schema and feeds the exact error back so the model repairs its own call |
 | Stops early or only narrates | Nudges it to act; plain answers are still accepted |
@@ -36,7 +36,7 @@ Most agent failures are not "the model is dumb"; they are mechanical: malformed 
 Requirements: **Node 22.18 or newer** (it runs the TypeScript sources directly, no build step), git, and an API key for OpenAI or Anthropic, or a local model server such as Ollama.
 
 ```bash
-git clone https://github.com/amirsdream/amness.git
+git clone https://github.com/amirsdream/Amness.git
 cd amness
 npm install
 
@@ -198,7 +198,7 @@ const h = createHarness({ model: openai(), tools: [lookup], verify: () => true, 
 await h.run("What is the status of order 42?");
 ```
 
-Because the CLI relies on Node's built-in TypeScript support, amness is not published to npm yet; use it from a clone or `npm link`.
+Because the CLI relies on Node's built-in TypeScript support, Amness is not published to npm yet; use it from a clone or `npm link`.
 
 ## Architecture
 

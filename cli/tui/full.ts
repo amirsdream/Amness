@@ -99,7 +99,7 @@ export class FullView {
     const app = this.app, brand = brandOfModel(app.cfg.model, app.cfg.provider, t), bg = t.surface;
     const mode = app.mode, modeCol = mode === "yolo" ? t.err : mode === "plan" ? t.info : mode === "acceptEdits" ? t.ok : t.accent;
     c.fill(0, 0, W, 1, bg);
-    const logo = gradientText("✻ amness", t.gradient), proj = BOLD(F(t.text, basename(app.cwd))), br = app.branch ? F(t.dim, "  ⎇ " + app.branch) : "";
+    const logo = gradientText("✻ Amness", t.gradient), proj = BOLD(F(t.text, basename(app.cwd))), br = app.branch ? F(t.dim, "  ⎇ " + app.branch) : "";
     const left = " " + logo + F(t.border, "  │  ") + proj + br;
     const modelChip = chip(`${F(brand.color, brand.icon)} ${app.cfg.model}`, t.text, t.surface2), modeChip = chip(MODE_LABEL[mode] ?? mode, t.onAccent, modeCol, true), sideChip = chip(this.showSidebar ? "▥" : "▤", t.dim, t.surface2);
     const right = modelChip + " " + modeChip + " " + sideChip + " ";

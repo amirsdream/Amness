@@ -129,7 +129,7 @@ export class App {
       if (s) { this.session = s; resumed = `"${s.title}" · ${s.turns.length} turn${s.turns.length === 1 ? "" : "s"}`; this.recount(); }
     }
     if (this.full) { if (resumed) this.blocks.loadMessages(this.session.messages); } else this.commit(welcome({ version: this.version, model: this.cfg.model, provider: this.cfg.provider, cwd: this.cwd, branch: this.branch, notes: this.agent.memory?.list().length ?? 0, verify: this.verify, mode: this.mode, resumed, tip: TIPS[Math.floor(Math.random() * TIPS.length)] }, this.width));
-    this.setTitle(`amness · ${basename(this.cwd)}`);
+    this.setTitle(`Amness · ${basename(this.cwd)}`);
     if (resumed && !this.full) this.replay();
     this.render();
     if (this.opts.prompt) void this.dispatch(this.opts.prompt);
@@ -399,7 +399,7 @@ export class App {
     if (ok && (secs > 4000 || this.runTokens > 2000)) this.inlineOnly([dim(`  ✻ Worked for ${fmtDuration(secs)} · ${fmtTokens(this.runTokens)} tokens`)]);
     if (this.todos.length && this.todos.some((t) => t.status !== "done")) this.inlineOnly(todoList(this.todos, this.width));
     this.todos = []; this.inflight.clear(); this.running = false; this.ac = undefined; this.thinkBuf = "";
-    this.setTitle(`${ok ? "✔" : "✗"} amness · ${basename(this.cwd)}`);
+    this.setTitle(`${ok ? "✔" : "✗"} Amness · ${basename(this.cwd)}`);
     if (secs > 20_000) this.io.output.write("\x07");                                  // a long turn finished: nudge the user, even if they switched tabs
     this.saveSession(); this.refreshBranch(); this.idleTimer(); this.render();
     if (this.queued.length) { const q = this.queued.splice(0); await this.dispatch(q.map((m) => m.text).join("\n\n")); }
@@ -469,22 +469,22 @@ export class App {
     } else if (name === "write_file" || name === "edit_file") {
       title = `${name === "write_file" ? "Write" : "Edit"} ${args.path}`; body = preview ? renderDiff(preview, w - 4, 18).map((l) => l.slice(5)) : [String(args.path)];
       question = "Apply this change?"; if (preview) detail = { kind: "diff", path: String(args.path), diff: preview };
-      options = [{ label: "Yes" }, { label: "Yes, and accept all edits this session", hint: "shift+tab" }, { label: "No, and tell amness what to do instead", hint: "esc" }];
+      options = [{ label: "Yes" }, { label: "Yes, and accept all edits this session", hint: "shift+tab" }, { label: "No, and tell Amness what to do instead", hint: "esc" }];
     } else if (name === "sh") {
       const danger = riskOf(String(args.cmd)); paint = danger ? yellow : undefined;
       title = "Run command"; body = [bold(String(args.cmd)), ...(danger ? ["", yellow(`⚠ ${danger}`)] : [])]; question = "Run this command?"; detail = { kind: "command", cmd: String(args.cmd), danger: danger || undefined };
       const prefix = shPrefix(String(args.cmd));
-      options = [{ label: "Yes" }, ...(danger || /[;&|<>`$()]/.test(String(args.cmd)) ? [] : [{ label: `Yes, and don't ask again for ${bold(prefix)} commands`, hint: "this session" }]), { label: "No, and tell amness what to do instead", hint: "esc" }];
+      options = [{ label: "Yes" }, ...(danger || /[;&|<>`$()]/.test(String(args.cmd)) ? [] : [{ label: `Yes, and don't ask again for ${bold(prefix)} commands`, hint: "this session" }]), { label: "No, and tell Amness what to do instead", hint: "esc" }];
     } else {
       title = name; detail = { kind: "text", text: `${reason ?? "requires approval"}\n${JSON.stringify(args)}` }; body = [reason ?? "requires approval", ...(preview ? ["", preview] : []), "", dim(one(JSON.stringify(args), w - 8))];
-      options = [{ label: "Yes" }, { label: `Yes, and don't ask again for ${bold(name)}`, hint: "this session" }, { label: "No, and tell amness what to do instead", hint: "esc" }];
+      options = [{ label: "Yes" }, { label: `Yes, and don't ask again for ${bold(name)}`, hint: "this session" }, { label: "No, and tell Amness what to do instead", hint: "esc" }];
     }
     this.ensureTimer();
     const idx = await new Promise<number | undefined>((res) => { this.overlay = new ChoiceOverlay(title, body, question, options, res, paint, detail); this.render(); });
     this.overlay = null; this.render();
     if (idx === undefined) return "the user declined this action; take a different approach or ask what they want";
     const last = idx === options.length - 1;
-    if (last) { const note = await this.askText("What should amness do instead?"); return note || "the user declined this action"; }
+    if (last) { const note = await this.askText("What should Amness do instead?"); return note || "the user declined this action"; }
     if (name === "exit_plan_mode") this.setMode(idx === 0 ? "acceptEdits" : "default");
     else if (idx === 1 && (name === "write_file" || name === "edit_file")) this.setMode("acceptEdits");
     else if (idx === 1 && name === "sh") this.shRules.add(shPrefix(String(args.cmd)));
@@ -546,7 +546,7 @@ export class App {
   saveHistory() { if (!this.persist) return; try { mkdirSync(home(), { recursive: true }); writeFileSync(join(home(), "history.json"), JSON.stringify(this.editor.history.slice(0, 200))); } catch { /* ignore */ } }
   saveConfig() { if (this.persist) saveConfig(this.cfg); }
   setVerify(cmd: string | undefined) { this.verify = cmd; if (this.persist) { const st = loadState(); if (cmd) st.verifyByDir[this.cwd] = cmd; else delete st.verifyByDir[this.cwd]; saveState(st); } this.buildAgent(); }
-  async ensureLive() { if (!this.live) this.live = await startLive({ title: "amness" }); return this.live; }
+  async ensureLive() { if (!this.live) this.live = await startLive({ title: "Amness" }); return this.live; }
   providerInfo() { return PROVIDERS[this.cfg.provider]; }
   refreshBranch() { execFile("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: this.cwd }, (e, out) => { const b = e ? undefined : out.trim(); if (b !== this.branch) { this.branch = b; this.schedule(); } }); }
   get memory(): MemoryStore | undefined { return this.agent.memory; }

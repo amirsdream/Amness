@@ -6,13 +6,13 @@
   "description": "A terminal coding agent for any model: streaming chat TUI, permission modes, plan mode, undo, memory, MCP, with a small reliability harness underneath. OpenAI (Responses API), Claude, and local models.",
   "license": "MIT",
   "author": "amirhossein jofreh <366054+amirsdream@users.noreply.github.com>",
-  "homepage": "https://github.com/amirsdream/amness#readme",
+  "homepage": "https://github.com/amirsdream/Amness#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/amirsdream/amness.git"
+    "url": "git+https://github.com/amirsdream/Amness.git"
   },
   "bugs": {
-    "url": "https://github.com/amirsdream/amness/issues"
+    "url": "https://github.com/amirsdream/Amness/issues"
   },
   "keywords": [
     "ai",

@@ -37,7 +37,7 @@ export const writeBundle = (path: string, b: Bundle) => { mkdirSync(dirname(reso
 
 export function readBundle(path: string): Bundle {
   const b = JSON.parse(readFileSync(path, "utf8"));
-  if (b?.schema !== "amness.session/1" || typeof b.handoff !== "string" || typeof b.task !== "string") throw new Error(`${path} is not an amness session bundle`);
+  if (b?.schema !== "amness.session/1" || typeof b.handoff !== "string" || typeof b.task !== "string") throw new Error(`${path} is not an Amness session bundle`);
   return b as Bundle;
 }
 

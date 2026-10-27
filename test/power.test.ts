@@ -110,7 +110,7 @@ test("portable bundle: export from one agent, import into another repo; safe pat
   assert.match(prompt, /continue[\s\S]*Handoff from a previous session[\s\S]*add tests[\s\S]*kept your version of: app\.js/);
   const evil = { ...bundle, files: { "../../escape.txt": "x", "/abs.txt": "y" } };
   assert.equal(applyBundle(evil, { cwd: b }).restored.length, 0);
-  assert.throws(() => readBundle(join(a, "app.js")), /not an amness session bundle|Unexpected/);
+  assert.throws(() => readBundle(join(a, "app.js")), /not an Amness session bundle|Unexpected/);
 });
 
 test("live server: serves the page, replays history over SSE, blocks foreign Host headers", async () => {

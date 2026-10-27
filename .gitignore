@@ -5,7 +5,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# amness's own per-project state (chats, checkpoints, handoffs, memory, sessions, tools).
+# Amness's own per-project state (chats, checkpoints, handoffs, memory, sessions, tools).
 # In *your* projects you may want to commit .amness/memory and .amness/commands to share them; for this repo, none of it belongs here.
 .amness/
 

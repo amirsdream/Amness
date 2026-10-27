@@ -18,7 +18,7 @@ export async function startLive(o: { port?: number; title?: string } = {}) {
       clients.add(res); req.on("close", () => clients.delete(res));
     } else if (req.url === "/" || req.url?.startsWith("/?")) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'" });
-      res.end(PAGE.replace("__TITLE__", (o.title ?? "amness live").replace(/[<>&"]/g, "")));
+      res.end(PAGE.replace("__TITLE__", (o.title ?? "Amness live").replace(/[<>&"]/g, "")));
     } else res.writeHead(404).end();
   });
   await new Promise<void>((ok, fail) => { server.once("error", fail); server.listen(o.port ?? 0, "127.0.0.1", ok); });

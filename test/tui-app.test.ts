@@ -73,8 +73,8 @@ test("denying with a note: the model is told what the user wants instead; nothin
   const t = rig([call("read_file", { path: "a.txt" }), call("write_file", { path: "a.txt", content: "x" }), (m) => say("ok")]); await t.start();
   await t.submit("overwrite a.txt");
   assert.ok(await t.until(() => t.has("Apply this change?")));
-  await t.key("3");                                                                          // "No, and tell amness what to do instead"
-  assert.ok(await t.until(() => t.has("What should amness do instead?")));
+  await t.key("3");                                                                          // "No, and tell Amness what to do instead"
+  assert.ok(await t.until(() => t.has("What should Amness do instead?")));
   await t.type("append instead of overwriting"); await t.key(KEY.enter);
   assert.ok(await t.until(() => t.idle()));
   assert.equal(readFileSync(join(t.dir, "a.txt"), "utf8"), "one\ntwo\n");
@@ -252,10 +252,10 @@ test("welcome card carries the logo and mascot; the terminal title tracks state"
   const t = rig([say("ok")]); const raw: string[] = []; const w = (t.app.io.output as any).write.bind(t.app.io.output); (t.app.io.output as any).write = (s: string) => (raw.push(s), w(s));
   await t.start();
   assert.match(plain(t.screen()), /▗▄▄▄▄▄▖\s+▄▀█ █▀▄▀█ █▄ █ █▀▀ █▀ █▀/); assert.match(plain(t.screen()), /◖ ◗/); assert.match(plain(t.screen()), /tip /);
-  assert.ok(raw.join("").includes("\x1b]0;amness · "));
+  assert.ok(raw.join("").includes("\x1b]0;Amness · "));
   await t.submit("go"); assert.ok(await t.until(() => t.idle()));
   const titles = [...raw.join("").matchAll(/\x1b\]0;([^\x07]*)\x07/g)].map((m) => m[1]);
-  assert.ok(titles.some((x) => x.startsWith("● working")) && titles.at(-1)!.startsWith("✔ amness"), JSON.stringify(titles));
+  assert.ok(titles.some((x) => x.startsWith("● working")) && titles.at(-1)!.startsWith("✔ Amness"), JSON.stringify(titles));
   await t.key(KEY.ctrlD);
 });
 
