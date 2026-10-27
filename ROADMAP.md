@@ -33,7 +33,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 
 | Id | Item | Priority | Effort | Done |
 |---|---|---|---|---|
-| G1 | Load `AGENTS.md` and friends automatically (fixes a bug) | P1 | S | [ ] |
+| G1 | Load `AGENTS.md` and friends automatically (fixes a bug) | P1 | S | [x] |
 | G2 | Lifecycle hooks | P1 | S | [ ] |
 | G3 | Permission rules and a hard deny floor | P1 | S | [ ] |
 | G4 | Background processes | P1 | M | [ ] |
@@ -293,5 +293,5 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
-- (nothing closed yet)
+- **G1**: AGENTS.md (then CLAUDE.md, GEMINI.md) from the workspace root and the user folder load into the first message; a folder's own file is appended to the first read or edit there (once). Shown in /status. src/guidance.ts, test/guidance.test.ts.
 - 2026-10-27: roadmap deepened with Track B (L1 to L14) from a second round of papers and engineering posts.

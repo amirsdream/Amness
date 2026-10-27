@@ -7,6 +7,7 @@ import { createToolTool, loadSavedTools } from "./dynamic.ts";
 import { createHarness, defineTool, clip, makeHandoff, Registry, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, memoryTools } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
+import { Guidance } from "./guidance.ts";
 
 const RISKY: [RegExp, string][] = [
   [/\brm\s+(-\w*[rf]|--recursive|--force)/, "recursive/forced delete"], [/\bsudo\b/, "sudo"],
@@ -32,7 +33,7 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
 }
 
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
-export function codeTools(cwd: string, o: { onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
+export function codeTools(cwd: string, o: { /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
   const mode = o.mode;
   const mutating = mode ? { risky: () => (mode() === "default" ? "modify a file" : false), when: () => mode() !== "plan" } : {};
   const root = resolve(cwd);
@@ -63,7 +64,7 @@ export function codeTools(cwd: string, o: { onChange?: (path: string) => void; m
       run: ({ path, start, end }) => {
         const a = abs(path); readSet.add(a);
         const all = readFileSync(a, "utf8").split("\n"); if (all.at(-1) === "") all.pop();            // a trailing newline is not an extra empty line
-        return all.slice((start ?? 1) - 1, end).map((l, i) => `${(start ?? 1) + i}\t${l}`).join("\n");
+        return all.slice((start ?? 1) - 1, end).map((l, i) => `${(start ?? 1) + i}\t${l}`).join("\n") + (o.guidance?.nested(path) ?? "");
       } }),
     defineTool<{ pattern: string; path?: string }>({ name: "grep", description: "Recursive regex search (file:line:text). Counts as having read matching files.",
       schema: { type: "object", required: ["pattern"], properties: { pattern: { type: "string" }, path: { type: "string" } } }, readOnly: true,
@@ -80,7 +81,7 @@ export function codeTools(cwd: string, o: { onChange?: (path: string) => void; m
         const a = abs(path), before = existsSync(a) ? readFileSync(a, "utf8") : null;
         mkdirSync(dirname(a), { recursive: true }); writeFileSync(a, content); readSet.add(a); o.onChange?.(path);
         ctx.emit?.({ kind: "edit", ...unifiedDiff(path, before, content), before: before === null || before.length < 500_000 ? before : undefined });
-        return `wrote ${content.length} chars to ${path}` + (await o.check?.() ?? "");
+        return `wrote ${content.length} chars to ${path}` + (await o.check?.() ?? "") + (o.guidance?.nested(path) ?? "");
       } }),
     defineTool<{ path: string; old: string; new: string }>({ name: "edit_file", description: "Replace one exact, unique occurrence of `old` with `new` in a file you have read. Shows the result.",
       schema: { type: "object", required: ["path", "old", "new"], properties: { path: { type: "string" }, old: { type: "string" }, new: { type: "string" } } }, ...mutating,
@@ -154,6 +155,8 @@ export type CodeAgentOptions = {
   checkpointFile?: string;
   /** Durable memory across sessions (markdown files in <cwd>/.amness/memory + ~/.amness/memory). Default on. */
   memory?: boolean | MemoryStore;
+  /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
+  guidance?: boolean;
   /** Turns on semantic memory retrieval (blended with keyword ranking). See `openaiEmbedder`. */
   embedder?: Embedder;
   /** Start a fresh context with a handoff note when the transcript gets big. Default: at 120k prompt tokens / 500k chars. */
@@ -169,10 +172,11 @@ export type RunOptions = { resume?: boolean; bundle?: Bundle | string; overwrite
 export function createCodeAgent(o: CodeAgentOptions) {
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>();
+  const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
   const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
   if (memory && o.embedder) memory.embedder = o.embedder;
   const mode = o.permissions?.mode;
-  const registry = new Registry([...codeTools(o.cwd, { onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
+  const registry = new Registry([...codeTools(o.cwd, { guidance, onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
   const shown = new Set<string>();   // memory notes already in this conversation
   let todos: { content: string; status: "pending" | "in_progress" | "done" }[] = [];
   if (o.chat) {
@@ -225,7 +229,7 @@ ${note}
   });
   return {
     /** The live toolbox: add/remove tools between or during runs. */
-    registry, memory,
+    registry, memory, guidance,
     /** Keep the provider's prompt cache alive across an idle gap (see createHarness().warm). */
     warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },
@@ -234,6 +238,7 @@ ${note}
       task ||= userText;
       let text = userText;
       if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
+      if (!history.length && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
       if (!history.length && memory) { shown.clear(); const ctx = memory.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
       else if (memory) { const d = memory.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const msgs: Message[] = history.length ? [...history, { role: "user", content: text }]
@@ -254,6 +259,7 @@ ${note}
         const r = applyBundle(b, { cwd: o.cwd, memory, overwrite: opts.overwrite });
         prompt = `${t || b.task}\n\n## Handoff from a previous session (possibly another machine or model)\nOriginal task: ${b.task}\nStatus then: ${b.status.finished ? "finished" : "unfinished"}${b.status.summary ? ` - ${b.status.summary}` : ""}\n${b.handoff}\n\nRestored ${r.restored.length} file(s) from that session${r.skipped.length ? `; kept your version of: ${r.skipped.join(", ")}` : ""}. Re-check the workspace before continuing; it may have changed.`;
       }
+      if (guidance && !resume) { const g = guidance.start(); if (g) prompt += "\n\n" + g; }
       if (memory && !resume) { const ctx = memory.context(prompt); if (ctx) prompt += "\n\n" + ctx; }
       return h.run(prompt, { resume });
     },

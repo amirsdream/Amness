@@ -140,6 +140,8 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/export` · `/import` · `/live` · `/mcp` | portable bundle, continue from one, browser live view, attach an MCP server |
 | `/theme` · `/sidebar` · `/details` · `/diffmode` · `/mouse` · `/ui` | appearance and interface: theme (live preview), sidebar, expand tool details, stacked/split diffs, mouse on/off, full-screen/inline |
 
+**Project instructions.** `AGENTS.md` (or `CLAUDE.md` / `GEMINI.md`) in the project root, and `~/.amness/AGENTS.md`, are added to the first message of a conversation, framed as repository guidance rather than user requests and capped at 8k characters each. A folder's own file is shown the first time the agent reads or edits something there (and only then, at the end of that result, so the cached prefix is untouched). `/status` lists what was loaded; `/init` has the agent write one.
+
 **Your own commands.** Put `review.md` in `.amness/commands/` (or `~/.amness/commands/`) and `/review <args>` runs it as a prompt (`$ARGUMENTS` is substituted; a `description:` front-matter line shows in the popup). Commit the folder to share it with your team.
 
 **Memory.** Plain markdown notes in `<project>/.amness/memory` and `~/.amness/memory`, indexed by `MEMORY.md`; edit them like any file. What makes it more than a notebook:
@@ -372,7 +374,7 @@ The method follows recent evaluation practice: harness choice can change cost pe
 - **Data leaves your machine only to the provider you configure** (plus web search/fetch if you use the research agent). There is no telemetry. OpenAI requests are stateless by default (`store: false`).
 - **Keys** come from environment variables or `~/.amness/config.json` (mode 600). They are never written into a project.
 - **File tools are confined to the workspace** and enforce read-before-edit. **Shell commands are not sandboxed:** `sh` can do whatever your user can. The permission prompts are the safeguard, so read them, and prefer `plan` or `default` mode on code you do not trust.
-- **Treat project-supplied context as untrusted.** Memory notes and `.amness/commands/` from a repository you cloned can contain prompt injection (and `AGENTS.md` will too once it is loaded automatically; see the roadmap). Notes are presented to the model as hints to verify, and risky actions still need your approval.
+- **Treat project-supplied context as untrusted.** Memory notes and `.amness/commands/` from a repository you cloned can contain prompt injection (so can `AGENTS.md`, which is loaded automatically). Notes are presented to the model as hints to verify, and risky actions still need your approval.
 - The browser live view listens on `127.0.0.1` only, rejects foreign `Host` headers, and renders diffs as text, never HTML.
 - `.amness/` holds per-project state (chats, checkpoints, handoffs, memory). Add it to your `.gitignore`, except `memory/` and `commands/` if you want to share those.
 
@@ -394,7 +396,7 @@ The UI tests drive the real `App` with simulated keystrokes and read the screen 
 - Cost figures are estimates (no invoices, cached input assumed at about 10% of the input price, and some models have no price listed).
 - Newer features (cache keep-alive, semantic memory, `amness eval` against a real model) are covered by tests with scripted models and mock servers, but have not been run against live provider APIs. The efficiency numbers quoted from papers are theirs, not measurements of Amness.
 - Semantic memory sends note text and your messages to your provider's embeddings endpoint, and needs an OpenAI-compatible provider (Claude has none).
-- Gaps compared with other harnesses (hooks, OS sandbox, skills, custom subagents, background processes and more) are tracked in [ROADMAP.md](ROADMAP.md), together with a second track of ideas for getting ahead of them (grounded verification, trace replay, cache-aware routing, taint-based security, bounded self-improvement). Notably, `AGENTS.md` written by `/init` is not yet loaded automatically.
+- Gaps compared with other harnesses (hooks, OS sandbox, skills, custom subagents, background processes and more) are tracked in [ROADMAP.md](ROADMAP.md), together with a second track of ideas for getting ahead of them (grounded verification, trace replay, cache-aware routing, taint-based security, bounded self-improvement).
 - Not on npm yet (see above), and the Docker image is untested.
 - Tool-calling quality with small local models varies widely.
 
