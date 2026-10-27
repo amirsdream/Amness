@@ -167,6 +167,8 @@ Precedence: **built-in floor > deny > ask > allow > the permission mode.** Shell
 
 **OS sandbox (opt-in).** The permission prompts are a policy; the sandbox is enforcement. `/sandbox workspace` (or `--sandbox workspace`, or `sandbox` in the config) runs every shell command, including background ones, under macOS Seatbelt or Linux Bubblewrap: commands can read the machine but write only in the project, temp folders and common package caches, `.git` and the rule files stay read-only, and in `/sandbox strict` the network is cut as well (so `npm install` will fail). It makes yolo mode far safer. If a sandbox is requested where none exists (Windows, or Linux without `bwrap`), commands are refused instead of silently running unprotected. The file tools were already confined to the workspace.
 
+**Code index.** In repositories with 25 or more source files Amness adds three read-only tools built from a zero-dependency structural index (symbols, the import graph, where each symbol is used; TypeScript/JavaScript, Python, Go, Rust, Java, Kotlin, C#, Ruby, PHP, C/C++, Swift, Scala; rebuilt incrementally from file modification times): `repo_map(query)` returns the most relevant files for a few words, each with its functions, classes and types and how many files import it; `find_refs(symbol)` gives the definition and every file that uses it; `impact(path)` lists who depends on a file, directly and one step further, and which of its symbols are used elsewhere. Small repositories do not get the tools (grep is enough and tool definitions cost tokens). The index is approximate (regex extraction, import resolution by convention), so it points the way and the agent still reads the code; the eval suite has a mid-sized-repository task to measure whether it pays off for your model.
+
 **Editing.** Four ways to change files, all subject to read-before-edit and the same permission rules: `edit_file` (exact, unique match; or an `edits` list of several replacements applied in order, all or nothing; text that differs only in indentation is still matched when it is unique, and the result says so), `write_file`, and `apply_patch` for changes that span files. `apply_patch` takes the envelope used by Codex (`*** Begin Patch`, `*** Update File: path` with `@@` hunks, `*** Add File`, `*** Delete File`, `*** Move to`, `*** End Patch`) or an ordinary unified diff, applies hunks in order (an `@@ function name` anchor narrows the search), and is **atomic**: if any hunk of any file fails, nothing is written and every failure is named. A patch is judged file by file by permission rules, so one denied file denies the patch.
 
 **Background processes.** `sh` waits for a command to finish, so servers and watchers use four more tools: `sh_start` (returns an id; same permission rules as `sh`), `sh_read` (new output since the last read, optionally waiting up to 10 s), `sh_stop` (SIGTERM, then SIGKILL; the whole process group) and `sh_list`. Output is kept in a 200 KB ring buffer, at most 5 run at once, plan mode hides `sh_start`, and everything is killed when you exit. The sidebar lists running processes and `/procs` shows or stops them.
@@ -397,13 +399,13 @@ Every guard and efficiency feature can be switched off, so "does this help?" is 
 
 ```bash
 amness eval --selftest                       # prove every task is solvable and its held-out check is sound (no model, free)
-amness eval --variants ab --trials 3         # baseline (no guards) vs full harness on 12 built-in tasks
+amness eval --variants ab --trials 3         # baseline (no guards) vs full harness on 13 built-in tasks
 amness eval --variants ablate --trials 5     # full harness, then each guard removed in turn
 amness eval --cases ./my-tasks --jobs 3      # your own tasks: a folder of *.json
 amness eval --report .amness/evals/<run>.json   # re-analyse saved results, runs nothing
 ```
 
-Each task runs in a fresh temporary workspace. The agent sees the task and an optional `verify` command; a **held-out `check`** it never sees decides pass or fail. Variants: `baseline`, `full`, `full+check`, `no-gate`, and `full-<guard>` for each of `nudge loop compact stuck wrapup condense schedule ledger`.
+Each task runs in a fresh temporary workspace. The agent sees the task and an optional `verify` command; a **held-out `check`** it never sees decides pass or fail. Variants: `baseline`, `full`, `full+check`, `no-gate`, and `full-<guard>` for each of `nudge loop compact stuck wrapup condense schedule ledger stagnation index`.
 
 What the report gives you, and why:
 

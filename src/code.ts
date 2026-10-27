@@ -11,6 +11,7 @@ import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
 import { ProcessManager } from "./procs.ts";
 import { Ledger } from "./ledger.ts";
+import { CodeIndex, indexTools } from "./codeindex.ts";
 import { AGENT_TOOLS, WRITE_TOOLS, isWriter, loadAgents, type AgentDef } from "./agents.ts";
 import type { Roles } from "./route.ts";
 import { applyDiff, createWorktree, isRepo, removeWorktree, worktreeDiff, type Worktree } from "./worktree.ts";
@@ -174,7 +175,7 @@ Never invent file contents or command output. Don't ask the user questions; choo
 /** Conversational variant of the prompt: answers questions directly, plans, delegates exploration, works within permission modes. */
 export const CHAT_SYSTEM = `You are an expert software engineer pair-programming with the user in their terminal, inside their repository. Be concise and direct; format with Markdown (short paragraphs, \`inline code\`, fenced code blocks).
 How to work:
-- Questions: answer from the code. Explore first (list_files, grep, read_file) instead of guessing; cite files as path:line. Use the \`task\` tool for broad searches so your own context stays clean.
+- Questions: answer from the code. Explore first (list_files, grep, read_file; in a large repository start with repo_map, find_refs and impact when you have them) instead of guessing; cite files as path:line. Use the \`task\` tool for broad searches so your own context stays clean.
 - Changes: read a file before editing it, make the smallest correct change, then verify it (run the tests/build). For anything with 3+ steps, keep a checklist with \`todo_write\` and update it as you go (exactly one item in_progress).
 - When you finish a coding task, call \`finish(summary)\` (what changed, how you verified). For plain questions just answer; no \`finish\` needed.
 - Permissions: the user may be asked to approve edits and shell commands. If a call is denied, do not retry it; use another approach or explain what you need. In plan mode you are read-only: investigate, then present a plan with \`exit_plan_mode\` and wait for approval.
@@ -212,6 +213,8 @@ export type CodeAgentOptions = {
   memory?: boolean | MemoryStore;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
+  /** Structural code index tools (repo_map, find_refs, impact), offered when the repository has at least `minFiles` source files (default 25). */
+  index?: boolean | { minFiles?: number };
   /** Discover custom subagents (.amness/agents/*.md, .claude/agents/*.md; project and home) for the `task` tool. Default on. */
   agents?: boolean;
   /** Models that agents can name in their front matter (`model: fast`). */
@@ -253,6 +256,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const agentOf = (name?: string) => (name && name !== "explore" ? agentList.find((a) => a.name === name) : undefined);
   const rescanAgents = () => { if (o.agents === false) return; const r = loadAgents(o.cwd); agentList = r.agents; agentWarnings.splice(0, agentWarnings.length, ...r.warnings); };
   rescanAgents();
+  const codeIndex = o.index === false ? undefined : new CodeIndex(o.cwd), indexMin = typeof o.index === "object" ? o.index.minFiles ?? 25 : 25;
   let skillList: Skill[] = []; const skillWarnings: string[] = [];
   const rescan = () => { if (o.skills === false) return; const r = loadSkills(o.cwd); skillList = r.skills; skillWarnings.splice(0, skillWarnings.length, ...r.warnings); if (skillList.length && !registry.get("skill")) registry.add(skillTool(() => skillList)); };
   const procs = o.background === false ? undefined : new ProcessManager(resolve(o.cwd), { sandbox: sandboxMode });
@@ -261,7 +265,8 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const mode = o.permissions?.mode;
   const registry = new Registry([...codeTools(o.cwd, { guidance, procs, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
   const shown = new Set<string>();   // memory notes already in this conversation
-  rescan();
+  const rescanIndex = () => { if (codeIndex && !registry.get("repo_map") && codeIndex.list().length >= indexMin) registry.add(...indexTools(codeIndex)); };
+  rescan(); rescanIndex();
   let todos: { content: string; status: "pending" | "in_progress" | "done" }[] = [];
   if (o.chat) {
     registry.add(
@@ -356,7 +361,7 @@ ${note}
   });
   return {
     /** The live toolbox: add/remove tools between or during runs. */
-    registry, memory, guidance, procs, get agents() { return agentList; }, get agentWarnings() { return agentWarnings; }, get skills() { return skillList; }, get skillWarnings() { return skillWarnings; },
+    registry, memory, guidance, procs, codeIndex, get agents() { return agentList; }, get agentWarnings() { return agentWarnings; }, get skills() { return skillList; }, get skillWarnings() { return skillWarnings; },
     /** Keep the provider's prompt cache alive across an idle gap (see createHarness().warm). */
     warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },
@@ -369,7 +374,7 @@ ${note}
       text = await withContract(text);
       if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
       if (!history.length && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
-      if (!history.length) { rescanAgents(); rescan(); const sb = skillsBlock(skillList); if (sb) text += "\n\n" + sb; }
+      if (!history.length) { rescanIndex(); rescanAgents(); rescan(); const sb = skillsBlock(skillList); if (sb) text += "\n\n" + sb; }
       if (!history.length && memory) { shown.clear(); const ctx = memory.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
       else if (memory) { const d = memory.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const msgs: Message[] = history.length ? [...history, { role: "user", content: text }]
@@ -394,7 +399,7 @@ ${note}
         prompt = `${t || b.task}\n\n## Handoff from a previous session (possibly another machine or model)\nOriginal task: ${b.task}\nStatus then: ${b.status.finished ? "finished" : "unfinished"}${b.status.summary ? ` - ${b.status.summary}` : ""}\n${b.handoff}\n\nRestored ${r.restored.length} file(s) from that session${r.skipped.length ? `; kept your version of: ${r.skipped.join(", ")}` : ""}. Re-check the workspace before continuing; it may have changed.`;
       }
       if (guidance && !resume) { const g = guidance.start(); if (g) prompt += "\n\n" + g; }
-      if (!resume) { rescan(); const sb = skillsBlock(skillList); if (sb) prompt += "\n\n" + sb; }
+      if (!resume) { rescanIndex(); rescan(); const sb = skillsBlock(skillList); if (sb) prompt += "\n\n" + sb; }
       if (memory && !resume) { const ctx = memory.context(prompt); if (ctx) prompt += "\n\n" + ctx; }
       return h.run(prompt, { resume });
     },

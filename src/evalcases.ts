@@ -143,6 +143,23 @@ export const builtinCases: Case[] = [
     check: "node test.js && ! grep -q 'const LIMIT' a.js && ! grep -q 'const LIMIT' b.js && grep -q 'LIMIT' config.js",
     solution: { "config.js": "exports.LIMIT = 5;\n", "a.js": "const { LIMIT } = require('./config'); exports.capA = (n) => Math.min(n, LIMIT);\n", "b.js": "const { LIMIT } = require('./config'); exports.capB = (n) => Math.min(n, LIMIT);\n" },
   },
+  (() => {
+    // A mid-sized repository (45 files) where the bug lives in one shared module: exploring costs real effort without a map of the code.
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 40; i++) files[`lib/util${i}.js`] = `exports.helper${i} = (x) => x + ${i};\nexports.label${i} = () => 'util${i}';\n`;
+    files["shop/discount.js"] = "// Applies a coupon: SAVE10 takes 10 percent off.\nexports.applyCoupon = (total, code) => (code === 'SAVE10' ? total - total * 10 : total);\n";
+    files["shop/cart.js"] = "const { applyCoupon } = require('./discount');\nexports.checkout = (items, code) => applyCoupon(items.reduce((s, i) => s + i.price, 0), code);\n";
+    files["shop/receipt.js"] = "const { checkout } = require('./cart');\nexports.receipt = (items, code) => 'Total: ' + checkout(items, code).toFixed(2);\n";
+    files["shop/api.js"] = "const { receipt } = require('./receipt');\nexports.handle = (req) => receipt(req.items, req.coupon);\n";
+    files["test.js"] = "const a = require('assert'); const { handle } = require('./shop/api');\na.equal(handle({ items: [{ price: 50 }, { price: 50 }], coupon: 'SAVE10' }), 'Total: 90.00');\na.equal(handle({ items: [{ price: 20 }], coupon: '' }), 'Total: 20.00');\n";
+    return {
+      name: "bug-in-a-mid-sized-repo", files,
+      task: "Customers with the coupon SAVE10 are charged the wrong total at checkout (the API returns a nonsense number). Find the cause and fix it. test.js shows the expected totals.",
+      verify: "node test.js",
+      check: "node test.js && node -e \"const {applyCoupon}=require('./shop/discount');process.exit(applyCoupon(200,'SAVE10')===180&&applyCoupon(200,'')===200&&applyCoupon(0,'SAVE10')===0?0:1)\"",
+      solution: { "shop/discount.js": "exports.applyCoupon = (total, code) => (code === 'SAVE10' ? total - total * 0.1 : total);\n" },
+    } as Case;
+  })(),
 ];
 
 /** Cases from a folder of `*.json` files (`{ name?, files, task, verify?, check }`; `check` is a shell command), so you can evaluate on your own tasks. */

@@ -42,7 +42,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G7 | Skills (`SKILL.md`) | P2 | S–M | [x] |
 | G8 | Custom subagents (and parallel worktree subagents) | P2 | M | [x] |
 | G9 | Model routing (cheap model for exploring and compacting) | P2 | S–M | [x] |
-| G10 | Code index / repo map | P2 | M | [ ] |
+| G10 | Code index / repo map | P2 | M | [x] |
 | G11 | Language-server diagnostics after edits | P2 | M | [ ] |
 | G12 | Tracing (JSONL trace file, OpenTelemetry export, cache-miss cost) | P2 | S–M | [x] |
 | G13 | Git worktrees, `/review`, pull-request helper | P2 | M | [ ] |
@@ -61,7 +61,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | L4 | Trace replay: test harness changes without model calls | P1 | M | [ ] |
 | L5 | Failure mining: every bad session becomes an eval task | P2 | M | [ ] |
 | L6 | Cache-aware per-step model routing | P2 | L | [ ] |
-| L7 | Structural code index with call and import graph | P2 | L | [ ] |
+| L7 | Structural code index with call and import graph | P2 | L | [~] |
 | L8 | Model profiles and scaffold pruning from ablations | P2 | M | [ ] |
 | L9 | Taint tracking and capability policy (out-of-band enforcement) | P2 | L | [ ] |
 | L10 | Reversible actions: transactions over files and shell | P2 | L | [ ] |
@@ -293,6 +293,8 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **L7** (partly): the structural index with call/import graph (find_refs, impact, ranking by identifier overlap and centrality) exists and is tested; its benefit on real multi-file tasks is NOT yet measured (amness eval --cases with bug-in-a-mid-sized-repo; run: amness eval --variants full,full-index).
+- **G10**: zero-dependency structural index (symbols, import graph with .js-for-.ts, index and python resolution, identifier usage; 12 languages by regex) rebuilt incrementally by mtime; repo_map, find_refs, impact tools offered when the repo has 25+ source files; a 45-file eval task. src/codeindex.ts, test/codeindex.test.ts.
 - **G9**: models per role (explore, compact, review) via the models option and /models, a fallback model for overloaded or unreachable providers (withFallback; retryable errors only), subagent model keys. src/route.ts, test/route.test.ts. Per-step cache-aware routing is L6.
 - **G8**: custom subagents from .amness/agents and .claude/agents (tools whitelist, model key, max-steps, isolation: worktree); task({description, agent}); writers share permissions, floor, sandbox, approvals and the ledger and are forced read-only in plan mode; per-call concurrency (readers parallel, writers alone); worktree agents hand back a saved patch applied with apply_patch({file}). src/agents.ts, src/worktree.ts, test/agents.test.ts. Parallel worktree agents with a merge gate are L13.
 - **G7**: SKILL.md discovery in .amness/skills, .agents/skills, .claude/skills (project and home; precedence rules; malformed ones warned), names and descriptions only in the first message, skill tool loads the body and bundled files on demand (confined to the skill folder), tool only exists when skills exist, /skills. src/skills.ts, test/skills.test.ts.
