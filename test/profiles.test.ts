@@ -24,7 +24,7 @@ test("recommend: remove only what the data supports; load-bearing guards stay; w
     rows.push(row("full", c, t, c < 28, 1000));
     rows.push(row("full-nudge", c, t, c < 28, 800));                    // same pass rate, cheaper: removable
     rows.push(row("full-ledger", c, t, c < 14, 1000));                   // loses half the tasks: load-bearing
-    rows.push(row("full-loop", c, t, c < 28 || (c < 36 && t === 0), 1000));  // maybe slightly better, not significant
+    rows.push(row("full-loop", c, t, c < 28 || (c < 31 && t === 0), 1000));  // maybe slightly better, not significant
     rows.push(row("full-wrapup", c, t, c < 28, 1000));                  // no effect, no saving: stays
   }
   const r = recommend(analyze(rows, { baseline: "full" })), by = (g: string) => r.verdicts.find((v) => v.guard === g)!;
