@@ -28,7 +28,7 @@ test("recommend: remove only what the data supports; load-bearing guards stay; w
     rows.push(row("full-wrapup", c, t, c < 28, 1000));                  // no effect, no saving: stays
   }
   const r = recommend(analyze(rows, { baseline: "full" })), by = (g: string) => r.verdicts.find((v) => v.guard === g)!;
-  assert.equal(by("nudge").action, "remove"); assert.match(by("nudge").why, /does not hurt[\s\S]*lowers tokens per solved task by 286/);
+  assert.equal(by("nudge").action, "remove"); assert.match(by("nudge").why, /makes no real difference[\s\S]*lowers tokens per solved task by 286/);
   assert.equal(by("ledger").action, "keep"); assert.match(by("ledger").why, /removing it loses 35 pts/);
   assert.equal(by("wrapup").action, "undecided"); assert.notEqual(by("loop").action, "keep");
   assert.deepEqual(r.profile.off, ["nudge"]); assert.match(r.strength, /40 tasks × 3 trial/);

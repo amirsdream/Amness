@@ -43,7 +43,7 @@ export function recommend(a: Analysis, fullName = "full"): { verdicts: GuardVerd
     const pts = (x: number) => `${(x * 100).toFixed(0)} pts`, cheaper = c.dTokensPerSolved < 0 && Number.isFinite(c.dTokensPerSolved);
     if (c.verdict === "worse") verdicts.push({ guard: m[1], action: "keep", why: `removing it loses ${pts(-c.dPass)} (95% CI ${pts(c.ci.lo)} to ${pts(c.ci.hi)})` });
     else if (c.verdict === "better") verdicts.push({ guard: m[1], action: "remove", why: `removing it gains ${pts(c.dPass)} (95% CI ${pts(c.ci.lo)} to ${pts(c.ci.hi)})` });
-    else if (c.dPass >= 0 && cheaper && c.ci.lo > -0.1) verdicts.push({ guard: m[1], action: "remove", why: `removing it does not hurt (${pts(c.dPass)}, CI ${pts(c.ci.lo)} to ${pts(c.ci.hi)}) and lowers tokens per solved task by ${Math.round(-c.dTokensPerSolved).toLocaleString()}` });
+    else if (Math.abs(c.dPass) <= 0.02 && cheaper && c.ci.lo > -0.1) verdicts.push({ guard: m[1], action: "remove", why: `removing it makes no real difference to the pass rate (${pts(c.dPass)}, CI ${pts(c.ci.lo)} to ${pts(c.ci.hi)}) and lowers tokens per solved task by ${Math.round(-c.dTokensPerSolved).toLocaleString()}` });
     else verdicts.push({ guard: m[1], action: "undecided", why: `no clear effect (${pts(c.dPass)}, CI ${pts(c.ci.lo)} to ${pts(c.ci.hi)}); it stays on` });
   }
   const strength = a.minDetectable > 0.4 ? `weak evidence: ${a.tasks} task(s) can only detect differences above ~${(a.minDetectable * 100).toFixed(0)} points; add tasks before acting on "remove"` : `${a.tasks} tasks × ${a.trials} trial(s): differences above ~${(a.minDetectable * 100).toFixed(0)} points are detectable`;
