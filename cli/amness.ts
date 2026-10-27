@@ -24,7 +24,7 @@ function banner() {
   const p = PROVIDERS[cfg.provider];
   const key = !p.needsKey ? gray("no key needed") : cfg.apiKey ? green("key set") : red("no API key");
   console.log("\n" + box([
-    bold("amness") + dim("  ·  reliable agents for GPT-style models"),
+    bold("Amness") + dim("  ·  reliable agents for GPT-style models"),
     `${dim("model")} ${cyan(cfg.model)}  ${dim("via")} ${p.label}  ${dim("·")} ${key}  ${dim("·")} ${dim("budget")} ${cfg.maxTokens.toLocaleString()} tok`,
   ]));
 }

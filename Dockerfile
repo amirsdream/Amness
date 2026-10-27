@@ -1,4 +1,4 @@
-# Portable amness: one small image, any machine. Type stripping needs Node >= 22.18; no build step, no runtime deps
+# Portable Amness: one small image, any machine. Type stripping needs Node >= 22.18; no build step, no runtime deps
 # (the Anthropic SDK is installed so the Claude provider works).
 FROM node:24-alpine
 WORKDIR /opt/amness

@@ -301,10 +301,10 @@ Recent work on coding-agent loops points the same way, and the loop follows it w
 
 - [An Empirical Study of Harness Design for Coding Agents](https://arxiv.org/abs/2609.20804) (2026): cheap rule-based elision before any LLM summarisation gave the lowest cost; a recall tool for elided content was almost never used, so there isn't one; stuck detection and lightweight post-edit checks are cheap ways to stop wasted turns.
 - [AgentDiet](https://arxiv.org/abs/2509.23586) (trajectory reduction): removing useless, redundant and *expired* information cut input tokens 40-60% with unchanged results. This is the source of the expired-read and repeated-call rules.
-- [CoACT](https://arxiv.org/abs/2607.02911) and [SWE-Pruner](https://arxiv.org/abs/2601.16746): reads dominate token use, and compression must preserve what the next action needs, and leave earlier messages untouched to keep the cache valid. amness uses rules for this; the papers use trained compressors, which would add a dependency.
+- [CoACT](https://arxiv.org/abs/2607.02911) and [SWE-Pruner](https://arxiv.org/abs/2601.16746): reads dominate token use, and compression must preserve what the next action needs, and leave earlier messages untouched to keep the cache valid. Amness uses rules for this; the papers use trained compressors, which would add a dependency.
 - A [source-code study of eleven coding agents](https://arxiv.org/html/2609.00006v1): read-only tools run concurrently, mutating tools one at a time.
 
-The percentages above are the papers' results on their own benchmarks, not measurements of amness; use the eval runner (`evaluate`) with the guards switched on and off to measure them on your tasks.
+The percentages above are the papers' results on their own benchmarks, not measurements of Amness; use the eval runner (`evaluate`) with the guards switched on and off to measure them on your tasks.
 
 ## Evaluating the harness
 
