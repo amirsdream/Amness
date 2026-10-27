@@ -71,6 +71,8 @@ export type Event =
   | { kind: "cachebreak"; reason: string; at: number }
   /** Where the loop is: lets a UI show live progress. `step` is 0-based; `n` is the number of tool calls in the batch. */
   | { kind: "phase"; phase: "model" | "tools" | "verify" | "compact"; step: number; max: number; n?: number }
+  /** A lifecycle hook ran: what it did (blocked, added context, warned). */
+  | { kind: "hook"; event: string; detail: string; blocked: boolean }
   | { kind: "finish"; summary: string };
 
 /** Shared token/time cap. Pass one instance to a harness (and its subagents) to bound the whole run. */
@@ -112,6 +114,8 @@ export type Options = {
   rollover?: { afterTokens?: number; afterChars?: number };
   /** Receives each handoff note (persist it; it is also a portable summary of the work so far). */
   onHandoff?: (note: string) => void;
+  /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
+  hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
   signal?: AbortSignal | (() => AbortSignal | undefined);
   /** Polled at the start of every turn: messages the user typed while the agent was working ("steering"). They join the conversation immediately. */
@@ -134,7 +138,7 @@ export async function makeHandoff(model: Model, specs: ToolSpec[], msgs: Message
 }
 const HANDOFF_MARK = "\n\n## Handoff from your earlier context";
 
-export type RunResult = { text: string; finished: boolean; steps: number; messages: Message[]; stopped?: "budget" | "maxSteps" | "aborted" | "stuck"; tokens: number };
+export type RunResult = { text: string; finished: boolean; steps: number; messages: Message[]; stopped?: "budget" | "maxSteps" | "aborted" | "stuck" | "blocked"; tokens: number };
 
 export const DEFAULT_SYSTEM = `You are an autonomous agent. Work until the task is DONE, then call \`finish\`.
 - Act, don't narrate. If you say you will do something, do it in the same turn with a tool call.
@@ -252,6 +256,15 @@ export function createHarness(o: Options) {
     },
   };
   const emit = (e: Event) => o.onEvent?.(e);
+  /** Run lifecycle hooks, report what they did, and fail open (a broken hook only warns). */
+  const hook = async (event: Parameters<NonNullable<Options["hooks"]>["run"]>[0], payload: Record<string, unknown>) => {
+    if (!o.hooks) return undefined;
+    const r = await o.hooks.run(event, payload).catch((e: Error) => ({ warnings: [`hook error: ${e.message}`] } as { block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }));
+    for (const w of r.warnings) emit({ kind: "hook", event, detail: w, blocked: false });
+    if (r.block) emit({ kind: "hook", event, detail: r.block, blocked: true });
+    else if (r.context) emit({ kind: "hook", event, detail: "added context", blocked: false });
+    return r;
+  };
   const off = new Set(o.off ?? []);
   const sig = () => (typeof o.signal === "function" ? o.signal() : o.signal);
   let approvals: Promise<unknown> = Promise.resolve(); // serialise prompts so parallel calls don't interleave questions
@@ -303,7 +316,8 @@ export function createHarness(o: Options) {
       // Editing old messages breaks the provider's prompt-cache prefix from that point on, and cached input is ~10x cheaper than fresh input,
       // so history is only rewritten when the window needs it, and then all stages at once (one break), cutting well below the budget (hysteresis).
       if (!off.has("compact") && !o.model.appendOnly && msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) > (o.contextBudget ?? 60_000)) {
-        const s = supersede(msgs, 6, (n) => reg.get(n)?.readOnly === true) + compact(msgs, o.contextBudget);
+        const veto = (await hook("PreCompact", { chars: msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) }))?.block;
+        const s = veto ? 0 : supersede(msgs, 6, (n) => reg.get(n)?.readOnly === true) + compact(msgs, o.contextBudget);
         if (s > 0) emit({ kind: "trim", saved: s, what: "stale tool output" });
       }
       const key = [...names].sort().join(",");
@@ -349,6 +363,8 @@ export function createHarness(o: Options) {
         const errs = schema ? validate(args, schema) : [`unknown tool "${name}". Available: ${[...names, "finish"].join(", ")}`];
         if (errs.length) { emit({ kind: "repair", detail: errs.join("; ") }); return `ERROR: ${errs.join("; ")}`; }
         if (name === "finish") {
+          const stop = await hook("Stop", { summary: args.summary });
+          if (stop?.block) { emit({ kind: "rejected", detail: stop.block }); return `REJECTED by a hook: ${clip(stop.block, 3000)}\nFix the problem, then finish again.`; }
           if (o.verify) emit({ kind: "phase", phase: "verify", step, max });
           const fb = feedback(await o.verify?.(args.summary));
           if (!fb) { done = args.summary; emit({ kind: "finish", summary: args.summary }); return "accepted"; }
@@ -359,6 +375,9 @@ export function createHarness(o: Options) {
         const n = (seen.get(key) ?? 0) + 1;
         seen.set(key, n);
         if (n > 2 && !off.has("loop")) { emit({ kind: "loop", detail: key.slice(0, 100) }); return `ERROR: you've made this exact call ${n} times. Do something different.`; }
+        const pre = await hook("PreToolUse", { tool: name, args });
+        if (pre?.block) { emit({ kind: "denied", detail: `${name}: blocked by a hook` }); return `BLOCKED BY A HOOK: ${clip(pre.block, 2000)}\nDo not retry the same call; choose another approach or explain what you could not do.`; }
+        if (pre?.args) { const e2 = validate(pre.args, t!.schema); if (e2.length) return `ERROR: a hook rewrote the arguments into something invalid (${e2.join("; ")})`; args = pre.args; }
         const risk = typeof t!.risky === "function" ? t!.risky(args) : t!.risky;
         if (risk) {
           let preview: string | undefined;
@@ -376,6 +395,8 @@ export function createHarness(o: Options) {
         emit({ kind: "toolstart", id: c.id, name, args: raw });
         try { const r = await t!.run(args, { registry: reg, step, emit, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
+        const post = await hook("PostToolUse", { tool: name, args, result: clip(result, 4000), ok: !/^(ERROR|DENIED)/.test(result) });
+        if (post?.context) result += `\n\n[hook] ${clip(post.context, 2000)}`;
         emit({ kind: "tool", id: c.id, name, args: raw, result });
         return result;
       };

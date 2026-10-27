@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Budget, MemoryStore, createCodeAgent, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { Budget, MemoryStore, createCodeAgent, Hooks, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
@@ -109,7 +109,7 @@ export class App {
     this.model = (this.opts.makeModel ?? ((c) => createModel(c, undefined, { cacheKey })))(this.cfg);
     this.agent = createCodeAgent({
       model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, hooks: this.hooks?.count() ? this.hooks : undefined, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
   }
@@ -124,6 +124,7 @@ export class App {
     output.write(PASTE_ON);
     this.full?.enter();
     input.on("data", this.onData);
+    void this.askHookTrust();
     output.on?.("resize", () => { this.full?.invalidate(); this.render(); });
     process.once("exit", this.restore);
     this.files.ensure().catch(() => {});
@@ -442,6 +443,7 @@ export class App {
         void t; this.inlineOnly(lines); break;
       }
       case "todos": this.todos = e.todos; break;
+      case "hook": this.stepNow().notes.push(`hook ${e.event}${e.blocked ? " blocked" : ""}: ${one(e.detail, 100)}`); if (e.blocked || e.detail !== "added context") this.notify(e.blocked ? "warn" : "info", `hook ${e.event}: ${one(e.detail, 200)}`, [dim(`  ⚙ hook ${e.event}: ${one(e.detail, w - 20)}`)]); break;
       case "cachebreak": if (!sub) { this.cacheBreaks++; this.stepNow().notes.push("cache break: " + e.reason); } break;
       case "trim": if (!sub) { this.trimmed += e.saved; this.stepNow().notes.push(`trimmed ~${fmtTokens(Math.round(e.saved / 4))} tokens (${e.what})`); } break;
       case "phase": if (!sub) {
@@ -581,6 +583,20 @@ export class App {
       } catch { /* a failed ping is harmless: the next real request just re-reads the prefix */ }
     }, this.opts.keepWarmMs ?? 270_000);
     this.warmTimer.unref?.();
+  }
+  /** Project hooks run commands on this machine, so a cloned repo's hooks only run after the user approves this exact file. */
+  hooks!: Hooks;
+  loadHooks() {
+    const fp = Hooks.fingerprint(this.cwd), trusted = !!fp && loadState().hookTrust?.[this.cwd] === fp;
+    try { this.hooks = Hooks.load(this.cwd, { trustProject: trusted }); } catch (e) { this.hooks = Hooks.load(this.cwd, { trustProject: false }); this.note(`hooks ignored: ${(e as Error).message}`); }
+    return { fp, trusted };
+  }
+  private async askHookTrust() {
+    const { fp, trusted } = this.loadHooks();
+    if (!fp || trusted || !this.persist) { this.buildAgent(); return; }
+    const ok = await this.pick("This project defines hooks (.amness/hooks.json) that run commands on your machine. Allow them?", [{ label: "Yes, allow this version of the file", value: "y" }, { label: "No, ignore project hooks", value: "n" }]);
+    if (ok === "y") { const st = loadState(); st.hookTrust = { ...(st.hookTrust ?? {}), [this.cwd]: fp }; saveState(st); this.loadHooks(); }
+    this.buildAgent();
   }
   setCheck(cmd: string | undefined) { this.check = cmd; this.buildAgent(); }
   setVerify(cmd: string | undefined) { this.verify = cmd; if (this.persist) { const st = loadState(); if (cmd) st.verifyByDir[this.cwd] = cmd; else delete st.verifyByDir[this.cwd]; saveState(st); } this.buildAgent(); }

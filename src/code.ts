@@ -8,6 +8,7 @@ import { createHarness, defineTool, clip, makeHandoff, Registry, type Approve, t
 import { MemoryStore, memoryTools } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
+import type { HookRunner } from "./hooks.ts";
 
 const RISKY: [RegExp, string][] = [
   [/\brm\s+(-\w*[rf]|--recursive|--force)/, "recursive/forced delete"], [/\bsudo\b/, "sudo"],
@@ -157,6 +158,8 @@ export type CodeAgentOptions = {
   memory?: boolean | MemoryStore;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
+  /** Lifecycle hooks, e.g. `Hooks.load(cwd, { trustProject: true })`. Nothing runs unless you pass this. */
+  hooks?: HookRunner;
   /** Turns on semantic memory retrieval (blended with keyword ranking). See `openaiEmbedder`. */
   embedder?: Embedder;
   /** Start a fresh context with a handoff note when the transcript gets big. Default: at 120k prompt tokens / 500k chars. */
@@ -209,11 +212,23 @@ export function createCodeAgent(o: CodeAgentOptions) {
     );
   }
   if (o.selfExtend) { mkdirSync(dirname(toolsFile), { recursive: true }); registry.add(...loadSavedTools(toolsFile, o.cwd), createToolTool({ cwd: o.cwd, file: toolsFile })); }
+  /** SessionStart (first message of a conversation) and UserPromptSubmit hooks: may add context to the message or refuse it. */
+  const promptHooks = async (first: boolean, prompt: string): Promise<{ block?: string; context?: string }> => {
+    if (!o.hooks?.count()) return {};
+    const parts: string[] = [];
+    for (const [ev, payload] of [...(first ? [["SessionStart", {}] as const] : []), ["UserPromptSubmit", { prompt }] as const]) {
+      const r = await o.hooks.run(ev, payload as Record<string, unknown>).catch(() => undefined);
+      for (const w of r?.warnings ?? []) o.onEvent?.({ kind: "hook", event: ev, detail: w, blocked: false });
+      if (r?.block) { o.onEvent?.({ kind: "hook", event: ev, detail: r.block, blocked: true }); return { block: `blocked by a ${ev} hook: ${r.block}` }; }
+      if (r?.context) { parts.push(r.context); o.onEvent?.({ kind: "hook", event: ev, detail: "added context", blocked: false }); }
+    }
+    return { context: parts.length ? `[hook context]\n${parts.join("\n")}` : undefined };
+  };
   const sessionFile = resolve(o.cwd, ".amness/handoff.md");
   let task = "";
   const h = createHarness({
     model: o.model, system: o.chat ? CHAT_SYSTEM : CODE_SYSTEM, tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal,
+    budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal, hooks: o.hooks,
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 },
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 
@@ -237,6 +252,8 @@ ${note}
     async chat(history: Message[], userText: string) {
       task ||= userText;
       let text = userText;
+      const gate = await promptHooks(history.length === 0, userText); if (gate.block) return { text: gate.block, finished: false, steps: 0, messages: history, stopped: "blocked" as const, tokens: 0 };
+      if (gate.context) text += "\n\n" + gate.context;
       if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
       if (!history.length && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
       if (!history.length && memory) { shown.clear(); const ctx = memory.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
@@ -254,6 +271,8 @@ ${note}
       // resuming with a NEW instruction: add it as a follow-up rather than silently ignoring it
       if (resume && t.trim() && !(resume.find((m) => m.role === "user")?.content ?? "").startsWith(t.trim())) resume = [...resume, { role: "user", content: t }];
       let prompt = t;
+      const gate = await promptHooks(!resume, t); if (gate.block) return { text: gate.block, finished: false, steps: 0, messages: resume ?? [], stopped: "blocked" as const, tokens: 0 };
+      if (gate.context) prompt += "\n\n" + gate.context;
       if (opts.bundle) {
         const b = typeof opts.bundle === "string" ? readBundle(opts.bundle) : opts.bundle;
         const r = applyBundle(b, { cwd: o.cwd, memory, overwrite: opts.overwrite });

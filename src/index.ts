@@ -15,3 +15,4 @@ export * from "./stats.ts";
 export * from "./evalcases.ts";
 export * from "./embed.ts";
 export * from "./guidance.ts";
+export * from "./hooks.ts";

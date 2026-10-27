@@ -135,12 +135,23 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/loop` (alias `/trace`) | step-by-step trace of the agent loop: each model turn, its tools and timings, and any guard that fired |
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
 | `/memory` · `/init` | list notes · `forget` `add` `stale` `prune` `consolidate` `graph` `embeddings` · have the agent write `AGENTS.md` |
+| `/hooks` | lifecycle hooks in effect |
 | `/copy` | copy the last reply (`/copy code`, `/copy all`) |
 | `/keepwarm [on\|off]` | keep the Claude prompt cache alive while you are away (opt-in) |
 | `/export` · `/import` · `/live` · `/mcp` | portable bundle, continue from one, browser live view, attach an MCP server |
 | `/theme` · `/sidebar` · `/details` · `/diffmode` · `/mouse` · `/ui` | appearance and interface: theme (live preview), sidebar, expand tool details, stacked/split diffs, mouse on/off, full-screen/inline |
 
 **Project instructions.** `AGENTS.md` (or `CLAUDE.md` / `GEMINI.md`) in the project root, and `~/.amness/AGENTS.md`, are added to the first message of a conversation, framed as repository guidance rather than user requests and capped at 8k characters each. A folder's own file is shown the first time the agent reads or edits something there (and only then, at the end of that result, so the cached prefix is untouched). `/status` lists what was loaded; `/init` has the agent write one.
+
+**Hooks.** Run your own commands at fixed points of the loop, in the same vocabulary as Claude Code and Codex. Configure them in `.amness/hooks.json` (project) and `~/.amness/hooks.json` (yours):
+
+```json
+{ "PreToolUse":  [{ "match": "sh", "command": "./scripts/no-push.sh", "timeout": 10 }],
+  "PostToolUse": [{ "match": "edit_file|write_file", "command": "npx prettier --write ." }],
+  "Stop":        [{ "command": "./scripts/changelog-updated.sh" }] }
+```
+
+Events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `Stop`. The event arrives as JSON on stdin. Exit `0` allows; exit `2` blocks (stderr goes to the model, or for `UserPromptSubmit` back to you); stdout can be plain text (added as context) or JSON (`{"context": "..."}`, `{"args": {...}}` to rewrite a tool call, `{"decision": "block", "reason": "..."}`). Hooks run without your API keys in their environment, time out after 10 s, and a crash only warns unless the hook sets `"failClosed": true`. **Project hooks run commands on your machine, so Amness asks before running a repository's hooks and remembers your answer for that exact file** (headless runs need `--trust-hooks`). `/hooks` shows what is active.
 
 **Your own commands.** Put `review.md` in `.amness/commands/` (or `~/.amness/commands/`) and `/review <args>` runs it as a prompt (`$ARGUMENTS` is substituted; a `description:` front-matter line shows in the popup). Commit the folder to share it with your team.
 
@@ -184,6 +195,7 @@ amness run --verify "npm test" --json "fix the failing test"      # one-shot, no
 | `--cwd <dir>` | workspace (default `.`) |
 | `--verify <cmd>` | must exit 0 before the agent may finish |
 | `--check <cmd>` | fast command run after every edit; failures are shown to the agent at once |
+| `--trust-hooks` | run this project's `.amness/hooks.json` (off by default when headless) |
 | `--provider`, `--model`, `--base-url`, `--effort`, `--api` | model selection |
 | `--yes` | auto-approve risky commands (default: they are denied) |
 | `--json` | one JSON event per line on stdout, then a final `{"kind":"result"}` line |
