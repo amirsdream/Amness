@@ -85,7 +85,7 @@ export class Budget {
 
 export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
-export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup";
+export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule";
 
 export type Options = {
   model: Model;
@@ -341,12 +341,12 @@ export function createHarness(o: Options) {
         }
         let result: string;
         emit({ kind: "toolstart", id: c.id, name, args: raw });
-        try { const r = await t!.run(args, { registry: reg, step, emit, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = condense(raw); ingress += raw.length - result.length; }
+        try { const r = await t!.run(args, { registry: reg, step, emit, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
         emit({ kind: "tool", id: c.id, name, args: raw, result });
         return result;
       };
-      const safe = (c: ToolCall) => { const t = reg.get(c.function.name); return !t || t.readOnly === true || t.parallel === true; };
+      const safe = (c: ToolCall) => { if (off.has("schedule")) return false; const t = reg.get(c.function.name); return !t || t.readOnly === true || t.parallel === true; };
       const results: string[] = [];
       for (let i = 0; i < m.tool_calls.length; ) {
         let j = i; while (j < m.tool_calls.length && safe(m.tool_calls[j]) === safe(m.tool_calls[i])) j++;

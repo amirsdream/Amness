@@ -15,7 +15,7 @@
 
 - [Why](#why) · [Quick start](#quick-start) · [Using the chat](#using-the-chat) · [Providers and models](#providers-and-models)
 - [Headless and CI](#headless-and-ci) · [Use it as a library](#use-it-as-a-library) · [Architecture](#architecture)
-- [Safety and privacy](#safety-and-privacy) · [Development](#development) · [Limitations](#limitations) · [License](#license)
+- [Evaluating the harness](#evaluating-the-harness) · [Safety and privacy](#safety-and-privacy) · [Development](#development) · [Limitations](#limitations) · [License](#license)
 
 ## Why
 
@@ -53,6 +53,7 @@ amness -c                           # continue the last conversation in this dir
 amness --inline                     # use the inline renderer (your terminal's scrollback)
 amness menu                         # classic menu: guided demo, evals, research agent, settings
 amness demo                         # guided demo, no API key needed
+amness eval --selftest              # check the evaluation suite itself (no API key needed)
 ```
 
 First launch without a key runs a short setup wizard (provider, key, connection test). Keys are read from the environment or saved to `~/.amness/config.json` with mode 600. `/provider` switches later. Claude support needs the optional SDK: `npm install @anthropic-ai/sdk`.
@@ -304,6 +305,31 @@ Recent work on coding-agent loops points the same way, and the loop follows it w
 - A [source-code study of eleven coding agents](https://arxiv.org/html/2609.00006v1): read-only tools run concurrently, mutating tools one at a time.
 
 The percentages above are the papers' results on their own benchmarks, not measurements of amness; use the eval runner (`evaluate`) with the guards switched on and off to measure them on your tasks.
+
+## Evaluating the harness
+
+Every guard and efficiency feature can be switched off, so "does this help?" is a measurement, not an opinion:
+
+```bash
+amness eval --selftest                       # prove every task is solvable and its held-out check is sound (no model, free)
+amness eval --variants ab --trials 3         # baseline (no guards) vs full harness on 8 built-in tasks
+amness eval --variants ablate --trials 5     # full harness, then each guard removed in turn
+amness eval --cases ./my-tasks --jobs 3      # your own tasks: a folder of *.json
+amness eval --report .amness/evals/<run>.json   # re-analyse saved results, runs nothing
+```
+
+Each task runs in a fresh temporary workspace. The agent sees the task and an optional `verify` command; a **held-out `check`** it never sees decides pass or fail. Variants: `baseline`, `full`, `full+check`, `no-gate`, and `full-<guard>` for each of `nudge loop compact stuck wrapup condense schedule`.
+
+What the report gives you, and why:
+
+- **Tasks are the unit of analysis.** Repeated trials of one task are correlated, so intervals are 95% bootstrap intervals over tasks, and comparisons are paired by task.
+- **A paired comparison against the baseline:** change in pass rate with its interval, wins/losses/ties, an exact sign test (McNemar's exact test on the tasks where two variants differ) with Holm correction across variants, and a verdict of `better`, `worse` or `inconclusive`.
+- **Reliability, not just a pass rate:** `pass^k` is the chance that k attempts at a task *all* pass, which exposes variants that only succeed sometimes.
+- **Cost per solved task, not per run:** a variant that is cheap because it gives up is not efficient. A `●` marks variants on the pass-rate versus tokens-per-solve Pareto frontier.
+- **Why a variant behaves as it does:** how often each guard fired per run (nudges, loop blocks, rejected finishes, trimmed output).
+- **An honest power note.** With 8 tasks only large differences (about 70 points) are detectable; the report says so instead of declaring a winner. Add tasks with `--cases` before trusting a small difference.
+
+The method follows recent evaluation practice: harness choice can change cost per solved task by large factors while pass-rate differences stay small ([The Scaffold Effect in Coding Agents](https://arxiv.org/abs/2607.22585)), and task-level paired bootstrap intervals are the right uncertainty statement ([Harness or Model?](https://arxiv.org/html/2609.11987v1)). The built-in suite is small and synthetic; it is a regression harness for the guards, not a substitute for SWE-bench-style benchmarks, and a real run costs real tokens (the command asks before starting).
 
 ## Safety and privacy
 

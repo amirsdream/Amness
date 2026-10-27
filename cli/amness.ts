@@ -8,7 +8,8 @@ import { createModel } from "./model.ts";
 import { detectVerify } from "./detect.ts";
 import { HELP, runHeadless } from "./headless.ts";
 import { App } from "./tui/app.ts";
-import { cases } from "../examples/cases.ts";
+import { builtinCases as cases } from "../src/evalcases.ts";
+import { runEval } from "./evalcli.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, home, loadConfig, mask, ready, saveConfig, type Config, type ProviderId } from "./config.ts";
 import { DEMO_TASK, explain, runDemo } from "./demo.ts";
 import { formatEvent } from "./format.ts";
@@ -368,6 +369,7 @@ const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
   amness run [flags] "task"    headless mode for CI/scripts (amness run --help)
   amness menu                  the classic menu (demo, evals, research, settings…)
   amness --inline | --full     choose the interface (default: full-screen; AMNESS_UI or /ui also work)
+  amness eval [flags]          compare harness variants statistically (amness eval --help)
   amness demo                  guided demo, no API key needed
 
   inside the chat: /help for commands · @file to mention files · shift+tab to change permissions`;
@@ -398,6 +400,7 @@ async function main() {
   const screens: Record<string, () => Promise<unknown>> = { code: codeScreen, memory: memoryScreen, import: importScreen, research: researchScreen, eval: evalScreen, demo: demoScreen, settings };
   if (quick === "--version" || quick === "-v") return void console.log(VERSION);
   if (quick === "--help" || quick === "-h" || quick === "help") return void console.log(TOP_HELP);
+  if (quick === "eval" && argv.length > 1) { process.exitCode = await runEval(argv.slice(1), { model: makeModel, maxTokens: cfg.maxTokens, confirm }); return; }
   if (quick === "run") { process.exitCode = await runHeadless(argv.slice(1)); return; }
   if (quick === "-p" || quick === "--print") { process.exitCode = await runHeadless(argv.slice(1)); return; }
   if (quick && quick in screens) return void (await screens[quick]().catch((e) => { if (!(e instanceof Cancel)) throw e; }));

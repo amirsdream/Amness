@@ -11,3 +11,5 @@ export * from "./diff.ts";
 export * from "./memory.ts";
 export * from "./bundle.ts";
 export * from "./live.ts";
+export * from "./stats.ts";
+export * from "./evalcases.ts";
