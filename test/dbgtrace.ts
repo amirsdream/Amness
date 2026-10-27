@@ -1,12 +1,8 @@
-import { createServer } from "node:http";
-import { Tracer, createHarness, defineTool } from "../src/index.ts";
+import { mkdirSync, appendFileSync } from "node:fs";
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(17, 23), ...a);
-const got: unknown[] = []; const srv = createServer((req, res) => { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => { log("server got", req.url, b.length); got.push(1); res.end("{}"); }); });
-await new Promise<void>((r) => srv.listen(0, r)); log("listening", srv.address());
-const port = (srv.address() as any).port;
-const tr = new Tracer({ otlp: `http://127.0.0.1:${port}`, sessionId: "s2", model: "gpt-x" });
-let n = 0; const call = (name: string, args: unknown) => ({ role: "assistant" as const, content: null, usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110, cached_tokens: 0 }, tool_calls: [{ id: "t" + ++n, function: { name, arguments: JSON.stringify(args) } }] });
-const t = defineTool({ name: "t", description: "", schema: { type: "object" }, run: () => "tool output" });
-const q = [call("t", { a: 1 }), call("finish", { summary: "done" })];
-log("run"); await createHarness({ model: async () => q.shift()!, tools: [t], onEvent: (e) => tr.event(e) }).run("x"); log("ran");
-await tr.close(); log("closed", got.length); srv.closeAllConnections(); srv.close(); log("done");
+log("mkdir"); try { mkdirSync("/proc/nope", { recursive: true }); log("mkdir ok?!"); } catch (e) { log("mkdir err", (e as Error).message); }
+log("append"); try { appendFileSync("/proc/nope/x.jsonl", "x"); } catch (e) { log("append err", (e as Error).message); }
+log("fetch"); const t0 = Date.now();
+const ctl = new AbortController(); setTimeout(() => ctl.abort(), 8000);
+await fetch("http://127.0.0.1:1/v1/traces", { method: "POST", body: "{}", signal: ctl.signal }).then(() => log("fetch ok?!"), (e) => log("fetch err", String(e?.cause?.code ?? e), Date.now() - t0));
+log("done");
