@@ -83,3 +83,17 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  action:
+    name: GitHub Action (installs and starts; no model call)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: run the action with no API key and check it reports instead of crashing
+        id: amness
+        uses: ./
+        with:
+          task: "say hello"
+          comment: "false"
+      - run: test "${{ steps.amness.outputs.finished }}" = "false"

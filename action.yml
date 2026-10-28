@@ -1,0 +1,52 @@
+name: Amness
+description: Run the Amness coding agent on a task in CI and report the result on the pull request.
+branding: { icon: check-circle, color: blue }
+inputs:
+  task: { description: What the agent should do., required: true }
+  verify: { description: Command that must exit 0 before the agent may finish (for example npm test)., required: false, default: "" }
+  provider: { description: openai or anthropic or another provider id., required: false, default: openai }
+  model: { description: Model id (provider default when empty)., required: false, default: "" }
+  max-tokens: { description: Hard token cap for the run., required: false, default: "300000" }
+  comment: { description: Post the result as a pull request comment., required: false, default: "true" }
+outputs:
+  finished: { description: "true when the agent finished and passed verify", value: "${{ steps.run.outputs.finished }}" }
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with: { node-version: 24 }
+    - name: Install Amness
+      shell: bash
+      run: |
+        cd "${{ github.action_path }}" && npm ci --no-audit --no-fund && npm run build
+        mkdir -p "$RUNNER_TEMP/bin" && ln -sf "$PWD/dist/cli/amness.js" "$RUNNER_TEMP/bin/amness" && chmod +x dist/cli/amness.js
+        echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+    - name: Run the task
+      id: run
+      shell: bash
+      env:
+        INPUT_TASK: ${{ inputs.task }}
+        INPUT_VERIFY: ${{ inputs.verify }}
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_MAX: ${{ inputs.max-tokens }}
+      run: |
+        args=(run --json --provider "$INPUT_PROVIDER" --max-tokens "$INPUT_MAX")
+        [ -n "$INPUT_MODEL" ] && args+=(--model "$INPUT_MODEL")
+        [ -n "$INPUT_VERIFY" ] && args+=(--verify "$INPUT_VERIFY")
+        set +e
+        amness "${args[@]}" "$INPUT_TASK" > "$RUNNER_TEMP/amness-result.jsonl" 2> "$RUNNER_TEMP/amness-log.txt"
+        code=$?
+        tail -n 1 "$RUNNER_TEMP/amness-result.jsonl" > "$RUNNER_TEMP/amness-final.json"
+        echo "finished=$([ $code -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        {
+          echo "### Amness"
+          [ $code -eq 0 ] && echo "Finished." || echo "**Did not finish** (exit $code)."
+          echo; echo '```'; node -e 'try{const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log((r.text||r.message||"").slice(0,3000));console.log("\nsteps: "+r.steps+" · tokens: "+r.tokens)}catch{console.log("(no result)")}' "$RUNNER_TEMP/amness-final.json"; echo '```'
+        } | tee -a "$GITHUB_STEP_SUMMARY" > "$RUNNER_TEMP/amness-comment.md"
+        exit 0
+    - name: Comment on the pull request
+      if: inputs.comment == 'true' && github.event.pull_request
+      shell: bash
+      env: { GH_TOKEN: "${{ github.token }}", PR: "${{ github.event.pull_request.number }}" }
+      run: gh pr comment "$PR" --body-file "$RUNNER_TEMP/amness-comment.md"
