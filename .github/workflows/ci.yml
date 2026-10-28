@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -t amness .
       - run: docker run --rm amness --version
-      - run: docker run --rm amness eval --selftest --only sum-bug 2>&1 | tail -3
+      - run: docker run --rm amness eval --selftest --only off-by-one
 
   windows:
     name: Windows (informational)
