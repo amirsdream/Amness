@@ -31,7 +31,7 @@ test("procs: a process that exits reports its code; stderr is captured; waiting 
 test("procs: output is bounded, the limit on concurrent processes holds, unknown ids explain themselves, dispose kills everything", async () => {
   const m = new ProcessManager(dir(), { max: 2 });
   const big = m.start(`node -e "for(let i=0;i<30000;i++)console.log('line '+i+' '+'x'.repeat(20))"`);
-  await sleep(600); const r = await m.read(big.id, { maxChars: 500 }); assert.ok(r.output.length <= 500 && r.skipped > 100_000 && /line 29999/.test(r.output));
+  for (let i = 0; i < 40 && m.list().find((p) => p.id === big.id)?.status === "running"; i++) await sleep(250); const r = await m.read(big.id, { maxChars: 500 }); assert.ok(r.output.length <= 500 && r.skipped > 100_000 && /line 29999/.test(r.output));
   const a = m.start("sleep 30"), b = m.start("sleep 30"); assert.throws(() => m.start("sleep 30"), /already running 2/);
   await assert.rejects(m.read("nope"), /no background process "nope"/);
   await m.dispose(); await sleep(100); assert.ok(!alive(a.pid!) && !alive(b.pid!)); assert.deepEqual(m.list().filter((p) => p.status === "running"), []);
