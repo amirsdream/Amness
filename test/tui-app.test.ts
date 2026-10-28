@@ -403,3 +403,15 @@ test("reasoning summaries stream into the status area live and disappear when th
   assert.match(out, /est\. cost\s+<\$0\.01\s+at \$2\/\$10 per M tokens, cached input at 10%/);
   await t.key(KEY.ctrlD);
 });
+
+test("/branch N forks the conversation after turn N, restores the files to that point and keeps the original's history out of the fork", async () => {
+  const t = rig([say("first"), call("read_file", { path: "a.txt" }), call("write_file", { path: "a.txt", content: "SECOND\n" }), say("second")]); await t.start();
+  await t.key(KEY.backtab); await t.submit("one"); assert.ok(await t.until(() => t.idle()));
+  await t.submit("two"); assert.ok(await t.until(() => t.idle() && t.app.session.turns.length === 2));
+  assert.equal(readFileSync(join(t.dir, "a.txt"), "utf8"), "SECOND\n");
+  const parentId = t.app.session.id, parentMsgs = t.app.session.messages.length;
+  await t.submit("/branch 1"); assert.ok(await t.until(() => t.has("branched after turn 1")));
+  assert.equal(readFileSync(join(t.dir, "a.txt"), "utf8"), "one\ntwo\n");
+  assert.equal(t.app.session.turns.length, 1); assert.notEqual(t.app.session.id, parentId); assert.equal(t.app.session.parent?.id, parentId); assert.ok(t.app.session.messages.length < parentMsgs);
+  await t.key(KEY.ctrlD);
+});

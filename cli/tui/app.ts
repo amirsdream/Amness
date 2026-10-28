@@ -24,7 +24,7 @@ import { Pager, transcriptLines } from "./pager.ts";
 import { TIPS, at, brandOf, fg, palette, shimmer, sparkline } from "./theme.ts";
 import { contextWindow, estimateCost, fmtCost, fmtDuration, fmtTokens, priceOf } from "./pricing.ts";
 import { Screen, type Out } from "./screen.ts";
-import { SessionStore, newSession, rewindFull, snapshot, type SessionData, type Turn } from "./session.ts";
+import { SessionStore, forkSession, newSession, rewindFull, snapshot, type SessionData, type Turn } from "./session.ts";
 import { basename } from "node:path";
 import { cellWidth, clipWidth, wrapAnsi } from "./text.ts";
 import { assistantBlock, editSummary, footer, helpLines, isFailure, renderDiff, todoList, toolCall, toolHeader, toolResult, userMessage, welcome } from "./view.ts";
@@ -120,7 +120,7 @@ export class App {
     }
     this.agent = createCodeAgent({
       model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, ...this.profileOptions(), embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, rules: this.rules, ...this.profileOptions(), embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
   }
@@ -583,6 +583,13 @@ export class App {
     this.pendingEdits.clear(); this.recount(); this.saveSession(); this.rebuildBlocks();
     this.commit(["", `  ${green("↩")} ${dim(`rewound the conversation to before turn ${idx + 1}`)}${r.restored.length || r.removed.length ? dim(` · restored ${r.restored.length} file(s), removed ${r.removed.length}`) : ""}${r.tree ? dim(` · undid shell changes: ${r.tree.restored.length} restored, ${r.tree.removed.length} removed`) : ""}`, ...(r.treeError ? [`  ${yellow("!")} ${dim("could not undo shell changes: " + r.treeError)}`] : []), ...(r.irreversible.length ? [`  ${yellow("!")} ${dim("these commands had effects undo cannot take back:")}`, ...r.irreversible.map((x: string) => `     ${dim(x)}`)] : [])]);
     this.render();
+  }
+  /** Fork the conversation after turn `idx`. The current conversation is saved as it is; the working tree is put back to how it was at that point. */
+  async branchAfter(idx: number) {
+    const before = this.session, fork = forkSession(before, idx); this.saveSession();
+    let files = ""; if (idx + 1 < before.turns.length) { const r = await rewindFull(structuredClone(before), this.cwd, idx + 1, this.snaps); files = ` · restored ${r.restored.length} file(s), removed ${r.removed.length}${r.tree ? ", undid shell changes" : ""}`; }
+    this.session = fork; this.recount(); this.edits = []; this.pendingEdits.clear(); this.saveSession(); this.rebuildBlocks();
+    this.commit(["", `  ${green("⑂")} ${dim(`branched after turn ${idx + 1} of "${before.title || "(untitled)"}"${files}`)}`, dim("  the original is kept: /branches switches back (files are not swapped back automatically)")]); this.render();
   }
   /** Switch UI mode live. History is kept in the block store, so nothing is lost either way. */
   switchUi(to: "full" | "inline") {

@@ -1,4 +1,5 @@
 // Slash commands. Each gets the running App and the raw argument string.
+import { relatives } from "./session.ts";
 import { join, resolve } from "node:path";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, type ProviderId } from "../config.ts";
@@ -114,6 +115,21 @@ export function buildCommands(): Cmd[] {
       const id = await a.pick("Resume", list.map((s) => ({ label: s.title || "(untitled)", value: s.id, hint: `${s.turns} turns · ${s.updated.slice(0, 16).replace("T", " ")} · ${s.model}` })));
       const s = id && a.store.load(id); if (!s) return;
       a.loadSession(s); a.rebuildBlocks(); a.commit(["", `  ${green("↻")} ${dim(`resumed "${s.title}" (${s.turns.length} turns)`)}`]);
+    } },
+    { name: "branch", help: "fork the conversation from an earlier turn (the current one stays available in /branches)", args: "[turn]", run: async (a, arg) => {
+      if (a.running) return void a.say("wait for the current turn to finish", dim);
+      if (!a.session.turns.length) return void a.say("nothing to branch from yet", dim);
+      const n = arg.trim() ? Number(arg) : await a.pick("Branch after turn…", a.session.turns.map((t, i) => ({ label: `${i + 1}. ${t.text.replace(/\s+/g, " ").slice(0, 60)}`, value: i + 1 })).reverse());
+      if (!n || !Number.isInteger(n) || n < 1 || n > a.session.turns.length) return void a.say(`give a turn number from 1 to ${a.session.turns.length}`, dim);
+      await a.branchAfter(n - 1);
+    } },
+    { name: "branches", help: "switch between branches of this conversation", run: async (a) => {
+      const all = a.store.list().map((i) => a.store.load(i.id)!).filter(Boolean); if (a.session.turns.length) all.push(a.session);
+      const ids = new Set(relatives(Array.from(new Map(all.map((s) => [s.id, s])).values()), a.session.id)); const list = a.store.list().filter((s) => ids.has(s.id) && s.id !== a.session.id);
+      if (!list.length) return void a.say("this conversation has no other branches (/branch forks one)", dim);
+      const id = await a.pick("Branches", list.map((s) => ({ label: s.title || "(untitled)", value: s.id, hint: `${s.turns} turns · ${s.updated.slice(0, 16).replace("T", " ")}` })));
+      const s = id && a.store.load(id); if (!s) return;
+      a.loadSession(s); a.rebuildBlocks(); a.commit(["", `  ${green("↻")} ${dim(`switched to "${s.title}" (${s.turns.length} turns)`)}`, dim("  files are not swapped: they stay as they are now. Use /rewind or git if this branch expects different files.")]);
     } },
     { name: "export", help: "save a portable session bundle", args: "[file]", run: async (a, arg) => {
       if (!a.session.turns.length) return void a.say("nothing to export yet", dim);

@@ -50,9 +50,9 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G15 | Prompt-injection and secrets hardening | P2 | M | [x] |
 | G16 | Editor integration (ACP server, VS Code) | P3 | L | [ ] |
 | G17 | Image input (screenshots) | P3 | M | [ ] |
-| G18 | Session branching | P3 | M | [ ] |
+| G18 | Session branching | P3 | M | [~] |
 | G19 | Scheduled and background agents; GitHub Action | P3 | L | [ ] |
-| G20 | LLM approval reviewer for risky calls | P3 | M | [ ] |
+| G20 | LLM approval reviewer for risky calls | P3 | M | [~] |
 | G21 | Windows support (tested) and a built, tested Docker image | P3 | M | [ ] |
 | G22 | Publish to npm (needs a build step or a bundled runtime) | P3 | M | [ ] |
 | L1 | Grounded finish gate: claims ledger and scope audit | P1 | M | [~] |
@@ -301,6 +301,8 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G18** (partly): /branch [n] forks after turn n and restores files via rewind; /branches switches conversations; files are not swapped back on switch
+- **G20** (partly): src/approver.ts: reviewer model may approve (never deny); floor and taint calls skip it; any failure escalates to the user; approvalReviewer config/--approval-reviewer; scripted tests only
 - **L13** (partly): src/parallel.ts parallelParts (worktrees, per-part verify, one-at-a-time merge with revert) + amness run --parts; coordinator that splits a task automatically is not built; not measured
 - **L11** (partly): src/parallel.ts bestOfN (escalating, extra checks, judge, token cap) + amness run --best-of; tested with scripted agents, not measured
 - **L12** (partly): src/tune.ts + amness tune: fixed small search space, train split then held-out gate, rollback; tested with a scripted harness, not run on a real model

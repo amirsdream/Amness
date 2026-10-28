@@ -13,6 +13,7 @@ export const HELP = `usage: amness run [flags] "task"
   --sandbox <mode>     run shell commands under an OS sandbox: workspace (write only in the project and temp folders) or strict (also no network)
   --review             an independent reviewer writes acceptance criteria first and checks the work before it is accepted (extra model calls)
   --trace <file>       write a JSONL trace of every loop event (also AMNESS_OTLP=<collector url> for OpenTelemetry export)
+  --approval-reviewer  a second model looks at each risky call first and approves clearly safe ones (without --yes, calls it does not clear are still denied)
   --check <cmd>        fast command run after every edit; failures are shown to the agent immediately
   --provider <id>      ${Object.keys(PROVIDERS).join(" | ")}    --model <id>    --base-url <url>    --effort none|low|medium|high|xhigh|max   --api auto|responses|chat
   --bundle <file>      continue from a portable session bundle (any provider/model)
@@ -73,7 +74,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   }
   const tracer = val("--trace") || process.env.AMNESS_OTLP ? new Tracer({ file: val("--trace") ? resolve(val("--trace")!) : undefined, otlp: process.env.AMNESS_OTLP, sessionId: `run-${Date.now()}`, model: cfg.model }) : undefined;
   const agent = createCodeAgent({
-    model, cwd, verify, check, approve, record: !!tracer || undefined, sandbox: (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox, review: bool("--review") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
+    model, cwd, verify, check, approve, record: !!tracer || undefined, sandbox: (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e: Event) => { live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
   try {

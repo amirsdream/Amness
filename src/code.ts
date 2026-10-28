@@ -11,6 +11,7 @@ import { MemoryStore, memoryTools } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
 import { ProcessManager } from "./procs.ts";
+import { reviewedApprove } from "./approver.ts";
 import { Diagnostics, type LspServer } from "./lsp.ts";
 import { Ledger } from "./ledger.ts";
 import { CodeIndex, indexTools } from "./codeindex.ts";
@@ -240,6 +241,8 @@ export type CodeAgentOptions = {
   sandbox?: SandboxMode | (() => SandboxMode);
   /** An independent, skeptical reviewer (a fresh context that cannot edit): it writes acceptance criteria before the work and checks the result against them before a finish is accepted. Costs extra model calls; off by default. `model` lets it be a different model. */
   review?: boolean | { model?: Model };
+  /** A second model looks at each risky call before the user is asked: it can approve (with a stated reason, logged as a policy event) or pass the call on. It never sees the safety floor or untrusted-text calls. Pass { model } to use a cheaper model. Costs one short model call per risky action. */
+  approvalReviewer?: boolean | { model?: Model };
   /** Turns without any measurable improvement before the loop reflects and then stops (default 8; 0 = off). */
   stagnationTurns?: number;
   /** Background process tools (sh_start / sh_read / sh_stop / sh_list). Default on. Call `agent.procs?.dispose()` when you are done. */
@@ -276,6 +279,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
   if (memory && o.embedder) memory.embedder = o.embedder;
   const mode = o.permissions?.mode;
+  const approve: Approve | undefined = o.approve && o.approvalReviewer ? reviewedApprove(o.approve, { model: (typeof o.approvalReviewer === "object" && o.approvalReviewer.model) || o.model, task: () => task, onDecision: (d) => o.onEvent?.({ kind: "policy", tool: d.tool, action: d.decision === "approve" ? "allow" : "ask", reason: `reviewer: ${d.reason}` }) }) : o.approve;
   const lsp = o.lsp ? new Diagnostics(o.cwd, typeof o.lsp === "object" ? o.lsp : {}) : undefined;
   const shellCheck = o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined;
   const postEdit = shellCheck || lsp ? async (paths: string[]) => (await shellCheck?.() ?? "") + (await lsp?.report(paths) ?? "") : undefined;
@@ -312,7 +316,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
             if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList));
             const r = await createHarness({
               model: (d.model && o.agentModels?.[d.model]) || o.model, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
-              budget: o.budget, signal: ctx.signal, approve: o.approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
+              budget: o.budget, signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
             }).run(description);
             let out = r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`;
             if (wt) {
@@ -361,7 +365,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, compactModel: o.models?.compact, system: o.chat ? CHAT_SYSTEM : CODE_SYSTEM, tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve: o.approve, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, approve, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 },
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 

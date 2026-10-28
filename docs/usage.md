@@ -64,6 +64,7 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/mode` · `/plan` · `/verify <cmd>` | permissions, plan mode, the "done must be proven" command |
 | `/clear` · `/compact` · `/resume` | new conversation, summarise to free context, continue an earlier one |
 | `/undo` · `/rewind` · `/diff` | revert the last turn (files and conversation), go back to a turn, review all changes |
+| `/branch [n]` · `/branches` | fork the conversation after turn n (files are restored to that point; the original is kept), switch between branches (conversation only: files are not swapped back) |
 | `/check <cmd>` | fast command run after every edit; only failures reach the model |
 | `/loop` (alias `/trace`) | step-by-step trace of the agent loop: each model turn, its tools and timings, and any guard that fired |
 | `/tokens` (alias `/cost`) | context gauge, what fills it, tokens, cache hits, estimated cost |
