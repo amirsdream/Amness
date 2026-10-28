@@ -46,7 +46,7 @@ export function toResponsesInput(msgs: Message[], model: string): { instructions
   const input: any[] = [];
   for (const m of msgs) {
     if (m.role === "system") instructions = (instructions ? instructions + "\n\n" : "") + (m.content ?? "");
-    else if (m.role === "user") input.push({ role: "user", content: m.content || "(continue)" });
+    else if (m.role === "user") input.push({ role: "user", content: m.images?.length ? [{ type: "input_text", text: m.content || "(continue)" }, ...m.images.map((i) => ({ type: "input_image", image_url: `data:${i.mime};base64,${i.data}` }))] : m.content || "(continue)" });
     else if (m.role === "tool") input.push({ type: "function_call_output", call_id: m.tool_call_id, output: m.content ?? "" });
     else {
       const raw = m.raw as { api?: string; model?: string; items?: any[] } | undefined;
@@ -202,7 +202,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
     const stream = !!o.onText;
     const body: any = {
       model,    // only wire fields: `raw` / `usage` belong to other adapters, and replayed tool calls need an explicit type
-      messages: messages.map(({ role, content, tool_calls, tool_call_id }) => ({ role, content, ...(tool_calls && { tool_calls: tool_calls.map((c) => ({ id: c.id, type: "function", function: c.function })) }), ...(tool_call_id && { tool_call_id }) })),
+      messages: messages.map(({ role, content, tool_calls, tool_call_id, images }) => ({ role, content: images?.length ? [{ type: "text", text: content || "(continue)" }, ...images.map((i) => ({ type: "image_url", image_url: { url: `data:${i.mime};base64,${i.data}` } }))] : content, ...(tool_calls && { tool_calls: tool_calls.map((c) => ({ id: c.id, type: "function", function: c.function })) }), ...(tool_call_id && { tool_call_id }) })),
       ...(tools.length && { tools: tools.map((t) => ({ type: "function", function: t })) }),
       ...(stream && { stream: true, stream_options: { include_usage: true } }),
       ...(chatNoReasoning && isReasoningModel(model) ? { reasoning_effort: "none" } : opts.effort && isReasoningModel(model) && sendEffort ? { reasoning_effort: opts.effort } : {}),

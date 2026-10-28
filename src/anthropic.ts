@@ -35,7 +35,7 @@ export function toAnthropic(msgs: Message[]): { system?: string; messages: any[]
   };
   for (const m of msgs) {
     if (m.role === "system") system = (system ? system + "\n\n" : "") + (m.content ?? "");
-    else if (m.role === "user") push("user", [{ type: "text", text: m.content || "(continue)" }]);
+    else if (m.role === "user") push("user", [...(m.images ?? []).map((i) => ({ type: "image", source: { type: "base64", media_type: i.mime, data: i.data } })), { type: "text", text: m.content || "(continue)" }]);
     else if (m.role === "tool") push("user", [{ type: "tool_result", tool_use_id: m.tool_call_id, content: m.content ?? "", ...(isError(m.content) && { is_error: true }) }]);
     else {
       const blocks = Array.isArray(m.raw) ? m.raw : [

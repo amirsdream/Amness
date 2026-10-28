@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
@@ -392,7 +392,10 @@ export class App {
   }
 
   async turn(text: string) {
-    const { text: expanded, attached } = expandMentions(text, this.cwd);
+    const { text: expanded, attached, images: found, problems } = expandMentions(text, this.cwd);
+    const vision = visionLikely(this.cfg.provider, this.cfg.model), images = vision ? found : [];
+    for (const p of problems) this.note(p);
+    if (found.length && !vision) this.note(`${this.cfg.model} does not look like a vision model: ${found.length} image(s) not sent. Use a model that accepts images (for example gpt-5 or Claude).`);
     const prefix = [this.modeNotice, ...this.pendingContext].filter(Boolean).join("\n\n"); this.modeNotice = ""; this.pendingContext = [];
     const full = prefix ? `${prefix}\n\n${expanded}` : expanded;
     this.addUser(text, attachedNote(attached) || undefined);
@@ -405,7 +408,7 @@ export class App {
     this.ensureTimer(); this.render();
     let ok = false;
     try {
-      const r = await this.agent.chat(this.session.messages, full);
+      const r = await this.agent.chat(this.session.messages, full, { images });
       this.session.messages = r.messages; ok = true;
       if (r.stopped === "budget") this.notify("error", r.text, ["", `  ${red("$")} ${r.text}`]);
       else if (r.stopped === "stuck") this.notify("warn", r.text + "; tell it what to try next", ["", `  ${yellow("!")} ${r.text}; tell it what to try next`]);

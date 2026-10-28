@@ -261,7 +261,7 @@ export type CodeAgentOptions = {
   meta?: { provider?: string; model?: string };
 };
 
-export type RunOptions = { resume?: boolean; bundle?: Bundle | string; overwrite?: boolean };
+export type RunOptions = { /** pictures to show the model with the task (needs a vision-capable model) */ images?: { mime: string; data: string }[]; resume?: boolean; bundle?: Bundle | string; overwrite?: boolean };
 
 export function createCodeAgent(o: CodeAgentOptions) {
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
@@ -386,7 +386,7 @@ ${note}
     warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },
     /** One conversational turn: `history` is everything so far (empty to start); returns the updated transcript in `messages`. */
-    async chat(history: Message[], userText: string) {
+    async chat(history: Message[], userText: string, extra: { images?: { mime: string; data: string }[] } = {}) {
       task ||= userText;
       let text = userText;
       const gate = await promptHooks(history.length === 0, userText); if (gate.block) return { text: gate.block, finished: false, steps: 0, messages: history, stopped: "blocked" as const, tokens: 0 };
@@ -397,8 +397,9 @@ ${note}
       if (!history.length) { rescanIndex(); rescanAgents(); rescan(); const sb = skillsBlock(skillList); if (sb) text += "\n\n" + sb; }
       if (!history.length && memory) { shown.clear(); const ctx = memory.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
       else if (memory) { const d = memory.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
-      const msgs: Message[] = history.length ? [...history, { role: "user", content: text }]
-        : [{ role: "system", content: o.chat ? CHAT_SYSTEM : CODE_SYSTEM }, { role: "user", content: text }];
+      const img = extra.images?.length ? { images: extra.images } : {};
+      const msgs: Message[] = history.length ? [...history, { role: "user", content: text, ...img }]
+        : [{ role: "system", content: o.chat ? CHAT_SYSTEM : CODE_SYSTEM }, { role: "user", content: text, ...img }];
       const res = await h.run(text, { resume: msgs });
       // Learning from outcomes: a finished (verified) run credits the notes that were in front of the model, a run that gave up or got stuck counts against them.
       memory?.endTurn(res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined);
@@ -421,6 +422,7 @@ ${note}
       if (guidance && !resume) { const g = guidance.start(); if (g) prompt += "\n\n" + g; }
       if (!resume) { rescanIndex(); rescan(); const sb = skillsBlock(skillList); if (sb) prompt += "\n\n" + sb; }
       if (memory && !resume) { const ctx = memory.context(prompt); if (ctx) prompt += "\n\n" + ctx; }
+      if (opts.images?.length && !resume) resume = [{ role: "system", content: o.chat ? CHAT_SYSTEM : CODE_SYSTEM }, { role: "user", content: prompt, images: opts.images }];
       return h.run(prompt, { resume });
     },
     /** Keep talking to the agent after it finished (or stopped): same conversation, full context. */

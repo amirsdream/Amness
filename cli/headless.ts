@@ -1,7 +1,7 @@
 // Non-interactive mode for CI, scripts and containers:  amness run [flags] "task"
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
+import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, loadConfig, ready, type ProviderId } from "./config.ts";
 import { formatEvent } from "./format.ts";
 import { createModel } from "./model.ts";
@@ -23,6 +23,7 @@ export const HELP = `usage: amness run [flags] "task"
   --live [port]        serve the live browser view
   --best-of <n>        attempt the task up to n times in separate git worktrees (stops at the first attempt that passes --verify, which is required); the winner is applied
   --parts <file.json>  run independent parts ([{"name","task"}]) concurrently in worktrees, merged one at a time through --verify; conflicts are reported, not applied
+  --image <file>       show the model a picture (png, jpg, gif, webp; up to 5 MB, repeat the flag for more, max 4); needs a vision-capable model
   --max-tokens <n>     hard token cap (default 300000)      --no-memory   disable memory
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
 
@@ -46,11 +47,14 @@ export async function runHeadless(argv: string[]): Promise<number> {
   const trustHooks = bool("--trust-project") || bool("--trust-hooks"), yes = bool("--yes"), json = bool("--json"), noMemory = bool("--no-memory");
   const li = args.indexOf("--live"); let livePort: number | undefined;
   if (li >= 0) { const nxt = args[li + 1]; livePort = /^\d+$/.test(nxt ?? "") ? Number(args.splice(li, 2)[1]) : (args.splice(li, 1), 0); }
+  const imagePaths: string[] = []; for (let v = val("--image"); v !== undefined; v = val("--image")) imagePaths.push(v);
   const maxTokens = Number(val("--max-tokens") ?? cfg.maxTokens);
   const task = args.join(" ").trim();
   if (!task && !bundle) { console.error(HELP); return 2; }
   if (!ready(cfg)) { console.error(`no API key for ${PROVIDERS[cfg.provider].label}. Set ${cfg.provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"} or run \`amness settings\`.`); return 2; }
 
+  if (imagePaths.length && !visionLikely(cfg.provider, cfg.model)) { console.error(`${cfg.model} does not look like a vision model; pick one that accepts images or drop --image`); return 2; }
+  let images; try { images = imagePaths.map((p) => readImage(resolve(p))); } catch (e) { console.error((e as Error).message); return 2; }
   const live = livePort === undefined ? undefined : await startLive({ port: livePort });
   if (live) console.error(`live view: ${live.url}`);
   const approve: Approve = yes ? () => true : () => "non-interactive run: risky commands are denied unless --yes is passed";
@@ -78,7 +82,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
     onEvent: (e: Event) => { live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
   try {
-    const r = await agent.run(task, { bundle });
+    const r = await agent.run(task, { bundle, images });
     if (exportTo) { await agent.exportBundle(r, exportTo); console.error(`session bundle: ${exportTo}`); }
     const out = { kind: "result", finished: r.finished, text: r.text, steps: r.steps, tokens: budget.tokens, stopped: r.stopped };
     if (json) console.log(JSON.stringify(out)); else console.log(r.text);

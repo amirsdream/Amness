@@ -4,7 +4,7 @@ import { ProgressTracker, type TurnFacts } from "./progress.ts";
 import { redact } from "./secrets.ts";
 export type ToolCall = { id: string; type?: "function"; function: { name: string; arguments: string } };
 export type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
-export type Message = { role: "system" | "user" | "assistant" | "tool"; content: string | null; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: Usage;
+export type Message = { role: "system" | "user" | "assistant" | "tool"; content: string | null; /** pictures attached to a user message (base64) */ images?: { mime: string; data: string }[]; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: Usage;
   /** Provider-native content blocks (e.g. Claude thinking blocks). Kept verbatim in history and handed back to the adapter. */
   raw?: unknown };
 export type ToolSpec = { name: string; description: string; parameters: Schema };
