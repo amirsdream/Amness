@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { createCodeAgent, runShell } from "./code.ts";
 import { routedModel } from "./router.ts";
 import { Budget, type Event, type Guard, type Model, type Tool } from "./harness.ts";
+import type { Profile } from "./profiles.ts";
 import { bootstrap, holm, mean, minDetectable, passPowK, signTest, type Interval } from "./stats.ts";
 
 export type Case = {
@@ -135,7 +136,7 @@ const FEATURES = ["index", "taint"] as const;
 export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
 
 /** Build a named variant of the code agent. Names: see VARIANT_HELP. */
-export function harnessVariant(model: Model, name: string, o: { maxSteps?: number; maxTokens?: number; /** the cheaper model for the `full+route` variant */ cheap?: Model; prices?: { strong: { input: number; output: number }; cheap: { input: number; output: number } } } = {}): Variant {
+export function harnessVariant(model: Model, name: string, o: { maxSteps?: number; maxTokens?: number; /** the cheaper model for the `full+route` variant */ cheap?: Model; /** harness settings to run under (used by `amness tune`) */ profile?: Profile; prices?: { strong: { input: number; output: number }; cheap: { input: number; output: number } } } = {}): Variant {
   const m = /^full-(.+)$/.exec(name), droppedRaw = m ? m[1] : undefined, dropped = droppedRaw && ALL_GUARDS.includes(droppedRaw as Guard) ? (droppedRaw as Guard) : undefined, feature = droppedRaw && (FEATURES as readonly string[]).includes(droppedRaw) ? droppedRaw : undefined;
   if (droppedRaw && !dropped && !feature) throw new Error(`unknown guard "${droppedRaw}" in variant "${name}". Guards: ${[...ALL_GUARDS, ...FEATURES].join(", ")}`);
   if (!droppedRaw && !["baseline", "full", "full+check", "full+review", "full+route", "no-gate"].includes(name)) throw new Error(`unknown variant "${name}". Known: ${VARIANT_HELP}`);
@@ -143,10 +144,10 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
     name,
     async run(c, dir) {
       const budget = new Budget({ maxTokens: o.maxTokens ?? 400_000 }), events: Record<string, number> = {};
-      const off = name === "baseline" ? ALL_GUARDS : dropped ? [dropped] : [];
+      const off = name === "baseline" ? ALL_GUARDS : [...(dropped ? [dropped] : []), ...(o.profile?.off ?? [])];
       if (name === "full+route" && !o.cheap) throw new Error("the full+route variant needs a cheap model: pass --cheap-model <id>");
       const r = await createCodeAgent({
-        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, cwd: dir, budget, maxSteps: o.maxSteps ?? 30, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
+        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, cwd: dir, budget, maxSteps: o.profile?.maxSteps ?? o.maxSteps ?? 30, stagnationTurns: o.profile?.stagnationTurns, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
         verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined, review: name === "full+review" || undefined,
         onEvent: (e: Event) => { if (e.kind !== "text" && e.kind !== "thinking" && e.kind !== "assistant" && e.kind !== "toolstart" && e.kind !== "phase") events[e.kind] = (events[e.kind] ?? 0) + 1; },
       }).run(c.task);

@@ -1,7 +1,7 @@
 // `amness eval`: compare harness variants on a task suite, with statistics you can act on.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { adversarialCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
+import { tune, writeProfile, adversarialCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
 import { bold, dim, green, red } from "./ui.ts";
 
 export const EVAL_HELP = `usage: amness eval [flags]
@@ -73,5 +73,40 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelF
     }
     console.log("\n" + formatReport(analysis) + "\n\n" + dim(`raw results: ${out}  (re-analyse with: amness eval --report ${out})`));
     return 0;
+  } catch (e) { console.error(red("✗ " + (e as Error).message)); return 2; }
+}
+
+export const TUNE_HELP = `usage: amness tune [flags]
+  Try switching guards off (and changing a limit), one at a time, on part of your tasks; keep a change only if it also holds up on tasks the search never saw. Rolled back otherwise.
+  Writes nothing unless something survives both checks. Calls your model: it asks first.
+
+  --cases <dir>        your own tasks (default: the 13 built-in tasks)
+  --guards <a,b>       which guards to try removing (default: nudge, loop, stuck, wrapup, condense, stagnation)
+  --stagnation <n,n>   also try these stagnationTurns values
+  --trials <n>         attempts per task (default 2)
+  --max-steps <n>      steps per session (default 30)
+  --max-tokens <n>     token cap per session
+  --jobs <n>           sessions at once (default 1)
+  --seed <n>           seed for the split and the intervals
+  --profile-model <p>  the model name or pattern to write the profile for (default: the configured model)
+  --out <file>         where to write the profile (default .amness/profile.json)
+  --yes                skip the cost confirmation`;
+
+export async function runTune(argv: string[], deps: { model: () => Model; modelName: string; maxTokens: number; confirm: (q: string) => Promise<boolean> }): Promise<number> {
+  const val = (f: string) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; };
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(TUNE_HELP); return 0; }
+  try {
+    const cases = val("--cases") ? loadCases(resolve(val("--cases")!)) : builtinCases, model = deps.model(), maxTokens = Number(val("--max-tokens") ?? deps.maxTokens), maxSteps = Number(val("--max-steps") ?? 30);
+    const guards = val("--guards")?.split(",").map((s) => s.trim()) as any, stag = val("--stagnation")?.split(",").map(Number), trials = Math.max(1, Number(val("--trials") ?? 2));
+    const n = (guards?.length ?? 6) + (stag?.length ?? 0), runs = Math.round(cases.length * 0.66) * 2 * trials * n + Math.max(1, Math.round(cases.length * 0.34)) * 2 * trials;
+    console.log(`${bold("plan")}  up to ${runs} agent sessions (${cases.length} tasks, ${n} candidate changes, ${trials} trial(s)), up to ${maxTokens.toLocaleString()} tokens each`);
+    if (!argv.includes("--yes") && !(await deps.confirm(`This calls your model up to ${(runs * maxTokens).toLocaleString()} tokens in the worst case. Continue?`))) return 1;
+    const r = await tune({ cases, trials, guards, stagnationTurns: stag, jobs: Number(val("--jobs") ?? 1), seed: val("--seed") ? Number(val("--seed")) : undefined,
+      makeVariant: (profile, name) => ({ ...harnessVariant(model, "full", { maxTokens, maxSteps, profile }), name }),
+      onStep: (s) => console.log(`  ${s.accepted ? green("keep") : red("drop")} ${s.stage === "heldout" ? "[held-out] " : ""}${s.change}  ${dim(s.why)}`) });
+    console.log(dim(`\n${r.strength}; held-out tasks: ${r.heldOut.join(", ") || "none"}`));
+    if (!r.accepted.length) { console.log("nothing survived both checks; no profile written."); return 0; }
+    const out = resolve(val("--out") ?? join(".amness", "profile.json")); writeProfile(out, val("--profile-model") ?? deps.modelName, r.profile);
+    console.log(`kept: ${r.accepted.join(", ")}\nprofile written to ${out}`); return 0;
   } catch (e) { console.error(red("✗ " + (e as Error).message)); return 2; }
 }

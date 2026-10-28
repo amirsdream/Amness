@@ -66,7 +66,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | L9 | Taint tracking and capability policy (out-of-band enforcement) | P2 | L | [~] |
 | L10 | Reversible actions: transactions over files and shell | P2 | L | [x] |
 | L11 | Best-of-n with a hybrid verifier, escalated only when needed | P3 | L | [ ] |
-| L12 | `amness tune`: bounded self-improvement with held-out gates | P3 | L | [ ] |
+| L12 | `amness tune`: bounded self-improvement with held-out gates | P3 | L | [~] |
 | L13 | Parallel worktree agents with a test-gated merge | P3 | L | [ ] |
 | L14 | Benchmark adapters with leak audit and cost per solve | P3 | L | [~] |
 | G23 | README: shorter landing page, details moved to docs/ (see below) | P1 | M | [x] |
@@ -301,6 +301,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **L12** (partly): src/tune.ts + amness tune: fixed small search space, train split then held-out gate, rollback; tested with a scripted harness, not run on a real model
 - **G11** (partly): src/lsp.ts: minimal stdio LSP client, errors appended to edit results (opt-in lsp); tested with a fake server, not run against real servers
 - **G23**: README rewritten as a landing page (57 lines): benefit-first tagline, screenshot, a three-command quick start with a local-model line, five "what you get" bullets, a documentation index, safety in four lines and short limitations. Everything else moved unchanged into docs/ (usage, features, providers, headless, library, why, agent-loop, architecture, evaluation, safety, development, index). Links and anchors checked.
 - **G13**: amness --worktree [name] (own branch under .amness/worktrees, removed on exit when untouched), /review [base] (read-only reviewer over commits + uncommitted + untracked vs the base branch), /pr [draft] (model-drafted title/body shown first, gh pr create only after confirmation, push offered separately). src/gitflow.ts, src/worktree.ts, test/gitflow.test.ts (fake gh, local bare origin).

@@ -9,7 +9,7 @@ import { detectVerify } from "./detect.ts";
 import { HELP, runHeadless } from "./headless.ts";
 import { App } from "./tui/app.ts";
 import { builtinCases as cases } from "../src/evalcases.ts";
-import { runEval } from "./evalcli.ts";
+import { runEval, runTune } from "./evalcli.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, home, loadConfig, mask, ready, saveConfig, type Config, type ProviderId } from "./config.ts";
 import { DEMO_TASK, explain, runDemo } from "./demo.ts";
 import { formatEvent } from "./format.ts";
@@ -371,6 +371,7 @@ const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
   amness --worktree [name]     work in a fresh git worktree on its own branch (your checkout stays untouched)
   amness --inline | --full     choose the interface (default: full-screen; AMNESS_UI or /ui also work)
   amness eval [flags]          compare harness variants statistically (amness eval --help)
+  amness tune [flags]          find guard settings that hold up on unseen tasks (amness tune --help)
   amness demo                  guided demo, no API key needed
 
   inside the chat: /help for commands · @file to mention files · shift+tab to change permissions`;
@@ -435,6 +436,7 @@ async function main() {
   if (quick === "--version" || quick === "-v") return void console.log(VERSION);
   if (quick === "--help" || quick === "-h" || quick === "help") return void console.log(TOP_HELP);
   if (quick === "eval" && argv.length > 1) { process.exitCode = await runEval(argv.slice(1), { model: makeModel, modelFor: (id) => createModel({ ...cfg, model: id }), maxTokens: cfg.maxTokens, confirm }); return; }
+  if (quick === "tune") { process.exitCode = await runTune(argv.slice(1), { model: makeModel, modelName: cfg.model, maxTokens: cfg.maxTokens, confirm }); return; }
   if (quick === "traces") { process.exitCode = traces(argv.slice(1)); return; }
   if (quick === "replay") { process.exitCode = await runReplay(argv.slice(1)); return; }
   if (quick === "run") { process.exitCode = await runHeadless(argv.slice(1)); return; }
