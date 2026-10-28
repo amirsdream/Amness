@@ -14,7 +14,7 @@ const CAT: Record<string, string> = { loop: "stuck in a loop", nudge: "needed a 
 const shape = (s: string) => s.replace(/\s+/g, " ").replace(/0x[0-9a-f]+|\b[0-9a-f]{7,}\b/gi, "#").replace(/\b\d+(\.\d+)?\b/g, "N").replace(/(["'`])[^"'`]{1,60}\1/g, "$1…$1").replace(/(?:\/[\w.@-]+){2,}/g, "<path>").trim().slice(0, 90);
 
 function parse(file: string): TraceLine[] { const out: TraceLine[] = []; try { for (const l of readFileSync(file, "utf8").split("\n")) if (l.trim()) { try { out.push(JSON.parse(l)); } catch { /* partial last line */ } } } catch { /* unreadable */ } return out; }
-const sessionOf = (file: string) => file.split("/").pop()!.replace(/\.jsonl$/, "");
+const sessionOf = (file: string) => file.split(/[\\/]/).pop()!.replace(/\.jsonl$/, "");
 const lastUser = (m: unknown) => { const arr = (Array.isArray(m) ? m : []) as { role?: string; content?: string }[]; const u = [...arr].reverse().find((x) => x.role === "user"); return (u?.content ?? "").split("\n\n## ")[0].split("\n\n[hook")[0].slice(0, 300); };
 
 export function readFailures(dir: string): { failures: Failure[]; traces: TraceSummary[] } {

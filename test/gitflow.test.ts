@@ -22,7 +22,7 @@ test("gitflow: base branch, current branch, and a review diff that includes comm
   assert.match((await diffForReview(d, "HEAD")).diff, /\+new file/);
 });
 
-test("draftPr parses the model's JSON and refuses unusable output; createPr calls gh with the title, body, base and draft flag", async () => {
+test("draftPr parses the model's JSON and refuses unusable output; createPr calls gh with the title, body, base and draft flag", { skip: process.platform === "win32" && "uses a POSIX shell script as a fake gh" }, async () => {
   const ok: Model = async () => ({ role: "assistant", content: '```json\n{"title": "Fix the thing", "body": "## What\\nFixed."}\n```' });
   assert.deepEqual(await draftPr(ok, { diff: "d", log: "l", branch: "b" }), { title: "Fix the thing", body: "## What\nFixed." });
   await assert.rejects(draftPr(async () => ({ role: "assistant", content: "sure, here you go" }), { diff: "", log: "", branch: "b" }), /usable title/);
@@ -32,7 +32,7 @@ test("draftPr parses the model's JSON and refuses unusable output; createPr call
 });
 
 test("session worktree: its own branch under .amness/worktrees; untouched ones are detected, ones with edits or commits are not", async () => {
-  const { d } = pair(), w = await createSessionWorktree(d, "try it!"); assert.equal(w.branch, "amness/try-it"); assert.ok(existsSync(join(w.dir, "a.txt")) && w.dir.includes(".amness/worktrees"));
+  const { d } = pair(), w = await createSessionWorktree(d, "try it!"); assert.equal(w.branch, "amness/try-it"); assert.ok(existsSync(join(w.dir, "a.txt")) && w.dir.replace(/\\/g, "/").includes(".amness/worktrees"));
   assert.equal(await worktreeIsUntouched(w.dir, w.base), true);
   writeFileSync(join(w.dir, "x.txt"), "x\n"); assert.equal(await worktreeIsUntouched(w.dir, w.base), false);
   git(w.dir, "add", "."); git(w.dir, "commit", "-qm", "work"); assert.equal(await worktreeIsUntouched(w.dir, w.base), false);                    // clean tree, but there is a commit
@@ -41,7 +41,7 @@ test("session worktree: its own branch under .amness/worktrees; untouched ones a
   await removeWorktree({ dir: w.dir, repo: w.repo });
 });
 
-test("TUI: /pr drafts, shows the text, asks before creating, offers to push first, and calls gh only after yes", async () => {
+test("TUI: /pr drafts, shows the text, asks before creating, offers to push first, and calls gh only after yes", { skip: process.platform === "win32" && "uses a POSIX shell script as a fake gh" }, async () => {
   const { call, say, rig, KEY } = await import("./helpers/apprig.ts");
   const { d } = pair(); git(d, "checkout", "-q", "-b", "feat"); writeFileSync(join(d, "a.txt"), "two\n"); git(d, "commit", "-qam", "make it two");
   const bin = mkdtempSync(join(tmpdir(), "amness-gh2-")), log = join(bin, "args.txt"); writeFileSync(join(bin, "gh"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo gh 2; exit 0; fi\nprintf '%s\\n' "$@" > ${log}\necho https://github.com/o/r/pull/9\n`); chmodSync(join(bin, "gh"), 0o755);

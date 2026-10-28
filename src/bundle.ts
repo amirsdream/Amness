@@ -28,7 +28,7 @@ export function collectFiles(cwd: string, paths: Iterable<string>): Record<strin
     if (!existsSync(abs) || !statSync(abs).isFile() || statSync(abs).size > MAX_FILE || total + statSync(abs).size > MAX_TOTAL) continue;
     const text = readFileSync(abs, "utf8");
     if (text.includes("\0")) continue; // binary
-    files[normalize(p)] = text; total += text.length;
+    files[normalize(p).replace(/\\/g, "/")] = text; total += text.length;
   }
   return files;
 }

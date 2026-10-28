@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
 import { childEnv, redact, runShell } from "../src/index.ts";
 
 test("redact: known token formats and credential assignments are masked; names and harmless values survive", () => {
@@ -17,5 +18,5 @@ test("childEnv: Amness's own keys never reach commands; strict mode also drops c
   assert.deepEqual(Object.keys(childEnv(env)).sort(), ["AWS_SECRET_ACCESS_KEY", "DB_PASSWORD", "HOME", "NPM_TOKEN", "PATH", "SSH_AUTH_SOCK"]);
   assert.deepEqual(Object.keys(childEnv(env, true)).sort(), ["HOME", "PATH", "SSH_AUTH_SOCK"]);
   process.env.OPENAI_API_KEY = "sk-should-not-leak"; process.env.MY_BUILD_FLAG = "yes";
-  const out = await runShell('echo "[$OPENAI_API_KEY] [$MY_BUILD_FLAG]"', "/tmp", 5000); assert.match(out, /\[\] \[yes\]/);
+  const out = await runShell('echo "[$OPENAI_API_KEY] [$MY_BUILD_FLAG]"', tmpdir(), 5000); assert.match(out, /\[\] \[yes\]/);
 });

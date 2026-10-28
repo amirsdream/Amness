@@ -13,7 +13,7 @@ const outside = () => mkdtempSync(join(process.env.HOME ?? "/", ".amness-sbtest-
 
 test("sandbox: off runs commands as before; a requested but unavailable sandbox refuses instead of running unprotected", async () => {
   assert.equal(wrapCommand("echo hi", "/tmp", "off"), undefined);
-  assert.match(await runShell("echo hi", "/tmp", 5000, undefined, "off"), /^exit=0\nhi/);
+  assert.match(await runShell("echo hi", tmpdir(), 5000, undefined, "off"), /^exit=0\nhi/);
   if (!kind) assert.match(await runShell("echo hi", "/tmp", 5000, undefined, "workspace"), /exit=126\nERROR: the sandbox is on/);
   else assert.match(seatbeltProfile("/tmp/x", "strict") + "(wrap)", /deny network|bwrap|wrap/);
 });
