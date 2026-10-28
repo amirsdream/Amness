@@ -10,6 +10,7 @@ import { createHarness, defineTool, clip, makeHandoff, Registry, type Approve, t
 import { MemoryStore, memoryTools } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
+import { posixShell, slash } from "./shell.ts";
 import { ProcessManager } from "./procs.ts";
 import { reviewedApprove } from "./approver.ts";
 import { Diagnostics, type LspServer } from "./lsp.ts";
@@ -47,7 +48,7 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
   const done = (err: any, out: string, errOut: string) => `exit=${err ? (err.name === "AbortError" ? "interrupted" : err.killed ? "timeout" : err.code ?? 1) : 0}\n${out}${errOut}`;
   return new Promise((res) => wrapped
     ? execFile(wrapped.file, wrapped.args, { cwd, env: childEnv(process.env, true), timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut)))
-    : exec(cmd, { cwd, env: childEnv(), timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut))));
+    : exec(cmd, { cwd, shell: process.platform === "win32" ? posixShell() : undefined, env: childEnv(), timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut))));
 }
 
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
@@ -70,7 +71,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
     for (const e of readdirSync(d).sort()) {
       if (IGNORE.has(e) || out.length >= 300) continue;
       const p = resolve(d, e);
-      statSync(p).isDirectory() ? walk(p, out) : out.push(relative(root, p));
+      statSync(p).isDirectory() ? walk(p, out) : out.push(slash(relative(root, p)));
     }
     return out;
   };

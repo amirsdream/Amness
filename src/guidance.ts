@@ -1,5 +1,6 @@
 // Project instruction files (AGENTS.md, with CLAUDE.md and GEMINI.md as fallbacks): loaded at the start of a conversation, and a folder's own file
 // the first time the agent works inside that folder. Nested files are appended to a tool result, at the END of the transcript, so the cached prefix is untouched.
+import { slash } from "./shell.ts";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -17,7 +18,7 @@ export class Guidance {
 
   private find(dir: string): string | undefined { for (const n of NAMES) { const f = join(dir, n); try { if (existsSync(f) && statSync(f).isFile()) return f; } catch { /* unreadable */ } } return undefined; }
   private read(f: string): string { let t = ""; try { t = readFileSync(f, "utf8").trim(); } catch { return ""; } return t.length > CAP ? t.slice(0, CAP) + `\n[... ${t.length - CAP} more characters not shown]` : t; }
-  private label(f: string) { return f.startsWith(this.root + sep) ? relative(this.root, f) : f.replace(homedir(), "~"); }
+  private label(f: string) { return f.startsWith(this.root + sep) ? slash(relative(this.root, f)) : f.replace(homedir(), "~"); }
 
   /** The user-level and project-root instructions; call once at the start of a conversation. Empty when there are none. */
   start(): string {

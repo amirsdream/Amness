@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Hooks, createCodeAgent, createHarness, defineTool, scrubbedEnv, type HookConfig, type Message, type Model } from "../src/index.ts";
 
 const dir = () => mkdtempSync(join(tmpdir(), "amness-hk-"));
-const script = (d: string, name: string, body: string) => { const f = join(d, name); writeFileSync(f, `#!/bin/sh\n${body}\n`); chmodSync(f, 0o755); return f; };
+const script = (d: string, name: string, body: string) => { const f = join(d, name); writeFileSync(f, `#!/bin/sh\n${body}\n`); chmodSync(f, 0o755); return f.replace(/\\/g, "/"); };
 let n = 0;
 const call = (name: string, args: unknown): Message => ({ role: "assistant", content: null, tool_calls: [{ id: "h" + ++n, function: { name, arguments: JSON.stringify(args) } }] });
 const scripted = (...r: Message[]) => { const seen: Message[][] = []; const model: Model = async (m) => { seen.push(m.map((x) => ({ ...x }))); return r.shift() ?? call("finish", { summary: "." }); }; return { model, seen }; };
@@ -24,8 +24,8 @@ test("hooks: exit 0 allows, exit 2 blocks with the script's message, JSON can ad
 });
 
 test("hooks: the event arrives as JSON on stdin; match filters by tool; the first block stops later hooks", async () => {
-  const d = dir(), out = join(d, "in.json");
-  const rec = script(d, "rec.sh", `cat > ${out}`), never = script(d, "never.sh", `touch ${join(d, "ran")}`), blk = script(d, "b.sh", "echo stop >&2; exit 2");
+  const d = dir(), out = join(d, "in.json").replace(/\\/g, "/");
+  const rec = script(d, "rec.sh", `cat > ${out}`), never = script(d, "never.sh", `touch ${join(d, "ran").replace(/\\/g, "/")}`), blk = script(d, "b.sh", "echo stop >&2; exit 2");
   await new Hooks({ PreToolUse: [{ command: rec, match: "sh|edit_file" }] }, d).run("PreToolUse", { tool: "sh", args: { cmd: "ls" } });
   const got = JSON.parse(readFileSync(out, "utf8")); assert.deepEqual([got.event, got.tool, got.args.cmd], ["PreToolUse", "sh", "ls"]); assert.equal(got.cwd, d);
   writeFileSync(out, "untouched"); await new Hooks({ PreToolUse: [{ command: rec, match: "sh" }] }, d).run("PreToolUse", { tool: "read_file", args: {} }); assert.equal(readFileSync(out, "utf8"), "untouched");

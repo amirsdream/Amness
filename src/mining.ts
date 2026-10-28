@@ -1,4 +1,5 @@
 // Failure mining: read the session traces, group what went wrong into recurring patterns, and turn a chosen failure into an eval task so it can never silently come back.
+import { slash } from "./shell.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, relative } from "node:path";
@@ -65,7 +66,7 @@ export function caseFromWorkspace(cwd: string, o: { name: string; task: string; 
   const add = (p: string, text: string) => { if (bytes + text.length > cap || text.length > 150_000 || text.includes("\u0000")) return; files[p] = text; bytes += text.length; };
   let tracked: string[] | undefined; try { tracked = execFileSync("git", ["ls-files", "-z"], { cwd, maxBuffer: 32 << 20 }).toString().split("\0").filter(Boolean); } catch { tracked = undefined; }
   if (tracked) for (const p of tracked) { if (!TEXT_EXT.has(extname(p).toLowerCase()) || /package-lock|yarn\.lock|pnpm-lock/.test(p)) continue; try { add(p, execFileSync("git", ["show", `HEAD:${p}`], { cwd, maxBuffer: 8 << 20 }).toString()); } catch { /* not committed yet */ } }
-  else { const walk = (d: string) => { for (const e of readdirSync(d).sort()) { if (["node_modules", ".git", ".amness", "dist", "build"].includes(e)) continue; const p = join(d, e), st = statSync(p); if (st.isDirectory()) walk(p); else if (TEXT_EXT.has(extname(e).toLowerCase())) { try { add(relative(cwd, p), readFileSync(p, "utf8")); } catch { /* skip */ } } } }; walk(cwd); }
+  else { const walk = (d: string) => { for (const e of readdirSync(d).sort()) { if (["node_modules", ".git", ".amness", "dist", "build"].includes(e)) continue; const p = join(d, e), st = statSync(p); if (st.isDirectory()) walk(p); else if (TEXT_EXT.has(extname(e).toLowerCase())) { try { add(slash(relative(cwd, p)), readFileSync(p, "utf8")); } catch { /* skip */ } } } }; walk(cwd); }
   const dir = o.dir ?? join(cwd, ".amness", "evals", "cases"); mkdirSync(dir, { recursive: true });
   const name = o.name.replace(/[^\w.-]+/g, "-").slice(0, 60), path = join(dir, `${name}.json`);
   writeFileSync(path, JSON.stringify({ name, task: o.task, verify: o.verify, check: o.check, files }, null, 1));

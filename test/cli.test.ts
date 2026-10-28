@@ -20,7 +20,7 @@ test("config round-trips, is private (0600), and env overrides saved values", ()
   delete process.env.OPENAI_API_KEY; delete process.env.AMNESS_MODEL;
   assert.equal(ready(defaults()), false);
   saveConfig({ ...defaults(), apiKey: "sk-abcdef123456", model: "m1" });
-  assert.equal(statSync(join(process.env.AMNESS_HOME, "config.json")).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(statSync(join(process.env.AMNESS_HOME, "config.json")).mode & 0o777, 0o600);
   assert.equal(loadConfig().model, "m1"); assert.ok(ready(loadConfig()));
   process.env.AMNESS_MODEL = "from-env"; process.env.OPENAI_API_KEY = "sk-env";
   assert.deepEqual([loadConfig().model, loadConfig().apiKey], ["from-env", "sk-env"]);

@@ -1,6 +1,7 @@
 // Skills: folders with a SKILL.md (name + description in front matter, instructions in the body, optional helper files). Only the name and one-line description go
 // in the prompt; the model loads the full text with the `skill` tool when it needs it ("progressive disclosure"), so many skills cost almost nothing until used.
 // Compatible folder conventions: .amness/skills, .agents/skills (Codex, Gemini CLI, OpenCode) and .claude/skills (Claude Code), in the project and in your home folder.
+import { slash } from "./shell.ts";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
@@ -49,7 +50,7 @@ export function skillsBlock(skills: Skill[]): string {
 
 /** `skill({ name })` returns the instructions plus the list of bundled files; `skill({ name, file })` returns one of those files. Nothing outside the skill's folder can be read. */
 export function skillTool(get: () => Skill[]): Tool {
-  const list = (base: string, dir = base, depth = 0): string[] => { let out: string[] = []; try { for (const e of readdirSync(dir).sort()) { if (e === "SKILL.md" || e.startsWith(".")) continue; const p = join(dir, e); if (statSync(p).isDirectory()) { if (depth < 2) out = out.concat(list(base, p, depth + 1)); } else out.push(relative(base, p)); } } catch { /* unreadable */ } return out; };
+  const list = (base: string, dir = base, depth = 0): string[] => { let out: string[] = []; try { for (const e of readdirSync(dir).sort()) { if (e === "SKILL.md" || e.startsWith(".")) continue; const p = join(dir, e); if (statSync(p).isDirectory()) { if (depth < 2) out = out.concat(list(base, p, depth + 1)); } else out.push(slash(relative(base, p))); } } catch { /* unreadable */ } return out; };
   return defineTool<{ name: string; file?: string }>({
     name: "skill", readOnly: true,
     description: "Load a skill's full instructions (and see its bundled files), or read one bundled file with `file`. Use the names listed under Skills.",
