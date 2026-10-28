@@ -24,7 +24,7 @@ test("budget stops the run cleanly and reports tokens", async () => {
   const events: Event[] = [];
   const { model } = scripted(call(["noop", { i: 1 }]), call(["noop", { i: 2 }]), call(["noop", { i: 3 }]), call(["finish", { summary: "x" }]));
   const r = await createHarness({ model, tools: [noop], budget, onEvent: (e) => events.push(e) }).run("t");
-  assert.equal(r.stopped, "budget"); assert.equal(r.finished, false); assert.equal(budget.tokens, 300);
+  assert.equal(r.stopped, "budget"); assert.equal(r.finished, false); assert.ok(budget.tokens <= 400);
   assert.ok(events.some((e) => e.kind === "budget"));
 });
 
@@ -134,4 +134,32 @@ test("evaluate runs cases x variants, judges with held-out check, aggregates", a
   assert.equal(summary[0].passRate, 0.5); assert.equal(summary[1].passRate, 0);
   assert.match(rows.find((r) => r.variant === "bad")!.note!, /crashed: boom/);
   assert.match(table, /good\s+4\s+50%/);
+});
+
+test("budget awareness: notes at 50% and 75%+, and a final no-tools report instead of a bare stop", async () => {
+  const noop = defineTool({ name: "noop", description: "", schema: { type: "object" }, run: () => "ok" }), budget = new Budget({ maxTokens: 1000 }), events: Event[] = [];
+  const replies: Message[] = Array.from({ length: 12 }, (_, i) => call(["noop", { i }]));
+  const seen: { n: number; tools: number; msgs: Message[] }[] = [];
+  const model: Model = async (msgs, specs) => { seen.push({ n: seen.length, tools: specs.length, msgs: msgs.map((m) => ({ ...m })) }); if (specs.length === 0) return { role: "assistant", content: "Found X; Y is left.", usage: { total_tokens: 100 } }; return { ...replies.shift()!, usage: { total_tokens: 100 } }; };
+  const r = await createHarness({ model, tools: [noop], budget, onEvent: (e) => events.push(e) }).run("t");
+  const notes = seen.at(-1)!.msgs.filter((m) => m.role === "user" && /^Budget: /.test(m.content ?? "")).map((m) => m.content!);
+  assert.equal(notes.length, 2); assert.match(notes[0], /50% used/); assert.match(notes[1], /80% used/);
+  assert.equal(r.stopped, "budget"); assert.match(r.text, /Found X; Y is left\./); assert.ok(budget.tokens <= 1000, `stayed within the cap, used ${budget.tokens}`);
+  assert.equal(seen.at(-1)!.tools, 0);
+  const off = await createHarness({ model: scripted(call(["noop", {}]), call(["noop", {}]), call(["noop", {}])).model, tools: [noop], budget: new Budget({ maxTokens: 250 }), off: ["wrapup"] }).run("t");
+  assert.equal(off.stopped, "budget"); assert.match(off.text, /^stopped: token budget exhausted/);
+});
+
+test("exploration that never closes: after 12 read-only turns the model is told to answer or act", async () => {
+  const look = defineTool({ name: "look", description: "", schema: { type: "object" }, readOnly: true, run: ({}: any) => "x" });
+  const { model, seen } = scripted(...Array.from({ length: 13 }, (_, i) => call(["look", { i }])), call(["finish", { summary: "done" }]));
+  await createHarness({ model, tools: [look], maxSteps: 30, off: ["stagnation", "loop"] }).run("explain it");
+  const notes = seen.at(-1)!.filter((m) => m.role === "user" && /only reading/.test(m.content ?? ""));
+  assert.equal(notes.length, 1); assert.match(notes[0].content!, /12 turns/);
+});
+
+test("the token cap counts cached input at a tenth, so a long cached session is not 'exhausted' early", () => {
+  const b = new Budget({ maxTokens: 1000 });
+  b.add({ role: "assistant", content: "", usage: { prompt_tokens: 5000, completion_tokens: 100, total_tokens: 5100, cached_tokens: 4800 } });
+  assert.equal(b.tokens, 5100); assert.equal(Math.round(b.effective), 780); assert.equal(b.exceeded(), null);
 });

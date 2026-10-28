@@ -341,3 +341,4 @@ Newest first. When an item is finished, tick it above and add one line here with
 - 2026-10-27: roadmap deepened with Track B (L1 to L14) from a second round of papers and engineering posts.
 
 - **Measured on gpt-6-luna (2026-10-29)**: built-in suite baseline 96% / full 100% / full+review 100% (tokens per solved task 9.2k / 8.3k / 14.7k), adversarial suite 100% for full, full-taint and baseline. No detectable effect of any guard on these easy tasks, and the reviewer cost ~77% more tokens for no gain here. L2/L3/L9 stay `[~]`: they need harder tasks. Details in docs/evaluation.md.
+- **Budget exhaustion fix (2026-10-29)**: a run that explored without closing hit the 300k cap with no answer. Added budget notes (50/75/90%), a final no-tools report before the cap, a 12-turn read-only check, and cached input counted at a tenth against the cap. Under the `wrapup` guard; scripted tests only. See docs/agent-loop.md.

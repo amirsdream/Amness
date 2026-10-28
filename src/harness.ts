@@ -95,9 +95,13 @@ export class Budget {
   tokens = 0; promptTokens = 0; completionTokens = 0; /** prompt tokens the provider served from its cache */ cachedTokens = 0; calls = 0; t0 = Date.now(); maxTokens: number; maxMs: number;
   constructor(o: { maxTokens?: number; maxMs?: number } = {}) { this.maxTokens = o.maxTokens ?? Infinity; this.maxMs = o.maxMs ?? Infinity; }
   add(m: Message) { this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.cachedTokens += m.usage?.cached_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
+  /** What the cap is measured in: tokens, with cached input counted at a tenth (it costs about that much, and a long session re-reads its history every turn). */
+  get effective() { return Math.max(0, this.tokens - 0.9 * this.cachedTokens); }
   get ms() { return Date.now() - this.t0; }
+  /** How much of the tightest cap is used, 0 to 1 (0 when there is no cap). */
+  get fraction() { return Math.max(Number.isFinite(this.maxTokens) ? this.effective / this.maxTokens : 0, Number.isFinite(this.maxMs) ? this.ms / this.maxMs : 0); }
   exceeded(): string | null {
-    return this.tokens >= this.maxTokens ? `token budget exhausted (${this.tokens}/${this.maxTokens})`
+    return this.effective >= this.maxTokens ? `token budget exhausted (${Math.round(this.effective)}/${this.maxTokens})`
       : this.ms >= this.maxMs ? `time budget exhausted (${Math.round(this.ms / 1000)}s)` : null;
   }
 }
@@ -325,6 +329,13 @@ export function createHarness(o: Options) {
   let approvals: Promise<unknown> = Promise.resolve(); // serialise prompts so parallel calls don't interleave questions
 
   let lastStep = 0;
+  /** One last answer when the budget is gone: no tools, just say what was found or done and what remains. */
+  async function finalReport(msgs: Message[], why: string): Promise<string> {
+    try {
+      const m = await o.model([...msgs, { role: "user", content: `Stop: ${why}. You cannot use any more tools. In plain text, give the user: what you found or did, the current state of the work, and what is left to do. Be brief.` }], [], { signal: sig() });
+      o.budget?.add(m); return (m.content ?? "").trim();
+    } catch { return ""; }
+  }
   /**
    * Re-send the conversation with a tiny output cap so the provider keeps the cached prefix alive during an idle gap (it costs a cache READ of
    * the prefix, a fraction of what a cold re-read costs). Returns how many prompt tokens were served from cache.
@@ -345,15 +356,33 @@ export function createHarness(o: Options) {
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
-    let sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
+    let budgetTier = 0, readStreak = 0, tokensAtStep = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     for (let step = 0; step < max; step++) {
       lastStep = step;
       if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
       for (const text of o.inbox?.() ?? []) { msgs.push({ role: "user", content: text }); emit({ kind: "steer", text }); }
-      const over = o.budget?.exceeded();
-      if (over) { emit({ kind: "budget", detail: over }); return end(`stopped: ${over}`, false, step, "budget"); }
+      // Budget awareness (after BATS, arXiv 2511.17006: agents that can see their remaining budget spend it better). A few notes at fixed fractions, appended at the end so the cached prefix stays intact;
+      // and when the cap is about to be hit, one last call without tools so the user gets what was found instead of a bare "budget exhausted".
+      const frac = o.budget?.fraction ?? 0, over = o.budget?.exceeded();
+      if (o.budget) { stepCost = Math.max(stepCost, o.budget.effective - tokensAtStep); tokensAtStep = o.budget.effective; }
+      const nearCap = !!o.budget && Number.isFinite(o.budget.maxTokens) && o.budget.effective + 2 * Math.max(stepCost, lastPrompt * 0.3) > o.budget.maxTokens;      // another step plus the final report would not fit
+      if (!off.has("wrapup") && frac > 0) {
+        if (over || frac >= 0.95 || (nearCap && step > 0)) {
+          emit({ kind: "budget", detail: over ?? `budget ${Math.round(frac * 100)}% used` });
+          const text = await finalReport(msgs, o.budget?.exceeded() ?? "the budget is almost used up");
+          return end(`stopped: ${over ?? "budget nearly exhausted"}${text ? `\n\n${text}` : ""}`, false, step, "budget");
+        }
+        const tier = frac >= 0.9 ? 3 : frac >= 0.75 ? 2 : frac >= 0.5 ? 1 : 0;
+        if (tier > budgetTier) {
+          budgetTier = tier; const pct = Math.round(frac * 100);
+          emit({ kind: "nudge", detail: `budget ${pct}% used` });
+          msgs.push({ role: "user", content: tier === 1 ? `Budget: ${pct}% used. Stop broad exploration: read only what you still need, and start working toward the result.`
+            : tier === 2 ? `Budget: ${pct}% used. Stop exploring now. Make the change or write the answer with what you already know, verify it if you can, and call \`finish\`.`
+            : `Budget: ${pct}% used, almost gone. Your next reply must be the result: call \`finish\` (or answer in text) with what you found or did and what remains.` });
+        }
+      } else if (over) { emit({ kind: "budget", detail: over }); return end(`stopped: ${over}`, false, step, "budget"); }
       const visible = reg.visible({ step, messages: msgs }), names = new Set(visible.map((t) => t.name));
       const menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => t.deferred && !reg.loaded.has(t.name)) : [];
       const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 80)}`).join("\n") }] : []), FINISH];
@@ -497,6 +526,15 @@ export function createHarness(o: Options) {
       if (ingress > 300) { emit({ kind: "trim", saved: ingress, what: "tool output condensed" }); } ingress = 0;
       m.tool_calls.forEach((c, i) => msgs.push({ role: "tool", tool_call_id: c.id, content: results[i] }));
       if (done !== undefined) return end(done, true, step + 1);
+      // Exploration that never closes: many turns of only reading. Say so once, then again after another stretch.
+      if (!off.has("wrapup")) {
+        const reads = m.tool_calls.every((c) => c.function.name !== "finish" && reg.get(c.function.name)?.readOnly === true);
+        readStreak = reads ? readStreak + 1 : 0;
+        if (readStreak > 0 && readStreak % 12 === 0) {
+          emit({ kind: "nudge", detail: `explored for ${readStreak} turns without acting` });
+          msgs.push({ role: "user", content: `You have spent ${readStreak} turns only reading. Stop and decide: if the task is a question, answer it now from what you have read; if it is a change, start it, or say what specific thing is blocking you. Read more only if you can name exactly what is still missing.` });
+        }
+      }
       // Stagnation: the loop keeps acting but nothing measurable improves (the model's own confidence says nothing about this).
       { const facts = { calls: turnCalls, edits: turnEdits }; turnCalls = []; turnEdits = []; const K = o.stagnationTurns ?? 8;
         if (K > 0 && !off.has("stagnation")) {

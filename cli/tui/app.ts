@@ -404,7 +404,7 @@ export class App {
     this.session.turns.push(turn);
     this.running = true; this.ac = new AbortController(); this.runStart = Date.now(); this.runTokens = 0; this.todos = []; this.runSeries = []; this.phase = undefined; this.activity = [];
     this.setTitle(`● working · ${basename(this.cwd)}`);
-    Object.assign(this.budget, { tokens: 0, calls: 0, t0: Date.now(), maxTokens: this.cfg.maxTokens, maxMs: 60 * 60_000 });
+    Object.assign(this.budget, { tokens: 0, cachedTokens: 0, calls: 0, t0: Date.now(), maxTokens: this.cfg.maxTokens, maxMs: 60 * 60_000 });
     this.ensureTimer(); this.render();
     let ok = false;
     try {

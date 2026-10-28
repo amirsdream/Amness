@@ -44,3 +44,13 @@ Recent work on coding-agent loops points the same way, and the loop follows it w
 - A [source-code study of eleven coding agents](https://arxiv.org/html/2609.00006v1): read-only tools run concurrently, mutating tools one at a time.
 
 The percentages above are the papers' results on their own benchmarks, not measurements of Amness; use the eval runner (`evaluate`) with the guards switched on and off to measure them on your tasks.
+
+## Budget awareness and runs that never close
+
+A task like "read the code and explain it" can keep reading until the token cap ends the run with nothing to show. Three things address it:
+
+- **The model sees its budget** (after [BATS, arXiv 2511.17006](https://arxiv.org/abs/2511.17006), where a plain budget tracker made agents spend tool calls better; the paper tests web-search agents, not coding agents). At 50% of the cap a note says to stop broad exploration, at 75% and 90% to produce the result. The notes are appended at the end of the conversation, so the provider's cached prefix is untouched.
+- **A final report instead of a bare stop.** When the next step plus a summary would no longer fit under the cap (or the cap is hit), the harness makes one last call without tools asking what was found, the state of the work and what remains, and returns that text. The run still counts as not finished.
+- **Exploration check.** After 12 turns in a row that only read, the model is told to answer (if the task is a question) or start (if it is a change), or to name exactly what is still missing; it repeats after another 12.
+
+Also, the token cap now counts cached input at a tenth of its size (what it costs), because a long session re-reads its whole history every turn and was being charged in full. The displayed token count is unchanged. All of this is under the `wrapup` guard. Tested with scripted models; whether it reduces exhausted runs on real tasks is not measured.
