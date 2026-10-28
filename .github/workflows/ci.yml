@@ -38,3 +38,48 @@ jobs:
           cache: npm
       - run: npm ci
       - run: python3 test/pty/tui.py
+
+  package:
+    name: npm package (build, pack, install, run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: install the tarball somewhere else and run it
+        run: |
+          mkdir "$RUNNER_TEMP/app" && cd "$RUNNER_TEMP/app" && npm init -y >/dev/null
+          npm install --no-audit --no-fund "$RUNNER_TEMP"/amness-*.tgz
+          npx amness --version
+          npx amness tune --help | head -1
+          node -e 'import("amness").then((m) => { if (typeof m.createCodeAgent !== "function") process.exit(1); })'
+
+  docker:
+    name: docker image (build and run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t amness .
+      - run: docker run --rm amness --version
+      - run: docker run --rm amness eval --selftest --only sum-bug 2>&1 | tail -3
+
+  windows:
+    name: Windows (informational)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

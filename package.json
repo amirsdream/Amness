@@ -1,7 +1,6 @@
 {
   "name": "amness",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "A terminal coding agent for any model: streaming chat TUI, permission modes, plan mode, undo, memory, MCP, with a small reliability harness underneath. OpenAI (Responses API), Claude, and local models.",
   "license": "MIT",
@@ -32,22 +31,26 @@
   "engines": {
     "node": ">=22.18"
   },
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
   },
   "bin": {
-    "amness": "./cli/amness.ts"
+    "amness": "./dist/cli/amness.js"
   },
   "scripts": {
     "start": "node cli/amness.ts",
     "chat": "node cli/amness.ts",
     "demo": "node cli/amness.ts demo",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
-    "build": "tsc",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "test": "node --test --test-timeout=180000 \"test/**/*.test.ts\"",
-    "test:pty": "python3 test/pty/tui.py"
+    "test:pty": "python3 test/pty/tui.py",
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
@@ -61,5 +64,11 @@
     "@anthropic-ai/sdk": {
       "optional": true
     }
-  }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ]
 }

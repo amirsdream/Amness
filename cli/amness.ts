@@ -358,7 +358,7 @@ async function settings() {
 }
 
 // ------------------------------------------------------------------ chat TUI
-const VERSION: string = (() => { try { return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version; } catch { return "0.0.0"; } })();
+const VERSION: string = (() => { for (const rel of ["../package.json", "../../package.json"]) { try { return JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8")).version; } catch { /* the built copy sits one folder deeper */ } } return "0.0.0"; })();
 const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
 
   amness                       start a conversation (chat TUI)

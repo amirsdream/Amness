@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "declaration": true,
+    "types": [
+      "node"
+    ],
+    "sourceMap": false
+  },
+  "include": [
+    "src",
+    "cli"
+  ]
+}
