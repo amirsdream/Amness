@@ -94,7 +94,14 @@ export type Event =
 export class Budget {
   tokens = 0; promptTokens = 0; completionTokens = 0; /** prompt tokens the provider served from its cache */ cachedTokens = 0; calls = 0; t0 = Date.now(); maxTokens: number; maxMs: number;
   constructor(o: { maxTokens?: number; maxMs?: number } = {}) { this.maxTokens = o.maxTokens ?? Infinity; this.maxMs = o.maxMs ?? Infinity; }
-  add(m: Message) { this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.cachedTokens += m.usage?.cached_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
+  /** Set on a slice made by `slice()`: everything it spends is charged to the parent too. */
+  parent?: Budget;
+  /** A smaller budget for a subagent: at most `share` of what is left here (and no more than `max` tokens). Its spending counts against this budget as well. */
+  slice(share: number, max = Infinity): Budget {
+    const left = Number.isFinite(this.maxTokens) ? Math.max(0, this.maxTokens - this.effective) : Infinity;
+    const b = new Budget({ maxTokens: Math.min(left * share, max), maxMs: Number.isFinite(this.maxMs) ? Math.max(1000, (this.maxMs - this.ms) * share) : undefined }); b.parent = this; return b;
+  }
+  add(m: Message) { this.parent?.add(m); this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.cachedTokens += m.usage?.cached_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
   /** What the cap is measured in: tokens, with cached input counted at a tenth (it costs about that much, and a long session re-reads its history every turn). */
   get effective() { return Math.max(0, this.tokens - 0.9 * this.cachedTokens); }
   get ms() { return Date.now() - this.t0; }

@@ -189,7 +189,7 @@ How to work:
 - Servers and watchers: start them with \`sh_start\` (plain \`sh\` waits for the command to end), read their output with \`sh_read\`, and \`sh_stop\` them when you are done.
 - Never invent file contents or command output. The user can type while you work; their new messages arrive between your steps, so adjust course when they do.`;
 
-const EXPLORE_SYSTEM = `You are a read-only code explorer working for another engineer. Investigate the question using list_files, read_file, grep and read-only shell commands. Report concisely: the answer, the relevant files with line numbers, and anything surprising. You cannot change anything. Finish with \`finish(summary)\`; the requester sees only that summary.`;
+const EXPLORE_SYSTEM = `You are a read-only code explorer working for another engineer. Investigate the question using list_files, read_file, grep and read-only shell commands. You have a small budget (about 12 tool calls): ask for the most informative things first (grep, then read only the relevant ranges), do not read whole files you do not need, and stop as soon as you can answer. If the question is too broad, answer what you can and say what you did not cover. Report concisely (under 300 words): the answer, the relevant files with line numbers, and anything surprising. You cannot change anything. Finish with \`finish(summary)\`; the requester sees only that summary.`;
 
 export type CodeAgentOptions = {
   /** Conversational mode (the TUI): chat prompt, plus todo_write, task (read-only explorer subagent) and exit_plan_mode tools. */
@@ -304,11 +304,13 @@ export function createCodeAgent(o: CodeAgentOptions) {
         schema: { type: "object", required: ["description"], properties: { description: { type: "string", description: "complete brief: the question or job, where to look, what to report" }, agent: { type: "string", description: "which agent (default: the read-only explorer)" } } },
         run: async ({ description, agent }, ctx) => {
           const d = agentOf(agent);
-          if (agent && agent !== "explore" && !d) return `ERROR: unknown agent "${agent}". Available: explore${agentList.map((a) => ", " + a.name).join("")}`;
+          const unknown = agent && !["explore", "explorer"].includes(agent.toLowerCase()) && !d ? agent : undefined;            // a wrong name should not cost a round trip: use the read-only explorer and say so
+          if (unknown) o.onEvent?.({ kind: "nudge", detail: `no agent named "${unknown}"; used the read-only explorer` });
           const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name } as unknown as Event);
           if (!d) {
-            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 20, budget: o.budget, signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
-            return r.text || "(the explorer returned nothing)";
+            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, budget: o.budget?.slice(0.2, 80_000), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";
+            return note + (r.text || "(the explorer returned nothing)");
           }
           const names = plan ? d.tools.filter((t) => !WRITE_TOOLS.has(t)) : d.tools, isolated = d.isolation === "worktree" && isWriter(d) && !plan;
           let wt: Worktree | undefined; if (isolated) { if (!(await isRepo(o.cwd))) return "ERROR: isolation: worktree needs a git repository with at least one commit"; wt = await createWorktree(o.cwd); }
@@ -317,7 +319,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
             if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList));
             const r = await createHarness({
               model: (d.model && o.agentModels?.[d.model]) || o.model, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
-              budget: o.budget, signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
+              budget: o.budget?.slice(0.3, 150_000), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
             }).run(description);
             let out = r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`;
             if (wt) {

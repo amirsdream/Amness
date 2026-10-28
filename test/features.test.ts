@@ -163,3 +163,10 @@ test("the token cap counts cached input at a tenth, so a long cached session is 
   b.add({ role: "assistant", content: "", usage: { prompt_tokens: 5000, completion_tokens: 100, total_tokens: 5100, cached_tokens: 4800 } });
   assert.equal(b.tokens, 5100); assert.equal(Math.round(b.effective), 780); assert.equal(b.exceeded(), null);
 });
+
+test("a budget slice is capped to a share of what is left and charges the parent too", () => {
+  const b = new Budget({ maxTokens: 1000 }); b.add({ role: "assistant", content: "", usage: { total_tokens: 400 } });
+  const s = b.slice(0.5, 250); assert.equal(s.maxTokens, 250); assert.equal(b.slice(0.5).maxTokens, 300);
+  s.add({ role: "assistant", content: "", usage: { total_tokens: 100 } }); assert.equal(s.tokens, 100); assert.equal(b.tokens, 500);
+  assert.equal(new Budget().slice(0.5).maxTokens, Infinity);
+});

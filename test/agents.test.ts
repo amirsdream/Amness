@@ -39,13 +39,13 @@ test("worktree: isolated copy of HEAD; changes come back as a diff; the main tre
 
 const lead = (cwd: string, leadQ: Message[], subModel: Model, extra: object = {}) => createCodeAgent({ model: async (m, s) => (m[0].content ?? "").includes("subagent") || /careful|reviewer/.test(m[0].content ?? "") ? subModel(m, s) : leadQ.shift()!, cwd, memory: false, guidance: false, chat: true, permissions: { mode: () => "yolo" }, ...extra });
 
-test("task tool: a custom read-only agent gets only its tools and its own prompt, returns only its summary, and unknown agents are refused", async () => {
+test("task tool: a custom read-only agent gets only its tools and its own prompt, returns only its summary, and an unknown agent name falls back to the explorer with a note", async () => {
   const d = repo(); put(d, ".amness/agents/reviewer.md", agentMd("reviewer", "tools: read_file, grep", "You are careful and review."));
   const seen: { sys: string; tools: string[] }[] = [];
   const sub: Model = async (m, s) => (seen.push({ sys: m[0].content ?? "", tools: s.map((x) => x.name) }), seen.length === 1 ? call("read_file", { path: "a.txt" }) : call("finish", { summary: "a.txt says one" }));
-  const a = lead(d, [call("task", { description: "check a.txt", agent: "reviewer" }), call("task", { description: "x", agent: "ghost" }), { role: "assistant", content: "done" }], sub);
+  const a = lead(d, [call("task", { description: "check a.txt", agent: "reviewer" }), call("task", { description: "x", agent: "ghost" }), call("finish", { summary: "explored" }), { role: "assistant", content: "done" }], sub);
   const r = await a.chat([], "go"), outs = r.messages.filter((m) => m.role === "tool").map((m) => m.content!);
-  assert.equal(outs[0], "a.txt says one"); assert.match(outs[1], /unknown agent "ghost". Available: explore, reviewer/);
+  assert.equal(outs[0], "a.txt says one"); assert.match(outs[1], /no agent named "ghost"; the read-only explorer answered. Available: explore, reviewer/);
   assert.match(seen[0].sys, /You are careful and review\./); assert.deepEqual(seen[0].tools.filter((t) => t !== "finish").sort(), ["grep", "read_file"]);
 });
 
