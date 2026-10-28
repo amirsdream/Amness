@@ -11,6 +11,7 @@ import { MemoryStore, memoryTools } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
 import { ProcessManager } from "./procs.ts";
+import { Diagnostics, type LspServer } from "./lsp.ts";
 import { Ledger } from "./ledger.ts";
 import { CodeIndex, indexTools } from "./codeindex.ts";
 import { AGENT_TOOLS, WRITE_TOOLS, isWriter, loadAgents, type AgentDef } from "./agents.ts";
@@ -49,7 +50,7 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
 }
 
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
-export function codeTools(cwd: string, o: { /** called before a command that may change files runs (snapshots, irreversibility notes) */ beforeShell?: (cmd: string) => Promise<void>; /** OS sandbox for shell commands, read each time so it can be switched live */ sandbox?: () => SandboxMode; /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: () => Promise<string> } = {}): Tool[] {
+export function codeTools(cwd: string, o: { /** called before a command that may change files runs (snapshots, irreversibility notes) */ beforeShell?: (cmd: string) => Promise<void>; /** OS sandbox for shell commands, read each time so it can be switched live */ sandbox?: () => SandboxMode; /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: (paths: string[]) => Promise<string> } = {}): Tool[] {
   const mode = o.mode;
   const mutating = mode ? { risky: () => (mode() === "default" ? "modify a file" : false), when: () => mode() !== "plan" } : {};
   const root = resolve(cwd);
@@ -99,7 +100,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
         const a = abs(path), before = existsSync(a) ? readFileSync(a, "utf8") : null;
         mkdirSync(dirname(a), { recursive: true }); writeFileSync(a, content); readSet.add(a); o.onChange?.(path);
         ctx.emit?.({ kind: "edit", ...unifiedDiff(path, before, content), before: before === null || before.length < 500_000 ? before : undefined });
-        return `wrote ${content.length} chars to ${path}` + (await o.check?.() ?? "") + (o.guidance?.nested(path) ?? "");
+        return `wrote ${content.length} chars to ${path}` + (await o.check?.([path]) ?? "") + (o.guidance?.nested(path) ?? "");
       } }),
     defineTool<{ path: string; old?: string; new?: string; edits?: { old: string; new: string }[] }>({ name: "edit_file", description: "Replace exact, unique text in a file you have read. Give `old` and `new`, or an `edits` list of several replacements applied in order (all or nothing). If the text differs only in indentation it is still matched when unique. Shows the result.",
       schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, old: { type: "string" }, new: { type: "string" }, edits: { type: "array", items: { type: "object", required: ["old", "new"], properties: { old: { type: "string" }, new: { type: "string" } } } } } }, ...mutating,
@@ -113,7 +114,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
         writeFileSync(a, r.out); o.onChange?.(path);
         ctx.emit?.({ kind: "edit", ...unifiedDiff(path, s, r.out), before: s.length < 500_000 ? s : undefined });
         const first = list[0], at = r.out.indexOf(first.new.split("\n")[0] ?? ""), line = at >= 0 ? r.out.slice(0, at).split("\n").length : 1;
-        return `edited ${path}${list.length > 1 ? ` (${list.length} edits)` : ""}${r.fuzzy ? `; ${r.fuzzy} matched ignoring indentation` : ""}:\n` + r.out.split("\n").slice(Math.max(0, line - 3), line + first.new.split("\n").length + 2).map((l, i) => `${Math.max(1, line - 2) + i}\t${l}`).join("\n") + (await o.check?.() ?? "") + (o.guidance?.nested(path) ?? "");
+        return `edited ${path}${list.length > 1 ? ` (${list.length} edits)` : ""}${r.fuzzy ? `; ${r.fuzzy} matched ignoring indentation` : ""}:\n` + r.out.split("\n").slice(Math.max(0, line - 3), line + first.new.split("\n").length + 2).map((l, i) => `${Math.max(1, line - 2) + i}\t${l}`).join("\n") + (await o.check?.([path]) ?? "") + (o.guidance?.nested(path) ?? "");
       } }),
     defineTool<{ patch?: string; file?: string }>({ name: "apply_patch", description: "Change several files at once with a patch, all or nothing. Format: `*** Begin Patch`, then per file `*** Update File: path` (hunks start with `@@`, lines begin with space, `-` or `+`), `*** Add File: path` (all lines start with `+`) or `*** Delete File: path`, then `*** End Patch`. A unified diff also works. Existing files must have been read first. Instead of `patch` you can pass `file`: a patch file inside the workspace (a subagent's saved result).",
       schema: { type: "object", properties: { patch: { type: "string" }, file: { type: "string" } } }, ...mutating,
@@ -133,7 +134,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
           ctx.emit?.({ kind: "edit", ...ch, before: x.before === null || x.before.length < 500_000 ? x.before : undefined });
           lines.push(`${x.after === null ? "deleted" : x.before === null ? "added" : "updated"} ${x.path} (+${ch.added} -${ch.removed})${x.fuzzy ? `, ${x.fuzzy} hunk(s) matched ignoring indentation` : ""}`);
         }
-        return `patched ${r.applied.length} file(s):\n${lines.join("\n")}` + (await o.check?.() ?? "") + (o.guidance?.nested(r.applied[0].path) ?? "");
+        return `patched ${r.applied.length} file(s):\n${lines.join("\n")}` + (await o.check?.(r.applied.filter((x) => x.after !== null).map((x) => x.path)) ?? "") + (o.guidance?.nested(r.applied[0].path) ?? "");
       } }),
     ...(o.procs ? bgTools(o.procs, shRisk, mode) : []),
     defineTool<{ cmd: string; timeout?: number }>({ name: "sh", description: "Run a shell command in the workspace; returns exit code and output. Dangerous commands need human approval.",
@@ -201,6 +202,8 @@ export type CodeAgentOptions = {
   verify?: string;
   /** Fast command (typecheck, lint) run after every edit. Only a failure is shown to the model, appended to the edit result, so mistakes are caught one step after they happen. */
   check?: string;
+  /** Ask an installed language server (typescript-language-server, pyright, gopls, rust-analyzer) for errors in each file after it is edited, and append them to the edit result. Pass servers to override the defaults. Off by default. */
+  lsp?: boolean | { servers?: LspServer[] };
   approve?: Approve;
   budget?: Budget;
   maxSteps?: number;
@@ -273,7 +276,10 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
   if (memory && o.embedder) memory.embedder = o.embedder;
   const mode = o.permissions?.mode;
-  const registry = new Registry([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
+  const lsp = o.lsp ? new Diagnostics(o.cwd, typeof o.lsp === "object" ? o.lsp : {}) : undefined;
+  const shellCheck = o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined;
+  const postEdit = shellCheck || lsp ? async (paths: string[]) => (await shellCheck?.() ?? "") + (await lsp?.report(paths) ?? "") : undefined;
+  const registry = new Registry([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: postEdit }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
   const shown = new Set<string>();   // memory notes already in this conversation
   const rescanIndex = () => { if (codeIndex && !registry.get("repo_map") && codeIndex.list().length >= indexMin) registry.add(...indexTools(codeIndex)); };
   rescan(); rescanIndex();
@@ -371,7 +377,7 @@ ${note}
   });
   return {
     /** The live toolbox: add/remove tools between or during runs. */
-    registry, memory, guidance, procs, codeIndex, get agents() { return agentList; }, get agentWarnings() { return agentWarnings; }, get skills() { return skillList; }, get skillWarnings() { return skillWarnings; },
+    registry, memory, guidance, procs, lsp, codeIndex, get agents() { return agentList; }, get agentWarnings() { return agentWarnings; }, get skills() { return skillList; }, get skillWarnings() { return skillWarnings; },
     /** Keep the provider's prompt cache alive across an idle gap (see createHarness().warm). */
     warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },

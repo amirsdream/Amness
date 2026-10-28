@@ -43,7 +43,7 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 | G8 | Custom subagents (and parallel worktree subagents) | P2 | M | [x] |
 | G9 | Model routing (cheap model for exploring and compacting) | P2 | S–M | [x] |
 | G10 | Code index / repo map | P2 | M | [x] |
-| G11 | Language-server diagnostics after edits | P2 | M | [ ] |
+| G11 | Language-server diagnostics after edits | P2 | M | [~] |
 | G12 | Tracing (JSONL trace file, OpenTelemetry export, cache-miss cost) | P2 | S–M | [x] |
 | G13 | Git worktrees, `/review`, pull-request helper | P2 | M | [x] |
 | G14 | Better loop detection (cycles, not only exact repeats) | P2 | S | [x] |
@@ -301,6 +301,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G11** (partly): src/lsp.ts: minimal stdio LSP client, errors appended to edit results (opt-in lsp); tested with a fake server, not run against real servers
 - **G23**: README rewritten as a landing page (57 lines): benefit-first tagline, screenshot, a three-command quick start with a local-model line, five "what you get" bullets, a documentation index, safety in four lines and short limitations. Everything else moved unchanged into docs/ (usage, features, providers, headless, library, why, agent-loop, architecture, evaluation, safety, development, index). Links and anchors checked.
 - **G13**: amness --worktree [name] (own branch under .amness/worktrees, removed on exit when untouched), /review [base] (read-only reviewer over commits + uncommitted + untracked vs the base branch), /pr [draft] (model-drafted title/body shown first, gh pr create only after confirmation, push offered separately). src/gitflow.ts, src/worktree.ts, test/gitflow.test.ts (fake gh, local bare origin).
 - **L10**: shell commands are reversible in git repositories: a working-tree snapshot (git tree object via a private index, ignored files excluded) is taken before the first mutating command of a turn, /undo and /rewind restore changed/deleted files and remove created ones after restoring tool edits; commands with effects beyond the workspace (push, publish, kubectl, db writes, ssh, writes outside) are flagged 'cannot be undone' in the approval dialog and listed on undo. src/snapshot.ts, test/snapshot.test.ts. Not covered: ignored files, non-git workspaces, overlay filesystems.
