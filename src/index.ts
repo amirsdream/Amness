@@ -39,3 +39,4 @@ export * from "./snapshot.ts";
 export * from "./gitflow.ts";
 export * from "./lsp.ts";
 export * from "./tune.ts";
+export * from "./parallel.ts";

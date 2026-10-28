@@ -1,7 +1,7 @@
 // Non-interactive mode for CI, scripts and containers:  amness run [flags] "task"
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, type Approve, type Event } from "../src/index.ts";
+import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, loadConfig, ready, type ProviderId } from "./config.ts";
 import { formatEvent } from "./format.ts";
 import { createModel } from "./model.ts";
@@ -20,6 +20,8 @@ export const HELP = `usage: amness run [flags] "task"
   --yes                auto-approve risky commands (default: deny them)
   --json               machine-readable: one JSON event per line on stdout, final {"kind":"result"} line
   --live [port]        serve the live browser view
+  --best-of <n>        attempt the task up to n times in separate git worktrees (stops at the first attempt that passes --verify, which is required); the winner is applied
+  --parts <file.json>  run independent parts ([{"name","task"}]) concurrently in worktrees, merged one at a time through --verify; conflicts are reported, not applied
   --max-tokens <n>     hard token cap (default 300000)      --no-memory   disable memory
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
 
@@ -53,6 +55,22 @@ export async function runHeadless(argv: string[]): Promise<number> {
   const approve: Approve = yes ? () => true : () => "non-interactive run: risky commands are denied unless --yes is passed";
   const budget = new Budget({ maxTokens });
   const model = createModel(cfg);
+  const bestOf = Number(val("--best-of") ?? 0), partsFile = val("--parts");
+  if (bestOf || partsFile) {
+    if (!verify) { console.error("--best-of and --parts need --verify <cmd>: that command is what decides which result is kept"); return 2; }
+    if (!(await isRepo(cwd))) { console.error("--best-of and --parts need a git repository with at least one commit"); return 2; }
+    try {
+      if (bestOf) {
+        const r = await bestOfN({ repo: cwd, n: bestOf, verify, apply: true, maxTokens, attempt: async (dir) => { const b = new Budget({ maxTokens: Math.max(1, Math.floor(maxTokens / bestOf)) }); const a = createCodeAgent({ model, cwd: dir, verify, approve, sandbox: cfg.sandbox, memory: false, budget: b }); const x = await a.run(task); await a.procs?.dispose(); return { tokens: b.tokens, summary: x.text }; }, onCandidate: (c) => console.error(`attempt ${c.index + 1}: ${c.passed ? "passed verify" : c.error ? "error: " + c.error : "failed verify"} (${c.tokens} tokens)`) });
+        if (json) console.log(JSON.stringify({ kind: "result", finished: !!r.winner, applied: r.applied, tokens: r.tokens, attempts: r.candidates.length })); else console.log(r.winner ? `attempt ${r.winner.index + 1} won and was ${r.applied ? "applied" : "NOT applied: " + r.applyError}\n${r.winner.summary ?? ""}` : `no attempt passed ${verify} (${r.candidates.length} tried, ${r.tokens} tokens)`);
+        return r.winner && r.applied ? 0 : 1;
+      }
+      const parts = JSON.parse(readFileSync(resolve(partsFile!), "utf8")) as { name: string; task: string }[];
+      const { results, tokens } = await parallelParts({ repo: cwd, parts, verify, maxTokens, attempt: async (p, dir) => { const b = new Budget({ maxTokens: Math.max(1, Math.floor(maxTokens / parts.length)) }); const a = createCodeAgent({ model, cwd: dir, verify, approve, sandbox: cfg.sandbox, memory: false, budget: b }); const x = await a.run(p.task); await a.procs?.dispose(); return { tokens: b.tokens, summary: x.text }; }, onPart: (r) => console.error(`${r.part.name}: ${r.status}${r.detail ? " - " + r.detail.split("\n")[0] : ""}`) });
+      if (json) console.log(JSON.stringify({ kind: "result", tokens, parts: results.map((r) => ({ name: r.part.name, status: r.status })) })); else for (const r of results) console.log(`${r.status.padEnd(14)} ${r.part.name}`);
+      return results.every((r) => r.status === "merged") ? 0 : 1;
+    } catch (e) { console.error("error: " + (e as Error).message); return 1; }
+  }
   const tracer = val("--trace") || process.env.AMNESS_OTLP ? new Tracer({ file: val("--trace") ? resolve(val("--trace")!) : undefined, otlp: process.env.AMNESS_OTLP, sessionId: `run-${Date.now()}`, model: cfg.model }) : undefined;
   const agent = createCodeAgent({
     model, cwd, verify, check, approve, record: !!tracer || undefined, sandbox: (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox, review: bool("--review") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },

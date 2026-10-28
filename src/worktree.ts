@@ -36,6 +36,12 @@ export async function applyDiff(cwd: string, diff: string): Promise<string | und
   try { await git(cwd, ["apply", "--check", "--whitespace=nowarn", "-"], diff + "\n"); await git(cwd, ["apply", "--whitespace=nowarn", "-"], diff + "\n"); return undefined; } catch (e) { return (e as Error).message; }
 }
 
+/** Undo a diff that was applied with applyDiff. */
+export async function revertDiff(cwd: string, diff: string): Promise<string | undefined> {
+  if (!diff.trim()) return undefined;
+  try { await git(cwd, ["apply", "-R", "--whitespace=nowarn", "-"], diff + "\n"); return undefined; } catch (e) { return (e as Error).message; }
+}
+
 /** A named, persistent worktree on its own branch (`amness/<name>`) inside the repository's `.amness/worktrees/`, for a whole working session. */
 export async function createSessionWorktree(repo: string, name: string): Promise<{ dir: string; branch: string; repo: string; /** the commit it branched from */ base: string }> {
   const root = (await git(repo, ["rev-parse", "--show-toplevel"])).trim(), clean = name.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
