@@ -130,7 +130,7 @@ export const TIPS = [
   "Keep typing while it works; Enter steers the agent mid-task",
   "/tokens shows what is eating your context window",
   "/plan makes it read-only until you approve a plan",
-  "#note saves a memory; !cmd runs a shell command right now",
+  "#note saves a memory; !ls runs a command right now",
   "Drop a markdown file in .amness/commands/ to add your own /command",
   "/verify npm test makes \"done\" mean the tests actually pass",
 ];

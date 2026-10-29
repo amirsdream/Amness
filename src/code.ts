@@ -44,6 +44,12 @@ export const READONLY_CMD = /^\s*(ls|cat|head|tail|wc|pwd|echo|grep|rg|tree|stat
 
 const IGNORE = new Set(["node_modules", ".git", "dist", ".amness", "__pycache__", ".venv"]);
 
+/** Explain "command not found" (exit 127): the name is not a program here, and say so when it is really one of the agent's own tools. */
+export function withNotFoundHint(out: string, isTool: (name: string) => boolean = () => false, forUser = false): string {
+  const miss = /^exit=127\b/.test(out) ? /(?:^|\n|: )([\w.@+-]+): (?:command )?not found/.exec(out)?.[1] : undefined;
+  if (!miss) return out;
+  return `${out.trimEnd()}\n[exit 127 means "${miss}" is not a program on this machine.${isTool(miss) ? `\n"${miss}" is one of your tools: call it as a tool, not as a command.` : ""}\n${forUser ? `After ! type a command, for example !ls or !git status.` : `Check the spelling, check that it is installed (for example: command -v ${miss}), or use a different command. The \`cmd\` argument must be a shell command line, such as "ls src".`}]`;
+}
 export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSignal, sandbox: SandboxMode = "off"): Promise<string> {
   let wrapped: ReturnType<typeof wrapCommand>;
   try { wrapped = wrapCommand(cmd, cwd, sandbox); } catch (e) { return Promise.resolve(`exit=126\nERROR: ${(e as Error).message}`); }          // asked for a sandbox we cannot provide: refuse, never run unprotected
@@ -158,8 +164,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
           return "ERROR: plan mode is read-only; only inspection commands are allowed (ls, cat, head, tail, grep, find, git status/log/diff/show, wc, pwd). Finish your plan and call exit_plan_mode.";
         if (o.beforeShell && !READONLY_CMD.test(cmd)) { try { await o.beforeShell(cmd); } catch { /* a failed snapshot must not stop the command */ } }
         const out = await runShell(cmd, root, (timeout ?? 60) * 1000, ctx.signal, o.sandbox?.() ?? "off");
-        const miss = /^exit=127\b/.test(out) ? /(?:^|\n|: )([\w.@+-]+): (?:command )?not found/.exec(out)?.[1] : undefined;
-        return miss ? `${out.trimEnd()}\n[exit 127 means "${miss}" is not a program on this machine. ${ctx.registry.get(miss) ? `"${miss}" is one of your tools: call it as a tool, not as a command. ` : ""}Check the spelling, check that it is installed (for example: command -v ${miss}), or use a different command. The \`cmd\` argument must be a shell command line, such as "ls src".]` : out;
+        return withNotFoundHint(out, (n) => !!ctx.registry.get(n));
       } }),
   ];
 }

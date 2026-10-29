@@ -300,7 +300,7 @@ export class FullView {
     shown.forEach((ln, i) => {
       const yy = y + 1 + i, prompt = i === 0 && first === 0 ? F(col, BOLD("❯")) : " ";
       c.ansi(x + 2, yy, prompt, { bg: t.surface });
-      if (empty && i === 0) c.ansi(x + 4, yy, F(t.faint, ITAL(app.running ? "Type to steer the agent…" : "Ask anything…   @ files  ·  / commands  ·  ! shell  ·  # remember")), { bg: t.surface }, innerW);
+      if (empty && i === 0) c.ansi(x + 4, yy, F(t.faint, ITAL(app.running ? "Type to steer the agent…" : "Ask anything…   @ files  ·  / commands  ·  !cmd run a command  ·  # remember")), { bg: t.surface }, innerW);
       else c.ansi(x + 4, yy, ln.replace(/(@[^\s]+)/g, (m) => F(t.accent2, m)).replace(/\[Pasted text #\d+ \+\d+ lines?\]/g, (m) => F(t.warn, m)), { bg: t.surface, fg: t.text }, innerW);
     });
     if (!app.overlay) c.cursor = { x: x + 4 + r.cursor.col, y: y + 1 + (r.cursor.row - first) };

@@ -386,11 +386,11 @@ export class App {
   }
 
   async bash(cmd: string) {
-    if (!cmd) return;
-    const { runShell } = await import("../../src/index.ts");
+    if (!cmd) return void this.say("After ! type a command to run it now, for example !ls or !git status. Its output is added to your next message.", dim);
+    const { runShell, withNotFoundHint } = await import("../../src/index.ts");
     const callId = "!" + Date.now();
     this.blocks.toolStart(callId, "sh", JSON.stringify({ cmd })); this.inlineOnly(["", toolHeader("sh", JSON.stringify({ cmd }), null).replace("Bash", "Bash!")]); this.render();
-    const out = await runShell(cmd, this.cwd, 120_000);
+    const out = withNotFoundHint(await runShell(cmd, this.cwd, 120_000), () => false, true);
     this.blocks.toolEnd(callId, out); this.inlineOnly(toolResult("sh", "{}", out, this.width));
     this.pendingContext.push(`I ran \`${cmd}\` in my terminal:\n${out.slice(0, 6000)}`);
     this.render();

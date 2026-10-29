@@ -39,7 +39,14 @@ test("/shell shows what is installed and lets you choose; an unknown or missing 
   const { rig, KEY } = await import("./helpers/apprig.ts"); const t = rig([]); await t.start();
   await t.submit("/shell"); assert.ok(await t.until(() => t.has("Installed here"))); assert.ok(t.has("Setting: auto"));
   await t.submit("/shell nonsense"); assert.ok(await t.until(() => t.has('unknown shell "nonsense"')));
-  await t.submit("/shell sh"); assert.ok(await t.until(() => t.has("shell: sh"))); assert.equal(t.app.cfg.shell, "sh");
+  await t.submit("/shell bash"); assert.ok(await t.until(() => t.has("shell: bash"))); assert.equal(t.app.cfg.shell, "bash");
   await t.submit("/shell auto"); assert.ok(await t.until(() => t.has("shell: bash") || t.has("shell: zsh") || t.has("shell: sh"))); assert.equal(t.app.cfg.shell, undefined);
+  await t.key(KEY.ctrlD);
+});
+
+test("typing the hint '! shell' (or a bare !) gets a helpful answer instead of a bare 'command not found'", async () => {
+  const { rig, KEY } = await import("./helpers/apprig.ts"); const t = rig([]); await t.start();
+  await t.submit("!shell"); assert.ok(await t.until(() => t.has('"shell" is not a program on this machine'))); assert.ok(t.has("After ! type a command"));
+  await t.submit("!echo works"); assert.ok(await t.until(() => t.has("works")));
   await t.key(KEY.ctrlD);
 });
