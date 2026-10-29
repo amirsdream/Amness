@@ -1,5 +1,6 @@
 // Slash commands. Each gets the running App and the raw argument string.
 import { relatives } from "./session.ts";
+import { STRATEGIES } from "../../src/index.ts";
 import { join, resolve } from "node:path";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, type ProviderId } from "../config.ts";
@@ -216,6 +217,16 @@ export function buildCommands(): Cmd[] {
       const m = /^(\d+(?:\.\d+)?)\s*([km]?)$/i.exec(arg.trim()); if (!m) return void a.say("give a number such as 400000, 400k or 1m", dim);
       const n = Math.round(Number(m[1]) * (m[2].toLowerCase() === "m" ? 1e6 : m[2].toLowerCase() === "k" ? 1e3 : 1)); if (n < 10_000) return void a.say("the cap must be at least 10000 tokens", dim);
       a.cfg.maxTokens = n; b.maxTokens = n; a.saveConfig(); a.say(`cap per turn is now ${n.toLocaleString()} tokens`, dim);
+    } },
+    { name: "reload-plugins", help: "load the plugin files again (after you edited one)", run: async (a) => {
+      await a.loadPluginsNow(); a.buildAgent(); a.say(`${a.plugins.length} plugin${a.plugins.length === 1 ? "" : "s"} loaded${a.plugins.length ? ": " + a.plugins.map((p) => p.name).join(", ") : ""}. Project plugins that you have not approved are skipped.`, dim);
+    } },
+    { name: "strategy", help: "loop strategy: plan-first, explore-then-act, or off", args: "[name|off]", run: (a, arg) => {
+      const names = Object.keys(STRATEGIES);
+      if (!arg) return void a.say(`strategy: ${a.cfg.strategy ?? "none (default loop)"}. Choose one of ${names.join(", ")}, or off. plan-first writes a plan before any tool call; explore-then-act allows only reading for the first steps. Measure them with: amness eval --variants full,strategy:plan-first`, dim);
+      if (arg === "off") { a.cfg.strategy = undefined; a.saveConfig(); a.buildAgent(); return void a.say("strategy off", dim); }
+      if (!names.includes(arg)) return void a.say(`unknown strategy "${arg}". Choose one of ${names.join(", ")}, or off`, dim);
+      a.cfg.strategy = arg; a.saveConfig(); a.buildAgent(); a.say(`strategy ${arg} on`, dim);
     } },
     { name: "plugins", help: "plugins loaded (code in .amness/plugins that extends the loop, tools, guards and evals)", run: (a) => {
       if (!a.plugins.length) return void a.say("no plugins loaded. Put a file in .amness/plugins/ (or ~/.amness/plugins/) that exports definePlugin({ name, ... }); see docs/plugins.md. Project plugins ask for your approval first.", dim);

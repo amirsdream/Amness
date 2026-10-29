@@ -23,7 +23,7 @@ import { loadSkills, skillsBlock, skillTool, type Skill } from "./skills.ts";
 import { applyOps, parsePatch, replaceMany } from "./patch.ts";
 import { proposeContract, reviewWork } from "./review.ts";
 import type { HookRunner } from "./hooks.ts";
-import { applySystem, composeHooks, type Plugin } from "./plugins.ts";
+import { applySystem, checkPolicies, composeHooks, type Plugin } from "./plugins.ts";
 import { OBFUSCATED_EXEC, Permissions, commandViews, type PermissionChecker } from "./permissions.ts";
 
 const RISKY: [RegExp, string][] = [
@@ -252,6 +252,8 @@ export type CodeAgentOptions = {
   background?: boolean;
   /** Lifecycle hooks, e.g. `Hooks.load(cwd, { trustProject: true })`. Nothing runs unless you pass this. */
   hooks?: HookRunner;
+  /** Wrap or replace every tool the agent gets (chaos evals use it to make tools fail on purpose). */
+  wrapTools?: (tools: Tool[]) => Tool[];
   /** Plugins (see plugins.ts): extra tools, in-process hooks on every loop event, system-prompt rewrites. */
   plugins?: Plugin[];
   /** Permission rules plus the built-in safety floor (see `Permissions`). Default: the floor alone. Pass `false` to switch even that off. */
@@ -271,6 +273,7 @@ export type RunOptions = { /** pictures to show the model with the task (needs a
 export function createCodeAgent(o: CodeAgentOptions) {
   const plugins = o.plugins ?? [];
   if (plugins.length) o = { ...o, hooks: composeHooks(o.hooks, plugins, o.cwd), tools: [...(o.tools ?? []), ...plugins.flatMap((p) => p.tools ?? [])] };
+  const policyFn = plugins.some((p) => p.policy) ? (c: { tool: string; args: Record<string, unknown> }) => checkPolicies(plugins, { ...c, cwd: o.cwd }) : undefined;
   const SYS = (chat: boolean | undefined) => applySystem(plugins, chat ? CHAT_SYSTEM : CODE_SYSTEM, o.cwd);
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>();
@@ -295,7 +298,8 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const lsp = o.lsp ? new Diagnostics(o.cwd, typeof o.lsp === "object" ? o.lsp : {}) : undefined;
   const shellCheck = o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined;
   const postEdit = shellCheck || lsp ? async (paths: string[]) => (await shellCheck?.() ?? "") + (await lsp?.report(paths) ?? "") : undefined;
-  const registry = new Registry([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: postEdit }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]);
+  const wrap = o.wrapTools ?? ((t: Tool[]) => t);
+  const registry = new Registry(wrap([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: postEdit }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]));
   const shown = new Set<string>();   // memory notes already in this conversation
   const rescanIndex = () => { if (codeIndex && !registry.get("repo_map") && codeIndex.list().length >= indexMin) registry.add(...indexTools(codeIndex)); };
   rescan(); rescanIndex();
@@ -337,7 +341,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
           if (unknown) o.onEvent?.({ kind: "nudge", detail: `no agent named "${unknown}"; used the read-only explorer` });
           const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name, parent: ctx.callId } as unknown as Event);
           if (!d) {
-            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
             const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";
             return note + clip(r.text || "(the explorer returned nothing)", 8000);                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
           }
@@ -348,7 +352,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
             if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList));
             const r = await createHarness({
               model: (d.model && o.agentModels?.[d.model]) || o.model, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
-              budget: track(o.budget?.slice(0.25, 120_000)), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
+              budget: track(o.budget?.slice(0.25, 120_000)), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), policy: policyFn, hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
             }).run(description);
             let out = clip(r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`, 8000);
             if (wt) {
@@ -388,7 +392,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 },
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 

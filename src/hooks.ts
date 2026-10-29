@@ -11,7 +11,7 @@ export type HookEvent = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "Po
 export const HOOK_EVENTS: HookEvent[] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "Stop", "PreModel", "PostModel"];
 export type HookDef = { /** tool names this applies to, as a regex (tool events only); default: all */ match?: string; command: string; /** seconds, default 10 */ timeout?: number; /** a crash or timeout blocks instead of being ignored */ failClosed?: boolean };
 export type HookConfig = Partial<Record<HookEvent, HookDef[]>>;
-export type HookResult = { block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] };
+export type HookResult = { block?: string; context?: string; args?: Record<string, unknown>; /** PreModel only: the tools that may be called in this turn (a call to any other is refused with an explanation) */ tools?: string[]; /** PreModel only: a text-only reply to this request is not the final answer; add this message and ask for the next step (for a planning phase) */ then?: string; warnings: string[] };
 export type HookRunner = { run(event: HookEvent, payload: Record<string, unknown>): Promise<HookResult>; count(): number };
 
 /** The environment a hook sees: no API keys, tokens or passwords. */

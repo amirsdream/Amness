@@ -136,6 +136,10 @@ export type Options = {
   budget?: Budget;
   /** Asked before any `risky` tool call. Return true to allow, or false / a string (shown to the model) to deny. No handler = deny. */
   approve?: Approve;
+  /** Your own context strategy: called before each model request with the conversation; return a new list of messages to replace it, or nothing to keep it. */
+  context?: (msgs: Message[], info: { step: number; promptTokens: number; budget: number }) => Message[] | void | Promise<Message[] | void>;
+  /** Policy as code: called with each tool call before it runs (see plugins.ts checkPolicies). */
+  policy?: (call: { tool: string; args: Record<string, unknown> }) => Promise<{ action: "allow" | "ask" | "deny"; reason?: string; plugin?: string } | undefined>;
   /** Called at the start of every turn with the full transcript; persist it to resume after a crash or pause. */
   checkpoint?: (messages: Message[]) => void;
   off?: Guard[];
@@ -163,7 +167,7 @@ export type Options = {
   /** Emit `run` and `model` events with full message content, so a trace can be replayed later (see `replay`). Larger traces; off unless asked. */
   record?: boolean;
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
-  hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit" | "PreModel" | "PostModel", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }> };
+  hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit" | "PreModel" | "PostModel", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; tools?: string[]; then?: string; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
   signal?: AbortSignal | (() => AbortSignal | undefined);
   /** Polled at the start of every turn: messages the user typed while the agent was working ("steering"). They join the conversation immediately. */
@@ -331,7 +335,7 @@ export function createHarness(o: Options) {
   /** Run lifecycle hooks, report what they did, and fail open (a broken hook only warns). */
   const hook = async (event: Parameters<NonNullable<Options["hooks"]>["run"]>[0], payload: Record<string, unknown>) => {
     if (!o.hooks) return undefined;
-    const r = await o.hooks.run(event, payload).catch((e: Error) => ({ warnings: [`hook error: ${e.message}`] } as { block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }));
+    const r = await o.hooks.run(event, payload).catch((e: Error) => ({ warnings: [`hook error: ${e.message}`] } as { block?: string; context?: string; args?: Record<string, unknown>; tools?: string[]; then?: string; warnings: string[] }));
     for (const w of r.warnings) emit({ kind: "hook", event, detail: w, blocked: false });
     if (r.block) emit({ kind: "hook", event, detail: r.block, blocked: true });
     else if (r.context) emit({ kind: "hook", event, detail: "added context", blocked: false });
@@ -369,7 +373,7 @@ export function createHarness(o: Options) {
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
-    let budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
+    let allowNow: Set<string> | undefined, thenNext: string | undefined, budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     for (let step = 0; step < max; step++) {
@@ -425,9 +429,11 @@ export function createHarness(o: Options) {
       if (step > 0 && key !== shown) emit({ kind: "tools", detail: key });
       shown = key;
       { const sig = prefixSignature(msgs, specs), brk = firstCacheBreak(sent, sig); sent = sig; if (brk) emit({ kind: "cachebreak", ...brk }); }
+      if (o.context) { const r = await Promise.resolve(o.context(msgs, { step, promptTokens: lastPrompt, budget: o.budget?.fraction ?? 0 })).catch(() => undefined); if (Array.isArray(r) && r.length) msgs.splice(0, msgs.length, ...r); }         // a plugin's own context strategy (drop, summarise, reorder)
       { const pre = await hook("PreModel", { step, max, messages: msgs.length, promptTokens: lastPrompt, budget: o.budget?.fraction ?? 0 });          // a plugin or hook may stop the run or add a note before every model call
         if (pre?.block) { emit({ kind: "loop", detail: `stopped by a PreModel hook: ${pre.block}` }); o.checkpoint?.(msgs); return end(`stopped: ${pre.block}`, false, step, "blocked"); }
-        if (pre?.context) msgs.push({ role: "user", content: pre.context }); }
+        if (pre?.context) msgs.push({ role: "user", content: pre.context });
+        allowNow = pre?.tools ? new Set(pre.tools) : undefined; thenNext = pre?.then; }
       emit({ kind: "phase", phase: "model", step, max });
       let m: Message;
       let streamed = false;
@@ -444,6 +450,7 @@ export function createHarness(o: Options) {
       msgs.push({ role: "assistant", content: m.content ?? null, ...(m.tool_calls?.length && { tool_calls: m.tool_calls }), ...(m.raw !== undefined && { raw: m.raw }) });
       if (!m.tool_calls?.length) {
         const text = (m.content ?? "").trim();
+        if (thenNext && text) { msgs.push({ role: "user", content: thenNext }); thenNext = undefined; continue; }                // a planning phase: the text is the plan, not the answer
         if (!off.has("nudge") && nudges < 2 && (!text || INTENT.test(text.slice(-200)))) {
           nudges++;
           emit({ kind: "nudge", detail: text.slice(-100) });
@@ -461,6 +468,7 @@ export function createHarness(o: Options) {
         let args: any;
         try { args = JSON.parse(raw || "{}"); } catch (e) { return `ERROR: arguments were not valid JSON (${(e as Error).message}). Resend strict JSON.`; }
         const t = name === "tool_search" && menu.length ? searchTool : reg.get(name);
+        if (allowNow && !allowNow.has(name)) return `ERROR: ${name} is not allowed in this phase. ${allowNow.size ? `Allowed now: ${[...allowNow].join(", ")}.` : "Do not call any tool yet: answer in text."}`;
         if (t && name !== "finish" && t !== searchTool && !names.has(name)) {
           if (t.deferred && !reg.loaded.has(name)) { reg.loaded.add(name); return `ERROR: ${name} was not loaded yet; it is now. Retry the call. schema: ${JSON.stringify(t.schema)}`; }
           return `ERROR: tool ${name} is not available right now. Available: ${[...names, "finish"].join(", ")}`;
@@ -469,7 +477,7 @@ export function createHarness(o: Options) {
         const errs = schema ? validate(args, schema) : [`unknown tool "${name}". Available: ${[...names, "finish"].join(", ")}`];
         if (errs.length) { emit({ kind: "repair", detail: errs.join("; ") }); return `ERROR: ${errs.join("; ")}`; }
         if (name === "finish") {
-          const stop = await hook("Stop", { summary: args.summary });
+          const stop = await hook("Stop", { summary: args.summary, task, ...(o.ledger ? o.ledger.audit(task) : { changed: [], notes: [] }) });
           if (stop?.block) { emit({ kind: "rejected", detail: stop.block }); return `REJECTED by a hook: ${clip(stop.block, 3000)}\nFix the problem, then finish again.`; }
           if (o.ledger && !off.has("ledger")) {
             const problems = o.ledger.check(String(args.summary ?? ""), { gated: !!o.verify });
@@ -499,7 +507,11 @@ export function createHarness(o: Options) {
         if (pre?.args) { const e2 = validate(pre.args, t!.schema); if (e2.length) return `ERROR: a hook rewrote the arguments into something invalid (${e2.join("; ")})`; args = pre.args; }
         const taint = o.taint !== "off" && (name === "sh" || name === "sh_start") ? taintedBy(String(args.cmd ?? ""), untrustedPool) : undefined;
         if (taint && o.taint === "deny") { emit({ kind: "denied", detail: `${name}: contains text from ${taint}` }); return `DENIED: this command contains text copied from ${taint}, an untrusted source. Write the command yourself instead of copying it from fetched content, or ask the user.`; }
-        const perm = o.permissions?.check(name, args);
+        let perm = o.permissions?.check(name, args);
+        if (o.policy) { const d = await o.policy({ tool: name, args }).catch(() => undefined);   // policy as code (plugins): may deny or force a prompt; may skip an ordinary prompt, but never loosens the floor or the taint check
+          if (d?.action === "deny") { emit({ kind: "policy", tool: name, action: "deny", reason: d.reason ?? `plugin ${d.plugin ?? ""} policy` }); emit({ kind: "denied", detail: `${name}: ${d.reason ?? "denied by a plugin policy"}` }); return `DENIED: ${d.reason ?? "a plugin policy does not allow this"}. Do not retry this; choose a safer alternative, or finish and explain what you could not do.`; }
+          if (d?.action === "ask" && perm?.action !== "deny") perm = { ...(perm ?? { action: "none" }), action: "ask", reason: d.reason ?? `plugin ${d.plugin ?? ""} policy asks` } as typeof perm;
+          else if (d?.action === "allow" && !taint && !perm?.floor && perm?.action !== "deny") perm = { action: "allow", rule: `plugin ${d.plugin ?? ""}`, reason: d.reason } as typeof perm; }
         if (taint) emit({ kind: "policy", tool: name, action: o.taint === "deny" ? "deny" : "ask", reason: `contains text copied from ${taint} (untrusted)` });
         else if (perm && perm.action !== "none") emit({ kind: "policy", tool: name, action: perm.action, reason: perm.reason ?? (perm.rule ? `matched your rule ${perm.rule}` : "permission rule") });
         if (perm?.action === "deny") { emit({ kind: "denied", detail: `${name}: ${perm.reason ?? "denied by a rule"}` }); return `DENIED: ${perm.reason ?? "denied by a permission rule"}. Do not retry this; choose a safer alternative, or finish and explain what you could not do.`; }

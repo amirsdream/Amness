@@ -80,3 +80,12 @@ export function routedModel(o: RouterOptions): Model {
   if (o.strong.api) m.api = o.strong.api;
   return m;
 }
+
+/** Route each request to a model chosen by your own function (cost, step kind, failures, budget...). `choose` returns a key of `models`; an unknown key falls back to the first model. */
+export function choosingModel(models: Record<string, Model>, choose: (info: { messages: Message[]; promptTokens: number; tail: ReturnType<typeof tailShape> }) => string, o: { onChoose?: (key: string) => void } = {}): Model {
+  const keys = Object.keys(models), call = (async (messages: Message[], tools: ToolSpec[], opts?: ModelOpts) => {
+    const k = (() => { try { const x = choose({ messages, promptTokens: tokensOf(messages), tail: tailShape(messages) }); return x in models ? x : keys[0]; } catch { return keys[0]; } })();
+    o.onChoose?.(k); return models[k](messages, tools, opts);
+  }) as Model;
+  return Object.assign(call, models[keys[0]]);
+}

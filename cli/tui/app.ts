@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { onRateLimitWait } from "../model.ts";
-import { loadPlugins, pluginFingerprint, type Plugin } from "../../src/index.ts";
+import { STRATEGIES, describeProjectPlugins, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
@@ -104,7 +104,10 @@ export class App {
     }
     const names = new Set(this.builtin.flatMap((c) => [c.name, c.alias ?? ""]));
     for (const c of this.customCmds) if (names.has(c.name) && !this.warnedShadow.has(c.name)) { this.warnedShadow.add(c.name); this.note(`your custom /${c.name} is hidden by the built-in /${c.name}; rename its file to use it`); }
-    return [...this.builtin, ...this.customCmds.filter((c) => !names.has(c.name))];
+    const custom = this.customCmds.filter((c) => !names.has(c.name)), taken = new Set([...names, ...custom.map((c) => c.name)]);
+    const ctx: PluginCtx = { cwd: this.cwd, say: (t) => this.say(t, dim), ask: (t) => this.dispatch(t), run: async (cmd, ms) => { const out = await runShell(cmd, this.cwd, ms ?? 60_000); const m = /^exit=(\w+)\n?/.exec(out); return { code: m && /^\d+$/.test(m[1]) ? Number(m[1]) : 1, output: out.replace(/^exit=\w+\n?/, "") }; } };
+    const fromPlugins: Cmd[] = this.plugins.flatMap((p) => (p.commands ?? []).filter((c) => !taken.has(c.name)).map((c) => ({ name: c.name, help: `${c.help} (plugin ${p.name})`, args: c.args, run: async (_a: App, arg: string) => { try { await c.run(ctx, arg); } catch (e) { this.note(`plugin ${p.name}: /${c.name} failed: ${(e as Error).message}`); } } })));
+    return [...this.builtin, ...custom, ...fromPlugins];
   }
 
   // ------------------------------------------------------------------ agent plumbing
@@ -122,7 +125,7 @@ export class App {
     }
     this.agent = createCodeAgent({
       model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.plugins.length ? this.plugins : undefined, rules: this.rules, ...this.profileOptions(), embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.profileOptions(), embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
   }
@@ -647,6 +650,8 @@ export class App {
     return { fp, trusted };
   }
   plugins: Plugin[] = [];
+  /** loaded plugins plus the loop strategy chosen with /strategy */
+  activePlugins(): Plugin[] { const s = this.cfg.strategy && STRATEGIES[this.cfg.strategy]; return s ? [...this.plugins, s()] : this.plugins; }
   /** Load plugins: yours always, the project's only once you approved exactly these files. */
   async loadPluginsNow() {
     const fp = pluginFingerprint(this.cwd), trusted = !!fp && loadState().pluginTrust?.[this.cwd] === fp;
@@ -656,7 +661,7 @@ export class App {
   private async askPluginTrust() {
     const { r, fp } = await this.loadPluginsNow();
     if (!r.untrusted || !fp || !this.persist) return;
-    const ok = await this.pick(`This project has ${r.untrusted.count} plugin file${r.untrusted.count === 1 ? "" : "s"} (.amness/plugins). A plugin is code that runs with your permissions and can change what the agent does. Trust this version of the files?`, [{ label: "Yes, trust this version", value: "y" }, { label: "No, run without them", value: "n" }]);
+    const ok = await this.pick(`This project has ${r.untrusted.count} plugin file${r.untrusted.count === 1 ? "" : "s"} (.amness/plugins). A plugin is code that runs with your permissions and can change what the agent does. Trust this version of the files?\n${describeProjectPlugins(this.cwd).map((l) => "  " + l).join("\n")}\n(a text scan, not a guarantee: read them first)`, [{ label: "Yes, trust this version", value: "y" }, { label: "No, run without them", value: "n" }]);
     if (ok === "y") { const st = loadState(); st.pluginTrust = { ...(st.pluginTrust ?? {}), [this.cwd]: fp }; saveState(st); await this.loadPluginsNow(); }
   }
   private async askHookTrust() {
