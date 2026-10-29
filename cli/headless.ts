@@ -25,6 +25,7 @@ export const HELP = `usage: amness run [flags] "task"
   --parts <file.json>  run independent parts ([{"name","task"}]) concurrently in worktrees, merged one at a time through --verify; conflicts are reported, not applied
   --image <file>       show the model a picture (png, jpg, gif, webp; up to 5 MB, repeat the flag for more, max 4); needs a vision-capable model
   --max-tokens <n>     hard token cap (default 300000)      --no-memory   disable memory
+  -                    as the task: read it from standard input (useful on Windows, where quoting a long task is painful)
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
 
 export async function runHeadless(argv: string[]): Promise<number> {
@@ -50,7 +51,8 @@ export async function runHeadless(argv: string[]): Promise<number> {
   if (li >= 0) { const nxt = args[li + 1]; livePort = /^\d+$/.test(nxt ?? "") ? Number(args.splice(li, 2)[1]) : (args.splice(li, 1), 0); }
   const imagePaths: string[] = []; for (let v = val("--image"); v !== undefined; v = val("--image")) imagePaths.push(v);
   const maxTokens = Number(val("--max-tokens") ?? cfg.maxTokens);
-  const task = args.join(" ").trim();
+  let task = args.join(" ").trim();
+  if (task === "-") task = (await new Promise<string>((res) => { let s = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (d) => (s += d)); process.stdin.on("end", () => res(s)); })).trim();      // `amness run -` reads the task from stdin (no quoting problems on any shell)
   if (!task && !bundle) { console.error(HELP); return 2; }
   if (!ready(cfg)) { console.error(`no API key for ${PROVIDERS[cfg.provider].label}. Set ${cfg.provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"} or run \`amness settings\`.`); return 2; }
 

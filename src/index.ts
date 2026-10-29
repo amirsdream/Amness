@@ -54,3 +54,4 @@ export * from "./chaos.ts";
 export * from "./prompts.ts";
 export * from "./pluginscan.ts";
 export * from "./grade.ts";
+export * from "./bench.ts";
