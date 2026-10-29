@@ -35,38 +35,84 @@ New to it? Follow the [step-by-step guide](docs/getting-started.md). Inside the 
 
 ## What it looks like
 
-**It asks before it changes things, and shows the diff first.**
+<p align="center"><img src="docs/images/approval.png" alt="An edit waiting for your approval, with the diff" width="780"></p>
 
-<p align="center"><img src="docs/images/approval.png" alt="An edit waiting for approval, with the diff" width="780"></p>
-
-**Subagents stay inside their own card.** Exploring a codebase can mean dozens of reads; they are grouped under the task that started them, summarised when done, and expandable when you want the detail. Each report ends with what it cost against your budget.
-
-<p align="center"><img src="docs/images/subagent-running.png" alt="An Explore card showing its newest steps while it runs" width="780"></p>
-<p align="center"><img src="docs/images/subagent-done.png" alt="The same card finished and opened, with the subagent's report and its cost" width="780"></p>
-
-<details>
-<summary>More screenshots</summary>
-
-<p align="center"><img src="docs/images/loop.png" alt="The /loop view: each model turn with its tools and timings" width="780"></p>
-<p align="center"><img src="docs/images/palette.png" alt="The command palette" width="780"></p>
-<p align="center"><img src="docs/images/daylight.png" alt="The daylight theme" width="780"></p>
-</details>
+This is the screen you will see most. The agent wants to change a file, shows you the exact diff, and waits. More screenshots (subagents, the loop view, themes) are in the [step-by-step guide](docs/getting-started.md).
 
 ## Examples
 
-**Fix something and prove it, in CI or a script.** The task only counts as finished when your command passes.
+Each example says what you type, what happens, and why it is useful.
+
+### 1. Your first change, in the chat
 
 ```bash
-amness run --verify "npm test" "the date parser fails on leap days, fix it"   # --verify = the command that must pass; the last text is the task
-amness run --best-of 3 --verify "npm test" "make the flaky test deterministic"   # up to 3 attempts in separate git worktrees, stops at the first pass
-amness run --json --trace run.jsonl --verify "npm test" "..."                     # machine-readable output and a full trace
+cd ~/your-project
+amness
 ```
 
-**Measure your harness instead of guessing.** Same tasks, several harness variants, paired statistics and cost per solved task:
+Then type a request in plain words:
+
+```
+❯ The login form accepts an empty password. Fix it and add a test.
+```
+
+**What happens.** The agent reads the relevant files, then proposes a change. For each edit it shows you the diff and asks: apply it? Press Enter to accept. When it is done, it tells you what it changed and what it ran to check.
+
+**Why it is useful.** Nothing changes without your approval (in the default mode). If you do not like the result, type `/undo`. It puts back the files and the conversation as they were before that request, including files that shell commands changed.
+
+**Tip.** `Shift+Tab` changes how much the agent may do without asking: ask for everything, auto-accept edits, or plan only (read-only). `/mode yolo` skips most questions, but a safety floor still blocks things like `rm -rf /`.
+
+### 2. Make the agent prove its work
+
+Without a check, an agent can say "fixed!" and be wrong. Give it a command that decides:
+
+```bash
+amness run --verify "npm test" "the date parser fails on leap days, fix it"
+```
+
+- `--verify "npm test"` is the **proof command**. The agent may not finish until this command succeeds. Use your own test command here (`pytest -q`, `go test ./...`, `cargo test`, ...).
+- The last text is the **task**.
+
+**What happens.** The agent works, then tries to finish. Amness runs `npm test`. If it fails, the finish is rejected and the agent must keep going. Amness also compares the agent's summary with what really happened. If the summary says "all tests pass" but no test ran after the last edit, it is rejected too.
+
+**Why it is useful.** You can run this in CI or a script and trust the exit code: `0` means finished and verified, `1` means not finished. In the chat, `/verify npm test` does the same.
+
+### 3. Keep the cost under control
+
+Long tasks can use a lot of tokens (the pieces of text you pay for). Amness lets you set a limit and tells the model about it:
+
+```
+/budget 200k
+```
+
+**What happens.** The limit applies to each request you send. At 50%, 75% and 90% of it, the model is told to start wrapping up. Just before the limit, Amness asks for one last short report, so you get what was found instead of a bare "budget exhausted" error. The sidebar shows the percentage used.
+
+**Why it is useful.** Exploring a big codebase with subagents can burn tokens fast. The limit and the notes keep a long run from ending with nothing. See [Budgets](docs/budgets.md).
+
+### 4. Use a local model (no API key)
+
+```bash
+ollama pull qwen2.5-coder:7b          # download a model that can call tools
+amness                                # start the chat, then type /provider and choose "Ollama (local)"
+```
+
+Or, for one headless task:
+
+```bash
+amness run --provider ollama --model qwen2.5-coder:7b "list the TODO comments in src"
+```
+
+**Why it is useful.** Your code never leaves your machine. Small local models are weaker at calling tools, so start with simple tasks. See [Providers](docs/providers.md).
+
+### 5. Test whether a harness change really helps
+
+Do not guess whether the reviewer, a guard, or a different model helps. Measure it:
 
 ```bash
 amness eval --builtin hard --variants baseline,full,full+review --trials 3
 ```
+
+It runs 6 built-in tasks under three setups, 3 times each, and prints a table like this:
 
 ```
 variant        pass [95% CI]     pass^3   tok/solved   steps   secs
@@ -76,29 +122,44 @@ full+review    89% [67%-100%]    83%      26.3k        9.9     19.5
 reading: with 6 tasks only differences above ~81 points can be detected; "inconclusive" means the data cannot tell.
 ```
 
-That is a real run (gpt-4.1-mini, 6 tasks × 3 trials). The honest verdict is "no detectable difference, and the reviewer costs 2× the tokens". The tool says so instead of declaring a winner.
+**How to read it.**
+- `pass` is the share of runs that solved the task, with a 95% confidence range in brackets. A wide range means "not sure yet".
+- `pass^3` is the chance that all 3 tries at a task succeed (how reliable it is).
+- `tok/solved` is the tokens spent for each solved task. A setup that is cheap but fails a lot is not cheap.
+- The last line is the honest summary. Here the answer is: no difference is visible, and `full+review` costs almost twice the tokens. That was a real run (gpt-4.1-mini).
 
-**Change the loop with a few lines of code.** A plugin is a TypeScript file that runs inside Amness:
+**Why it is useful.** You see what each part of the harness really costs and gives. You can run it on your own tasks too: [Evaluation guide](docs/evaluation.md).
+
+### 6. Add your own rule with a plugin
+
+A plugin is a TypeScript file that runs inside Amness. This one refuses to edit lockfiles and makes the agent say how it verified its work. Save it as `.amness/plugins/house-rules.ts`:
 
 ```ts
-// .amness/plugins/house-rules.ts   (no imports needed: a plugin is just an exported object)
 export default {
   name: "house-rules",
   hooks: {
-    // refuse to hand-edit lockfiles
+    // runs before every tool call
     PreToolUse: ({ tool, args }) =>
       /package-lock\.json$/.test(String((args as any).path)) && tool.endsWith("_file")
-        ? { block: "lockfiles are generated: run the package manager instead" } : undefined,
-    // the model must say what it verified before it may finish
-    Stop: ({ summary }) => /test|build|lint/i.test(String(summary)) ? undefined : { block: "Say which command you ran to verify this." },
+        ? { block: "lockfiles are generated: run the package manager instead" }   // refuse, and tell the model why
+        : undefined,                                                                 // otherwise do nothing
+    // runs when the agent tries to finish
+    Stop: ({ summary }) =>
+      /test|build|lint/i.test(String(summary)) ? undefined : { block: "Say which command you ran to verify this." },
   },
-  variants: { strict: { off: [], verify: true } },          // a harness variant you can then evaluate against the default
+  variants: { strict: { off: [], verify: true } },   // a setup you can compare against the default in an eval
 };
 ```
+
+**What happens.** The next time you start Amness in this project, it asks you to approve the plugin (it shows what the file appears to touch). After that, the two rules apply to every session. A `block` message goes back to the model as the reason, so it can change its plan.
+
+**Compare it with the default** (see example 5):
 
 ```bash
 amness eval --plugin .amness/plugins/house-rules.ts --variants full,strict --trials 3
 ```
+
+More plugin ideas (finish gates, policies, loop strategies, custom metrics) are in [Plugins](docs/plugins.md) and the [Cookbook](docs/cookbook.md).
 
 ## What you get
 
