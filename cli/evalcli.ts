@@ -1,8 +1,16 @@
 // `amness eval`: compare harness variants on a task suite, with statistics you can act on.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { tune, writeProfile, adversarialCases, hardCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
+import { importPlugins, tune, writeProfile, adversarialCases, hardCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
 import { bold, dim, green, red } from "./ui.ts";
+import type { Plugin } from "../src/index.ts";
+import { pathToFileURL } from "node:url";
+
+async function casesFromModule(file: string): Promise<Case[]> {
+  const mod = await import(pathToFileURL(file).href + `?v=${Date.now()}`), list = mod.default ?? mod.cases;
+  if (!Array.isArray(list) || list.some((c) => !c || typeof c.name !== "string" || typeof c.task !== "string" || !c.files || !c.check)) throw new Error(`${file}: must export a list of cases ({ name, files, task, check })`);
+  return list as Case[];
+}
 
 export const EVAL_HELP = `usage: amness eval [flags]
   Run the coding agent on a suite of tasks under several harness variants and compare them statistically.
@@ -17,7 +25,8 @@ export const EVAL_HELP = `usage: amness eval [flags]
   --audit              contamination checks on a suite (fix lines in the problem statement or already in the base checkout); runs no model
   --seed <n>           seed for the bootstrap intervals (reproducible reports)
   --builtin <name>     which built-in suite: code (default, 13 easy tasks), hard (6 tasks with hidden edge cases, a misleading symptom and an exploration question) or adversarial (prompt-injection attempts; a run passes only if the injected command never ran)
-  --cases <dir>        your own tasks: a folder of *.json ({ name, files, task, verify, check })
+  --cases <dir|file>   your own tasks: a folder of *.json ({ name, files, task, verify, check }), or a .ts/.js module exporting a list of cases (checks may be functions)
+  --plugin <file,...>  load plugins from these files: their tasks join the suite and their variants can be named in --variants (also full+plugins: every loaded plugin active)
   --only <a,b>         run only these built-in tasks
   --baseline <name>    variant the others are compared with (default: the first)
   --cheap-model <id>   the cheaper model for the full+route variant (same provider)
@@ -40,13 +49,17 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelF
       console.log(formatReport(analyze(saved.rows, { baseline: val("--baseline") ?? saved.baseline, k: saved.k }))); return 0;
     }
     const builtin = val("--builtin") ?? "code"; if (!["code", "adversarial", "hard"].includes(builtin)) throw new Error(`unknown built-in suite "${builtin}" (code, hard or adversarial)`);
-    let cases: Case[] = val("--cases") ? loadCases(resolve(val("--cases")!)) : builtin === "adversarial" ? adversarialCases : builtin === "hard" ? hardCases : builtinCases;
+    const plugins: Plugin[] = [];
+    for (const f of (val("--plugin") ?? "").split(",").filter(Boolean)) { const r = await importPlugins(f); for (const w of r.warnings) console.error(red("! ") + w); plugins.push(...r.plugins); }
+    const casesArg = val("--cases"), isModule = !!casesArg && /\.(m?[jt]s)$/.test(casesArg);
+    let cases: Case[] = isModule ? await casesFromModule(resolve(casesArg!)) : casesArg ? loadCases(resolve(casesArg)) : builtin === "adversarial" ? adversarialCases : builtin === "hard" ? hardCases : builtinCases;
     if (val("--suite")) {
       const inst = loadSuite(resolve(val("--suite")!)).slice(0, Number(val("--limit") ?? 1e9));
       if (has("--audit")) { const leaks = await leakAudit(inst); for (const l of leaks) console.log(`${red("leak")} ${l.id}: ${l.problem}`); console.log(leaks.length ? `${leaks.length} instance(s) with problems` : green("no contamination found in " + inst.length + " instance(s)")); return leaks.length ? 1 : 0; }
       if (!val("--test-cmd")) throw new Error('a suite needs --test-cmd, e.g. --test-cmd "python -m pytest -x -q {tests}"');
       cases = suiteToCases(inst, { testCmd: val("--test-cmd")!, installCmd: val("--install") });
     }
+    for (const p of plugins) cases.push(...(p.cases ?? []));
     if (val("--only")) { const want = val("--only")!.split(","); cases = cases.filter((c) => want.includes(c.name)); if (!cases.length) throw new Error(`no task matches --only ${val("--only")}`); }
     if (has("--selftest")) {
       const res = await selfTest(cases);
@@ -55,7 +68,7 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelF
     }
     const names = variantNames(val("--variants") ?? "ab"), trials = Math.max(1, Number(val("--trials") ?? 3)), jobs = Math.max(1, Number(val("--jobs") ?? 1));
     const maxTokens = Number(val("--max-tokens") ?? deps.maxTokens), maxSteps = Number(val("--max-steps") ?? 30);
-    const model = deps.model(), cheap = val("--cheap-model") && deps.modelFor ? deps.modelFor(val("--cheap-model")!) : undefined, variants = names.map((n) => harnessVariant(model, n, { maxTokens, maxSteps, cheap }));
+    const model = deps.model(), cheap = val("--cheap-model") && deps.modelFor ? deps.modelFor(val("--cheap-model")!) : undefined, variants = names.map((n) => harnessVariant(model, n, { maxTokens, maxSteps, cheap, plugins }));
     const runs = cases.length * variants.length * trials;
     console.log(`${bold("plan")}  ${cases.length} tasks × ${variants.length} variants (${names.join(", ")}) × ${trials} trials = ${bold(String(runs))} agent sessions, up to ${maxTokens.toLocaleString()} tokens each`);
     if (!has("--yes") && !(await deps.confirm(`This calls your model up to ${(runs * maxTokens).toLocaleString()} tokens in the worst case. Continue?`))) return 1;

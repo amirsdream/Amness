@@ -23,6 +23,7 @@ import { loadSkills, skillsBlock, skillTool, type Skill } from "./skills.ts";
 import { applyOps, parsePatch, replaceMany } from "./patch.ts";
 import { proposeContract, reviewWork } from "./review.ts";
 import type { HookRunner } from "./hooks.ts";
+import { applySystem, composeHooks, type Plugin } from "./plugins.ts";
 import { OBFUSCATED_EXEC, Permissions, commandViews, type PermissionChecker } from "./permissions.ts";
 
 const RISKY: [RegExp, string][] = [
@@ -251,6 +252,8 @@ export type CodeAgentOptions = {
   background?: boolean;
   /** Lifecycle hooks, e.g. `Hooks.load(cwd, { trustProject: true })`. Nothing runs unless you pass this. */
   hooks?: HookRunner;
+  /** Plugins (see plugins.ts): extra tools, in-process hooks on every loop event, system-prompt rewrites. */
+  plugins?: Plugin[];
   /** Permission rules plus the built-in safety floor (see `Permissions`). Default: the floor alone. Pass `false` to switch even that off. */
   rules?: PermissionChecker | false;
   /** Turns on semantic memory retrieval (blended with keyword ranking). See `openaiEmbedder`. */
@@ -266,6 +269,9 @@ export type CodeAgentOptions = {
 export type RunOptions = { /** pictures to show the model with the task (needs a vision-capable model) */ images?: { mime: string; data: string }[]; resume?: boolean; bundle?: Bundle | string; overwrite?: boolean };
 
 export function createCodeAgent(o: CodeAgentOptions) {
+  const plugins = o.plugins ?? [];
+  if (plugins.length) o = { ...o, hooks: composeHooks(o.hooks, plugins, o.cwd), tools: [...(o.tools ?? []), ...plugins.flatMap((p) => p.tools ?? [])] };
+  const SYS = (chat: boolean | undefined) => applySystem(plugins, chat ? CHAT_SYSTEM : CODE_SYSTEM, o.cwd);
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
@@ -381,7 +387,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const sessionFile = resolve(o.cwd, ".amness/handoff.md");
   let task = "";
   const h = createHarness({
-    model: o.model, compactModel: o.models?.compact, system: o.chat ? CHAT_SYSTEM : CODE_SYSTEM, tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
+    model: o.model, compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
     budget: o.budget, approve, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 },
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
@@ -417,7 +423,7 @@ ${note}
       else if (memory) { const d = memory.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const img = extra.images?.length ? { images: extra.images } : {};
       const msgs: Message[] = history.length ? [...history, { role: "user", content: text, ...img }]
-        : [{ role: "system", content: o.chat ? CHAT_SYSTEM : CODE_SYSTEM }, { role: "user", content: text, ...img }];
+        : [{ role: "system", content: SYS(o.chat) }, { role: "user", content: text, ...img }];
       const res = await h.run(text, { resume: msgs });
       // Learning from outcomes: a finished (verified) run credits the notes that were in front of the model, a run that gave up or got stuck counts against them.
       memory?.endTurn(res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined);
@@ -441,7 +447,7 @@ ${note}
       if (guidance && !resume) { const g = guidance.start(); if (g) prompt += "\n\n" + g; }
       if (!resume) { rescanIndex(); rescan(); const sb = skillsBlock(skillList); if (sb) prompt += "\n\n" + sb; }
       if (memory && !resume) { const ctx = memory.context(prompt); if (ctx) prompt += "\n\n" + ctx; }
-      if (opts.images?.length && !resume) resume = [{ role: "system", content: o.chat ? CHAT_SYSTEM : CODE_SYSTEM }, { role: "user", content: prompt, images: opts.images }];
+      if (opts.images?.length && !resume) resume = [{ role: "system", content: SYS(o.chat) }, { role: "user", content: prompt, images: opts.images }];
       return h.run(prompt, { resume });
     },
     /** Keep talking to the agent after it finished (or stopped): same conversation, full context. */

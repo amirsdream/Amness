@@ -217,6 +217,10 @@ export function buildCommands(): Cmd[] {
       const n = Math.round(Number(m[1]) * (m[2].toLowerCase() === "m" ? 1e6 : m[2].toLowerCase() === "k" ? 1e3 : 1)); if (n < 10_000) return void a.say("the cap must be at least 10000 tokens", dim);
       a.cfg.maxTokens = n; b.maxTokens = n; a.saveConfig(); a.say(`cap per turn is now ${n.toLocaleString()} tokens`, dim);
     } },
+    { name: "plugins", help: "plugins loaded (code in .amness/plugins that extends the loop, tools, guards and evals)", run: (a) => {
+      if (!a.plugins.length) return void a.say("no plugins loaded. Put a file in .amness/plugins/ (or ~/.amness/plugins/) that exports definePlugin({ name, ... }); see docs/plugins.md. Project plugins ask for your approval first.", dim);
+      a.commit(["", bold("  Plugins"), ...a.plugins.map((p) => `  ${cyan(p.name.padEnd(22))} ${dim([p.tools?.length ? `${p.tools.length} tool(s)` : "", p.hooks ? `hooks: ${Object.keys(p.hooks).join(", ")}` : "", p.system ? "system prompt" : "", p.cases?.length ? `${p.cases.length} eval case(s)` : "", p.variants ? `variants: ${Object.keys(p.variants).join(", ")}` : ""].filter(Boolean).join(" · "))} ${p.description ?? ""}`)]);
+    } },
     { name: "lsp", help: "append language-server errors to edit results (needs typescript-language-server, pyright, gopls or rust-analyzer)", args: "[on|off]", run: (a, arg) => {
       if (arg !== "on" && arg !== "off") return void a.say(`language-server diagnostics are ${a.cfg.lsp ? "on" : "off"}. /lsp on: each edit result also lists the errors an installed language server reports for that file.`, dim);
       a.cfg.lsp = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`language-server diagnostics ${arg}`, dim);

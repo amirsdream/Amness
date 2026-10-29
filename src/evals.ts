@@ -5,6 +5,7 @@ import { createCodeAgent, runShell } from "./code.ts";
 import { routedModel } from "./router.ts";
 import { Budget, type Event, type Guard, type Model, type Tool } from "./harness.ts";
 import type { Profile } from "./profiles.ts";
+import type { Plugin, VariantSpec } from "./plugins.ts";
 import { bootstrap, holm, mean, minDetectable, passPowK, signTest, type Interval } from "./stats.ts";
 
 export type Case = {
@@ -133,13 +134,38 @@ export function formatReport(a: Analysis): string {
 const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation"];
 /** Features that are not loop guards but can be switched off the same way for ablations. */
 const FEATURES = ["index", "taint"] as const;
-export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
+export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · full+plugins (every loaded plugin active, needs --plugin) · any variant a plugin defines · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
 
 /** Build a named variant of the code agent. Names: see VARIANT_HELP. */
-export function harnessVariant(model: Model, name: string, o: { maxSteps?: number; maxTokens?: number; /** the cheaper model for the `full+route` variant */ cheap?: Model; /** harness settings to run under (used by `amness tune`) */ profile?: Profile; prices?: { strong: { input: number; output: number }; cheap: { input: number; output: number } } } = {}): Variant {
+/** A plugin-defined variant: the plugin's variants are looked up by `name` or `plugin:name`. */
+export function findPluginVariant(plugins: Plugin[] | undefined, name: string): { spec: VariantSpec; owner: Plugin } | undefined {
+  for (const p of plugins ?? []) for (const [k, spec] of Object.entries(p.variants ?? {})) if (name === k || name === `${p.name}:${k}`) return { spec, owner: p };
+  return undefined;
+}
+function pluginVariant(model: Model, name: string, found: { spec: VariantSpec; owner: Plugin }, o: { maxSteps?: number; maxTokens?: number; plugins?: Plugin[] }): Variant {
+  const { spec, owner } = found;
+  if (spec.build) return { name, run: (c, dir) => spec.build!(model, { maxSteps: o.maxSteps, maxTokens: o.maxTokens }).run(c, dir) };
+  const active = [owner, ...(spec.plugins ?? []).map((n) => (o.plugins ?? []).find((p) => p.name === n)).filter((p): p is Plugin => !!p && p !== owner)];
+  if (spec.system) active.push({ name: `${owner.name}-variant-system`, system: spec.system });
+  return {
+    name,
+    async run(c, dir) {
+      const budget = new Budget({ maxTokens: o.maxTokens ?? 400_000 }), events: Record<string, number> = {};
+      const r = await createCodeAgent({
+        model, cwd: dir, budget, maxSteps: spec.maxSteps ?? o.maxSteps ?? 30, off: spec.off ?? [], memory: false, plugins: active, tools: c.tools?.(dir),
+        verify: spec.verify === false ? undefined : c.verify, review: spec.review || undefined,
+        onEvent: (e: Event) => { if (e.kind !== "text" && e.kind !== "thinking" && e.kind !== "assistant" && e.kind !== "toolstart" && e.kind !== "phase") events[e.kind] = (events[e.kind] ?? 0) + 1; },
+      }).run(c.task);
+      return { text: r.text, steps: r.steps, tokens: budget.tokens, events, prompt: budget.promptTokens, cached: budget.cachedTokens };
+    },
+  };
+}
+
+export function harnessVariant(model: Model, name: string, o: { maxSteps?: number; maxTokens?: number; /** the cheaper model for the `full+route` variant */ cheap?: Model; /** harness settings to run under (used by `amness tune`) */ profile?: Profile; /** loaded plugins: a variant name may refer to one of their `variants` (as `name` or `plugin:name`) */ plugins?: Plugin[]; prices?: { strong: { input: number; output: number }; cheap: { input: number; output: number } } } = {}): Variant {
+  const fromPlugin = findPluginVariant(o.plugins, name); if (fromPlugin) return pluginVariant(model, name, fromPlugin, o);
   const m = /^full-(.+)$/.exec(name), droppedRaw = m ? m[1] : undefined, dropped = droppedRaw && ALL_GUARDS.includes(droppedRaw as Guard) ? (droppedRaw as Guard) : undefined, feature = droppedRaw && (FEATURES as readonly string[]).includes(droppedRaw) ? droppedRaw : undefined;
   if (droppedRaw && !dropped && !feature) throw new Error(`unknown guard "${droppedRaw}" in variant "${name}". Guards: ${[...ALL_GUARDS, ...FEATURES].join(", ")}`);
-  if (!droppedRaw && !["baseline", "full", "full+check", "full+review", "full+route", "no-gate"].includes(name)) throw new Error(`unknown variant "${name}". Known: ${VARIANT_HELP}`);
+  if (!droppedRaw && !["baseline", "full", "full+check", "full+review", "full+route", "full+plugins", "no-gate"].includes(name)) throw new Error(`unknown variant "${name}". Known: ${VARIANT_HELP}`);
   return {
     name,
     async run(c, dir) {
@@ -148,7 +174,7 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
       if (name === "full+route" && !o.cheap) throw new Error("the full+route variant needs a cheap model: pass --cheap-model <id>");
       const r = await createCodeAgent({
         model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, cwd: dir, budget, maxSteps: o.profile?.maxSteps ?? o.maxSteps ?? 30, stagnationTurns: o.profile?.stagnationTurns, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
-        verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined, review: name === "full+review" || undefined,
+        plugins: name === "full+plugins" ? o.plugins : undefined, verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined, review: name === "full+review" || undefined,
         onEvent: (e: Event) => { if (e.kind !== "text" && e.kind !== "thinking" && e.kind !== "assistant" && e.kind !== "toolstart" && e.kind !== "phase") events[e.kind] = (events[e.kind] ?? 0) + 1; },
       }).run(c.task);
       return { text: r.text, steps: r.steps, tokens: budget.tokens, events, prompt: budget.promptTokens, cached: budget.cachedTokens };

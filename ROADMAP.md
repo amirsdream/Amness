@@ -125,6 +125,29 @@ New measurement items: **E14** a stronger injection suite (models resisted all t
 | G43 | Subagent steps nested inside their card (parent ids), one live line per subagent inline. Left: subagent token/step counts on the card, and click-through to a subagent's full transcript. | P1 | M | [x] |
 | G44 | Reviewer/criteria should catch spec details (see E16); re-read-the-spec check before finishing when the task mentions a spec or docs file. | P2 | M | [ ] |
 
+
+### D. Track C: programmable harness (added 2026-10-30, "maximum power to customise")
+
+Goal: everything that shapes behaviour (loop, guardrails, evals, prompts, tools, routing, memory) can be replaced or extended by code you own, and everything you change can be measured with `amness eval`. Plugins (docs/plugins.md) are the foundation.
+
+| Id | Item | Priority | Effort | Done |
+|---|---|---|---|---|
+| C0 | Plugin foundation: tools, in-process hooks on 8 events (new `PreModel`, `PostModel`), system-prompt rewrite, eval cases with function graders, eval variants (data or `build`), trust by fingerprint, `/plugins`, `amness eval --plugin`, `--cases file.ts`. Real-model run done (house-rules example). Left: tests for the TUI trust prompt, headless flag. | P1 | M | [~] |
+| C1 | Slash commands, palette entries and status-bar items contributed by plugins; `/reload-plugins` (hot reload); `amness plugin new <name>` scaffold. | P1 | S–M | [ ] |
+| C2 | **Pluggable loop strategies**: `loop: "react" \| "plan-execute" \| "explore-then-act" \| custom async function` so a plugin can replace the turn order (plan first, tree search over candidate steps, self-consistency on decisions) while keeping budget, permissions, ledger and tracing. Evaluate each against `full`. | P1 | L | [ ] |
+| C3 | Pluggable context strategy: compaction, tool-result clearing, memory injection and handoff as replaceable functions (plugin point `context`), with the cache-hysteresis helper available to them. | P2 | M | [ ] |
+| C4 | Pluggable routing/model policy: choose model, effort and tools per step from a function (cost, step kind, failure count, budget), generalising the cache-aware router. | P2 | M | [ ] |
+| C5 | Policy as code for permissions: function rules next to the pattern rules, evaluated before the floor can be relaxed (never after); a test helper that replays recorded tool calls through a policy and reports what it would allow, ask or deny. | P1 | M | [ ] |
+| C6 | Custom verifiers and reviewers as plugin points: your own finish gate (any code), your own acceptance-criteria writer, multiple reviewers voting, LLM-judge with calibration against labelled traces. | P1 | M | [ ] |
+| C7 | Eval power tools: custom metrics (cost, latency, tool-call count, diff size, anything computed from the trace), pairwise preference evals with a judge, stratified task weights, sequential testing (stop early when a variant is clearly worse), task generators, regression gate for CI (`amness eval --gate baseline.json`). | P1 | L | [ ] |
+| C8 | Online evaluation: grade real sessions from `.amness/traces` with the same graders; shadow mode that replays a candidate harness against yesterday's tasks and compares. Builds on trace replay (L4). | P2 | L | [ ] |
+| C9 | Prompt registry: system/tool/nudge texts as versioned files with ids, selectable per variant (`prompt:v2`), so prompt A/B tests are first-class (feeds `amness tune`). | P2 | M | [ ] |
+| C10 | Memory backend interface (store, retrieve, consolidate) so a plugin can swap in a vector DB, a wiki, a ticket system; keep outcome-learning hooks. | P3 | M | [ ] |
+| C11 | Chaos and robustness evals: inject tool failures, slow tools, malformed model output, 429s and truncated outputs into recorded sessions and measure recovery. | P2 | M | [ ] |
+| C12 | Plugin distribution and safety: install from npm/git (`amness plugin add`), a capability manifest (what the plugin touches: network, shell, files), warn on unexpected capabilities, optional isolation in a worker with a permission model. | P3 | L | [ ] |
+| C13 | Multi-model experiments in one run: the same task on several models/harnesses side by side in the TUI (split view) and in evals (model as a variant dimension, not only harness). | P2 | M | [ ] |
+| C14 | Docs: a "build your own harness" tutorial that walks from a single hook to a custom loop strategy and measures each step; keep README a landing page. | P2 | S | [ ] |
+
 ### C. Known limits to keep honest in the docs
 
 - No claim of improvement is justified until E1 to E9 are run. README and docs say "not measured" for the newer features; keep it that way until then.
@@ -412,3 +435,4 @@ Newest first. When an item is finished, tick it above and add one line here with
 - **Budget exhaustion fix (2026-10-29)**: a run that explored without closing hit the 300k cap with no answer. Added budget notes (50/75/90%), a final no-tools report before the cap, a 12-turn read-only check, and cached input counted at a tenth against the cap. Under the `wrapup` guard; scripted tests only. See docs/agent-loop.md.
 - 2026-10-29 (end of day): added "Next up" with E1 to E13 (measurements) and G24 to G41 (build). First real-model results and the budget fix are in the entries above and docs/evaluation.md, docs/budgets.md.
 - 2026-10-30: hard eval suite, /budget /lsp /approver, sidebar budget, running cards closed at turn end, OpenAI compactAt, CHANGELOG, require-sandbox CI check, subagent steps nested inside their card (parent ids), shared rate limiter (Retry-After, AIMD concurrency, quota errors not retried), maxConcurrent. See docs/budgets.md.
+- 2026-10-30: plugins (C0): src/plugins.ts, PreModel/PostModel events, eval --plugin/--cases file.ts, /plugins, docs/plugins.md, examples/plugins/house-rules.ts; Track C added to the roadmap.

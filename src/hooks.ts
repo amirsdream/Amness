@@ -7,8 +7,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { posixShell } from "./shell.ts";
 
-export type HookEvent = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop";
-export const HOOK_EVENTS: HookEvent[] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "Stop"];
+export type HookEvent = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "PreModel" | "PostModel";
+export const HOOK_EVENTS: HookEvent[] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "Stop", "PreModel", "PostModel"];
 export type HookDef = { /** tool names this applies to, as a regex (tool events only); default: all */ match?: string; command: string; /** seconds, default 10 */ timeout?: number; /** a crash or timeout blocks instead of being ignored */ failClosed?: boolean };
 export type HookConfig = Partial<Record<HookEvent, HookDef[]>>;
 export type HookResult = { block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] };

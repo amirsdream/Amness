@@ -163,7 +163,7 @@ export type Options = {
   /** Emit `run` and `model` events with full message content, so a trace can be replayed later (see `replay`). Larger traces; off unless asked. */
   record?: boolean;
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
-  hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }> };
+  hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit" | "PreModel" | "PostModel", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
   signal?: AbortSignal | (() => AbortSignal | undefined);
   /** Polled at the start of every turn: messages the user typed while the agent was working ("steering"). They join the conversation immediately. */
@@ -425,6 +425,9 @@ export function createHarness(o: Options) {
       if (step > 0 && key !== shown) emit({ kind: "tools", detail: key });
       shown = key;
       { const sig = prefixSignature(msgs, specs), brk = firstCacheBreak(sent, sig); sent = sig; if (brk) emit({ kind: "cachebreak", ...brk }); }
+      { const pre = await hook("PreModel", { step, max, messages: msgs.length, promptTokens: lastPrompt, budget: o.budget?.fraction ?? 0 });          // a plugin or hook may stop the run or add a note before every model call
+        if (pre?.block) { emit({ kind: "loop", detail: `stopped by a PreModel hook: ${pre.block}` }); o.checkpoint?.(msgs); return end(`stopped: ${pre.block}`, false, step, "blocked"); }
+        if (pre?.context) msgs.push({ role: "user", content: pre.context }); }
       emit({ kind: "phase", phase: "model", step, max });
       let m: Message;
       let streamed = false;
@@ -433,7 +436,8 @@ export function createHarness(o: Options) {
         if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
         throw e;
       }
-      ensureUsage(m, msgs); o.budget?.add(m); tokens += m.usage?.total_tokens ?? 0; lastCost = Math.max(0, (m.usage?.total_tokens ?? 0) - 0.9 * (m.usage?.cached_tokens ?? 0)); lastPrompt = m.usage?.prompt_tokens ?? 0;
+      ensureUsage(m, msgs); void hook("PostModel", { step, text: (m.content ?? "").slice(0, 4000), tools: (m.tool_calls ?? []).map((c) => c.function.name), usage: m.usage });
+      o.budget?.add(m); tokens += m.usage?.total_tokens ?? 0; lastCost = Math.max(0, (m.usage?.total_tokens ?? 0) - 0.9 * (m.usage?.cached_tokens ?? 0)); lastPrompt = m.usage?.prompt_tokens ?? 0;
       if (o.record) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
       emit({ kind: "turn", step, tokens, prompt: m.usage?.prompt_tokens ?? 0, completion: m.usage?.completion_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0, reasoning: m.usage?.reasoning_tokens ?? 0 });
       if (m.content?.trim()) emit({ kind: "assistant", text: m.content, streamed });

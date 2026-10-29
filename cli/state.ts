@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { home } from "./config.ts";
 
-export type State = { lastDir?: string; verifyByDir: Record<string, string>; tasks: string[]; /** project hooks the user approved: directory -> fingerprint of the hooks.json that was approved */ hookTrust?: Record<string, string> };
+export type State = { lastDir?: string; verifyByDir: Record<string, string>; tasks: string[]; /** project hooks the user approved: directory -> fingerprint of the hooks.json that was approved */ hookTrust?: Record<string, string>; /** project plugins the user approved: directory -> fingerprint of the plugin files */ pluginTrust?: Record<string, string> };
 const file = () => join(home(), "state.json");
 
 export function loadState(): State {

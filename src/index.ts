@@ -47,3 +47,4 @@ export * from "./schedule.ts";
 export * from "./shell.ts";
 export * from "./hardcases.ts";
 export * from "./ratelimit.ts";
+export * from "./plugins.ts";
