@@ -11,6 +11,7 @@ These pages explain how to install, use, extend and trust Amness. Start with "Ge
 | [Build your own harness](build-your-own-harness.md) | A tutorial: from one small rule to a custom harness that you measure |
 | [Cookbook](cookbook.md) | Short recipes for common jobs |
 | [Evaluating the harness](evaluation.md) | `amness eval`: measure a change with statistics, ablations, benchmarks and an injection suite |
+| [Compare coding agents](bench.md) | `amness bench`: run Amness, Claude Code, Codex or any tool on the same tasks, with a Windows setup |
 | [Budgets and subagents](budgets.md) | Why runs ran out of budget, what vendors and papers say, and what Amness does about it |
 | [The agent loop](agent-loop.md) | Staged compaction, guards, the claims ledger, cache behavior and sources |
 | [Architecture](architecture.md) | The layers, the files, and how the full-screen interface draws |

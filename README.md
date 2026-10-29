@@ -197,6 +197,7 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 | [Features in depth](docs/features.md) | everything above, one section each |
 | [Plugins: the harness as code](docs/plugins.md) | write your own loop rules, guardrails, tools and graders |
 | [Evaluating the harness](docs/evaluation.md) | `amness eval`, statistics, measured results |
+| [Bake-off: Amness vs Claude Code vs Codex](docs/bench.md) | run the same tasks through several agent tools and compare, with a Windows setup guide |
 | [Budgets and subagents](docs/budgets.md) | why runs ran out of budget, rate limits, what the vendors recommend |
 | [The agent loop](docs/agent-loop.md) · [Architecture](docs/architecture.md) | how it works inside |
 | [Providers and local models](docs/providers.md) · [Headless and CI](docs/headless.md) · [Library](docs/library.md) | using it |

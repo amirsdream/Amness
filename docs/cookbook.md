@@ -344,8 +344,23 @@ amness eval --variants full,chaos:tools,chaos:429 --trials 3
 
 `chaos:tools` makes about 1 in 4 tool calls fail. `chaos:429` makes about 3 in 10 model calls fail with a rate-limit error. Other kinds are `chaos:args` and `chaos:slow-tools`. A lower pass rate under chaos shows where the harness does not recover. Not measured on a real model yet.
 
+## 18. Compare Amness with Claude Code and Codex
+
+*Calls your models and costs money.* Install and log in to the other tools yourself. Then check, plan and probe before the real run:
+
+```bash
+amness bench --init
+amness bench --check
+amness bench --config bench.json --dry-run
+amness bench --config bench.json --probe
+amness bench --config bench.json --builtin code
+```
+
+Set a model for each contestant in `bench.json` and set a spending limit first. The result is a table with pass rate, tokens, cost and time. With 13 tasks, only large differences can be seen. Read [Compare coding agents with `amness bench`](bench.md), especially the Windows setup and the fair-play list. The `claude` and `codex` presets have not been run on a real machine by the author.
+
 ## Related pages
 
+- [Compare coding agents](bench.md)
 - [Headless and CI](headless.md)
 - [Evaluating the harness](evaluation.md)
 - [Plugins](plugins.md)
