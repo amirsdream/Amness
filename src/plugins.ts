@@ -13,8 +13,8 @@ import type { Guard, Message, Model, Tool } from "./harness.ts";
 import type { MemoryBackend } from "./memory.ts";
 import type { RouteInfo } from "./router.ts";
 import type { HookEvent, HookResult, HookRunner } from "./hooks.ts";
-import { exec } from "node:child_process";
-import { posixShell } from "./shell.ts";
+import { execFile } from "node:child_process";
+import { shellInvocation } from "./shell.ts";
 
 export type HookReturn = { block?: string; context?: string; args?: Record<string, unknown>; /** PreModel only: the tools that may be called in this turn */ tools?: string[]; then?: string } | string | void;
 export type HookHandler = (payload: Record<string, unknown> & { event: HookEvent; cwd: string }) => HookReturn | Promise<HookReturn>;
@@ -60,7 +60,7 @@ export function votingGate(name: string, reviewers: { name: string; review(ctx: 
   } };
 }
 const normalizeGate = (r: GateResult): { pass: boolean; findings: string[] } => r === undefined || r === true ? { pass: true, findings: [] } : r === false ? { pass: false, findings: ["the check failed"] } : typeof r === "string" ? { pass: false, findings: [r] } : Array.isArray(r) ? { pass: r.length === 0, findings: r } : { pass: r.pass, findings: r.findings ?? [] };
-const shellRun = (cwd: string): PluginCtx["run"] => (cmd, ms = 60_000) => new Promise((res) => exec(cmd, { cwd, shell: process.platform === "win32" ? posixShell() : undefined, timeout: ms, maxBuffer: 10 << 20 }, (err: any, out, errOut) => res({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, output: String(out) + String(errOut) })));
+const shellRun = (cwd: string): PluginCtx["run"] => (cmd, ms = 60_000) => new Promise((res) => execFile(shellInvocation(cmd).file, shellInvocation(cmd).args, { cwd, windowsHide: true, timeout: ms, maxBuffer: 10 << 20 }, (err: any, out, errOut) => res({ code: err ? (typeof err.code === "number" ? err.code : 1) : 0, output: String(out) + String(errOut) })));
 
 export type Plugin = {
   name: string; description?: string;

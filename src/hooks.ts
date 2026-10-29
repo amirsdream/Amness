@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { posixShell } from "./shell.ts";
+import { shellInvocation } from "./shell.ts";
 
 export type HookEvent = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "PreModel" | "PostModel";
 export const HOOK_EVENTS: HookEvent[] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "Stop", "PreModel", "PostModel"];
@@ -58,7 +58,7 @@ export class Hooks implements HookRunner {
 
   private exec(def: HookDef, input: object): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; warning?: string }> {
     return new Promise((done) => {
-      const p = spawn(posixShell(), ["-c", def.command], { cwd: this.cwd, env: this.env, stdio: ["pipe", "pipe", "pipe"] });
+      const inv = shellInvocation(def.command), p = spawn(inv.file, inv.args, { windowsHide: true, cwd: this.cwd, env: this.env, stdio: ["pipe", "pipe", "pipe"] });
       let out = "", err = "", settled = false;
       const finish = (v: Parameters<typeof done>[0]) => { if (!settled) { settled = true; clearTimeout(timer); done(v); } };
       const timer = setTimeout(() => { p.kill("SIGKILL"); finish({ warning: `hook \`${def.command}\` timed out after ${def.timeout ?? 10}s` }); }, (def.timeout ?? 10) * 1000);

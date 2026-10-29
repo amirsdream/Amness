@@ -2,7 +2,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { wrapCommand, type SandboxMode } from "./sandbox.ts";
 import { childEnv } from "./secrets.ts";
-import { posixShell } from "./shell.ts";
+import { shellInvocation } from "./shell.ts";
 
 export type ProcInfo = { id: string; name: string; cmd: string; pid?: number; status: "running" | "exited" | "killed"; code?: number | null; startedAt: number; bytes: number };
 type Proc = ProcInfo & { child: ChildProcess; buf: string; dropped: number; readPos: number; waiters: (() => void)[] };
@@ -16,7 +16,7 @@ export class ProcessManager {
     if ([...this.procs.values()].filter((p) => p.status === "running").length >= this.max) throw new Error(`already running ${this.max} background processes; stop one with sh_stop first`);
     const id = `p${++this.n}`;
     const w = wrapCommand(cmd, this.cwd, this.sandbox());            // throws when a sandbox is on but unavailable
-    const child = spawn(w?.file ?? posixShell(), w?.args ?? ["-c", cmd], { cwd: this.cwd, env: childEnv(process.env, this.sandbox() !== "off"), detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(w?.file ?? shellInvocation(cmd).file, w?.args ?? shellInvocation(cmd).args, { cwd: this.cwd, env: childEnv(process.env, this.sandbox() !== "off"), detached: true, stdio: ["ignore", "pipe", "pipe"] });
     const p: Proc = { id, name: name?.slice(0, 40) || cmd.split(/\s+/).slice(0, 3).join(" ").slice(0, 40), cmd, pid: child.pid, status: "running", startedAt: Date.now(), bytes: 0, child, buf: "", dropped: 0, readPos: 0, waiters: [] };
     const take = (d: Buffer) => {
       const s = d.toString("utf8"); p.bytes += s.length; p.buf += s;

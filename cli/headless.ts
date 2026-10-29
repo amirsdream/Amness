@@ -1,7 +1,7 @@
 // Non-interactive mode for CI, scripts and containers:  amness run [flags] "task"
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, loadPlugins, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
+import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, loadConfig, ready, type ProviderId } from "./config.ts";
 import { formatEvent } from "./format.ts";
 import { createModel } from "./model.ts";
@@ -80,6 +80,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
     } catch (e) { console.error("error: " + (e as Error).message); return 1; }
   }
   const tracer = val("--trace") || process.env.AMNESS_OTLP ? new Tracer({ file: val("--trace") ? resolve(val("--trace")!) : undefined, otlp: process.env.AMNESS_OTLP, sessionId: `run-${Date.now()}`, model: cfg.model }) : undefined;
+  setShell(cfg.shell);
   const loadedPlugins = await loadPlugins(cwd, { trustProject: trustHooks });
   for (const w of loadedPlugins.warnings) console.error("plugin: " + w);
   if (loadedPlugins.untrusted) console.error(`note: ${loadedPlugins.untrusted.count} project plugin file(s) in .amness/plugins were not loaded; pass --trust-project to run them`);

@@ -62,10 +62,16 @@ const FLOOR_DENY: [RegExp, string][] = [
   [/:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, "a fork bomb"],
   [/\bchmod\s+-R\s+0?777\s+\/(?:\s|$)/, "making the whole filesystem world-writable"],
   [/\bgit\s+(?:-\S+\s+)*push\b[^|;&]*\s(?:--force(?!-with-lease)|-f)\b[^|;&]*\b(?:main|master)\b/, "force-pushing to main or master"],
+  // Windows families (PowerShell and cmd): the same kinds of damage
+  [/\b(?:Remove-Item|ri|rm|del|erase)\b[^|;&\n]*-Recurse\b[^|;&\n]*(?:\s|['"])(?:[A-Za-z]:[\\/]?(?=\s|['"]|$)|[\\/](?=\s|['"]|$)|~(?=[\\/]?(?:\s|['"]|$))|\$HOME\b|\$env:(?:USERPROFILE|HOMEPATH|SystemRoot|SystemDrive)\b)/i, "recursive delete of a drive, your home folder or the system folder"],
+  [/\b(?:rd|rmdir|del|erase)\s+(?:\/[a-z]\s+)*\/s\b[^&|\n]*\s(?:[A-Za-z]:[\\/]?(?:\*(?:\.\*)?)?|%(?:USERPROFILE|HOMEPATH|SystemRoot|SystemDrive)%)(?=\s|$)/i, "recursive delete of a drive, your home folder or the system folder"],
+  [/\bFormat-Volume\b|\bformat(?:\.com)?\s+[A-Za-z]:(?=\s|$)|\bClear-Disk\b|\bInitialize-Disk\b/i, "formatting or wiping a disk"],
 ];
 const FLOOR_ASK: [RegExp, string][] = [
   [/\b(?:curl|wget)\b[^|;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/, "downloads and runs a script"],
   [/\bgit\s+(?:-\S+\s+)*push\b[^|;&]*\s(?:--force|--force-with-lease|-f)\b/, "force-pushes"],
+  [/\b(?:Invoke-WebRequest|iwr|Invoke-RestMethod|irm|curl|wget)\b[^|;\n]*\|\s*(?:Invoke-Expression|iex)\b/i, "downloads and runs a script"],
+  [/(?:^|[\s;&|])-(?:EncodedCommand|enc|ec)\s+\S+|\bFromBase64String\b[^;\n]*\b(?:Invoke-Expression|iex)\b/i, "runs an encoded command"],
 ];
 const WRITES_PROTECTED = /\.amness\/(?:hooks|permissions)\.json/;
 const READONLY_VERB = /^\s*(?:cat|head|tail|less|grep|rg|ls|wc|stat|file|diff)\b/;

@@ -1,6 +1,6 @@
 // Slash commands. Each gets the running App and the raw argument string.
 import { relatives } from "./session.ts";
-import { STRATEGIES, loadPrompts } from "../../src/index.ts";
+import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
 import { join, resolve } from "node:path";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, type ProviderId } from "../config.ts";
@@ -220,6 +220,13 @@ export function buildCommands(): Cmd[] {
     } },
     { name: "reload-plugins", help: "load the plugin files again (after you edited one)", run: async (a) => {
       await a.askPluginTrust(); a.buildAgent(); a.say(`${a.plugins.length} plugin${a.plugins.length === 1 ? "" : "s"} loaded${a.plugins.length ? ": " + a.plugins.map((p) => p.name).join(", ") : ""}. Project plugins you did not approve are skipped (if you edited one, Amness asks you to approve the new version first).`, dim);
+    } },
+    { name: "shell", help: "which shell runs the agent's commands (bash, zsh, sh, pwsh, powershell, cmd, or auto)", args: "[name|auto]", run: (a, arg) => {
+      const cur = currentShell(), found = SHELL_CHOICES.filter((n) => n !== "auto").filter((n) => { const s = chooseShell(n).shell; return !chooseShell(n).fallback && s.name === n; });
+      if (!arg) return void a.say(`shell: ${cur.name} (${cur.file}). Setting: ${a.cfg.shell ?? "auto"}. Installed here: ${found.join(", ") || "none found"}. The model is told which shell it has. Change with /shell <name> or /shell auto.`, dim);
+      if (!SHELL_CHOICES.includes(arg)) return void a.say(`unknown shell "${arg}". Choose one of ${SHELL_CHOICES.join(", ")}`, dim);
+      a.cfg.shell = arg === "auto" ? undefined : arg; setShell(a.cfg.shell); a.saveConfig(); a.buildAgent();
+      const now = currentShell(), fb = shellFallbackNote(); a.say(`shell: ${now.name} (${now.file})${fb ? ". " + fb : ""}. New conversations tell the model about it.`, dim);
     } },
     { name: "prompt", help: "choose the system prompt from .amness/prompts (or off for the built-in one)", args: "[id|list|off]", run: (a, arg) => {
       const list = loadPrompts(a.cwd);

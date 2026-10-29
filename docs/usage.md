@@ -237,6 +237,7 @@ Type `/` in the input box to see the popup. `/help` lists the commands in the ch
 |---|---|
 | `/verify [cmd\|off]` | Sets the command that must pass before the agent can finish. Without an argument, it shows the current command. Amness remembers it for each folder. |
 | `/check [cmd\|off]` | Sets a fast command that runs after every edit. Only failures go to the model. |
+| `/shell [name\|auto]` | which shell runs the agent's commands: bash, zsh, sh, pwsh, powershell, cmd, or auto (bash, then zsh, then sh on macOS and Linux; Git bash, then pwsh, then Windows PowerShell, then cmd on Windows). The model is told which one it has, and the safety floor knows PowerShell and cmd dangers |
 | `/lsp [on\|off]` | Adds language-server errors to edit results. You must install `typescript-language-server`, `pyright`, `gopls` or `rust-analyzer`. |
 
 When you start the chat, Amness picks a first `/verify` command for you if it can: `npm test` (for a `package.json` with a test script), `cargo test`, `go test ./...` or `pytest -q`. Type `/status` to see which command is set.

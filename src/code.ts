@@ -10,7 +10,7 @@ import { createHarness, defineTool, clip, makeHandoff, Registry, type ToolCtx, t
 import { MemoryStore, isMemoryBackend, memoryTools, type MemoryBackend } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
-import { posixShell, slash } from "./shell.ts";
+import { currentShell, shellInvocation, shellNote, slash } from "./shell.ts";
 import { ProcessManager } from "./procs.ts";
 import { reviewedApprove } from "./approver.ts";
 import { Diagnostics, type LspServer } from "./lsp.ts";
@@ -48,9 +48,8 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
   let wrapped: ReturnType<typeof wrapCommand>;
   try { wrapped = wrapCommand(cmd, cwd, sandbox); } catch (e) { return Promise.resolve(`exit=126\nERROR: ${(e as Error).message}`); }          // asked for a sandbox we cannot provide: refuse, never run unprotected
   const done = (err: any, out: string, errOut: string) => `exit=${err ? (err.name === "AbortError" ? "interrupted" : err.killed ? "timeout" : err.code ?? 1) : 0}\n${out}${errOut}`;
-  return new Promise((res) => wrapped
-    ? execFile(wrapped.file, wrapped.args, { cwd, env: childEnv(process.env, true), timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut)))
-    : exec(cmd, { cwd, shell: process.platform === "win32" ? posixShell() : undefined, env: childEnv(), timeout: ms, maxBuffer: 10 << 20, signal }, (err: any, out, errOut) => res(done(err, out, errOut))));
+  const inv = wrapped ?? shellInvocation(cmd);
+  return new Promise((res) => execFile(inv.file, inv.args, { cwd, env: childEnv(process.env, !!wrapped), timeout: ms, maxBuffer: 10 << 20, signal, windowsHide: true }, (err: any, out, errOut) => res(done(err, out, errOut))));
 }
 
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
@@ -150,7 +149,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
         return `patched ${r.applied.length} file(s):\n${lines.join("\n")}` + (await o.check?.(r.applied.filter((x) => x.after !== null).map((x) => x.path)) ?? "") + (o.guidance?.nested(r.applied[0].path) ?? "");
       } }),
     ...(o.procs ? bgTools(o.procs, shRisk, mode) : []),
-    defineTool<{ cmd: string; timeout?: number }>({ name: "sh", description: "Run a shell command in the workspace; returns exit code and output. Dangerous commands need human approval.",
+    defineTool<{ cmd: string; timeout?: number }>({ name: "sh", description: `Run a command in the workspace shell (${currentShell().name}); returns exit code and output. Dangerous commands need human approval.`,
       schema: { type: "object", required: ["cmd"], properties: { cmd: { type: "string" }, timeout: { type: "integer", description: "seconds, default 60" } } },
       risky: shRisk,
       preview: ({ cmd }) => cmd,
@@ -289,7 +288,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const routers = plugins.filter((p) => p.route);
   if (plugins.length) o = { ...o, model: routers.length && o.modelById ? routedByFunction(o.model, o.modelById, (i) => { for (const p of routers) { const r = p.route!(i); if (r) return r; } }) : o.model, hooks: composeHooks(o.hooks, plugins, o.cwd), tools: [...(o.tools ?? []), ...plugins.flatMap((p) => p.tools ?? [])] };
   const policyFn = plugins.some((p) => p.policy) ? (c: { tool: string; args: Record<string, unknown> }) => checkPolicies(plugins, { ...c, cwd: o.cwd }) : undefined;
-  const SYS = (chat: boolean | undefined) => applySystem(plugins, chat ? CHAT_SYSTEM : CODE_SYSTEM, o.cwd);
+  const SYS = (chat: boolean | undefined) => applySystem(plugins, (chat ? CHAT_SYSTEM : CODE_SYSTEM) + "\n" + shellNote(), o.cwd);
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);

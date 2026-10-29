@@ -231,3 +231,7 @@ What Amness does:
 - Try the sandbox: [Using the chat](usage.md)
 - Run Amness safely in CI: [Headless and CI](headless.md)
 - Read how the loop guards work: [Why: what Amness checks](why.md)
+
+## Which shell runs the agent's commands
+
+Amness checks what exists on your machine. On macOS and Linux it uses `bash`, then `zsh`, then `sh`. On Windows it uses the bash that comes with Git for Windows, then PowerShell 7 (`pwsh`), then Windows PowerShell, then `cmd.exe`. The model is told which shell it has, so it writes PowerShell commands for PowerShell. Use `/shell` to see the choice and change it, or set `AMNESS_SHELL`. The safety floor blocks the same kinds of damage in each family, for example `rm -rf /` in bash and `Remove-Item -Recurse -Force C:\` in PowerShell, and it asks before `iwr ... | iex` or an encoded command. The permission rules you write are matched as text, so write them for the shell you use. The OS sandbox exists only for bash-style shells on macOS and Linux; it is not available on Windows.

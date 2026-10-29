@@ -1,6 +1,6 @@
 // Language-server diagnostics after edits: the compiler's opinion of the file you just changed, one step after the edit instead of at the end of the task. A tiny LSP client over stdio
 // (no dependencies). Servers are started lazily, only when one is installed, kept alive between edits and stopped on dispose(). Errors only, capped, and silent when all is well.
-import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,7 +13,7 @@ export const DEFAULT_SERVERS: LspServer[] = [
   { name: "rust", command: "rust-analyzer", args: [], extensions: [".rs"], languageId: () => "rust" },
 ];
 export type Diagnostic = { line: number; col: number; message: string; severity: number; source?: string };
-const onPath = (bin: string) => { try { execFileSync("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" }); return true; } catch { return false; } };
+const onPath = (bin: string) => spawnSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: "ignore" }).status === 0;
 
 class Client {
   private p: ChildProcess; private buf = Buffer.alloc(0); private id = 0; private pending = new Map<number, (v: any) => void>();
