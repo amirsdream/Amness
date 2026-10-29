@@ -36,11 +36,11 @@ test("the safety floor knows the dangerous commands of PowerShell and cmd, and l
 });
 
 test("/shell shows what is installed and lets you choose; an unknown or missing choice is explained", async () => {
-  const { rig, KEY } = await import("./helpers/apprig.ts"); const t = rig([]); await t.start();
-  await t.submit("/shell"); assert.ok(await t.until(() => t.has("Installed here"))); assert.ok(t.has("Setting: auto"));
-  await t.submit("/shell nonsense"); assert.ok(await t.until(() => t.has('unknown shell "nonsense"')));
-  await t.submit("/shell bash"); assert.ok(await t.until(() => t.has("shell: bash"))); assert.equal(t.app.cfg.shell, "bash");
-  await t.submit("/shell auto"); assert.ok(await t.until(() => t.has("shell: bash") || t.has("shell: zsh") || t.has("shell: sh"))); assert.equal(t.app.cfg.shell, undefined);
+  const { rig, KEY } = await import("./helpers/apprig.ts"); const t = rig([]); await t.start(); const has = (s: string) => t.text().replace(/\s+/g, " ").includes(s);   // long paths wrap, so compare with the line breaks removed
+  await t.submit("/shell"); assert.ok(await t.until(() => has("Installed here"))); assert.ok(has("Setting: auto"));
+  await t.submit("/shell nonsense"); assert.ok(await t.until(() => has('unknown shell "nonsense"')));
+  await t.submit("/shell bash"); assert.ok(await t.until(() => has("shell: bash"))); assert.equal(t.app.cfg.shell, "bash");
+  await t.submit("/shell auto"); assert.ok(await t.until(() => has("shell: bash") || has("shell: zsh") || has("shell: sh"))); assert.equal(t.app.cfg.shell, undefined);
   await t.key(KEY.ctrlD);
 });
 
