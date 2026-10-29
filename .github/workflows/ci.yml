@@ -25,7 +25,7 @@ jobs:
       - name: bubblewrap (lets the Linux sandbox tests run when the runner allows user namespaces)
         run: sudo apt-get install -y bubblewrap || true
       - run: npm test
-      - name: the Linux sandbox is really exercised (informational: some runners forbid user namespaces)
+      - name: "The Linux sandbox is really exercised (informational, some runners forbid user namespaces)"
         continue-on-error: true
         env:
           AMNESS_REQUIRE_SANDBOX: "1"
