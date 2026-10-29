@@ -265,6 +265,85 @@ Amness drafts a title and a description from your diff and commits. It shows the
 
 Limits: `/pr` needs the GitHub CLI (`gh`) and a branch that is not the base branch. It creates nothing without your choice.
 
+## 13. Write a finish gate
+
+A *finish gate* is a check that must pass before the agent may finish. Save `.amness/plugins/gate.ts`:
+
+```ts
+export default {
+  name: "gate",
+  gates: [{
+    name: "tests-after-edit",
+    check: (ctx: any) => ctx.changed.length && ctx.testsAfterLastEdit === false
+      ? "you changed files but did not run the tests after the last edit" : true,
+  }],
+};
+```
+
+Start `amness` and approve the plugin. If the agent edits files and tries to finish without a test run, it sees `REJECTED by a hook: gate "tests-after-edit" (plugin gate) found problems:`. After 2 rejections for the same task, the run finishes anyway with a warning. Details: [Plugins](plugins.md#add-a-finish-gate). Tested with scripted models only.
+
+## 14. Deny a tool with a policy and test it on past traces
+
+1. Save `.amness/plugins/nocurl.ts`:
+
+   ```ts
+   export default {
+     name: "nocurl",
+     policy: ({ tool, args }: any) =>
+       tool === "sh" && /\bcurl\b/.test(String(args.cmd)) ? { action: "deny", reason: "no curl" } : undefined,
+   };
+   ```
+
+2. Replay your old sessions through it. This calls no model:
+
+   ```bash
+   amness plugin policy .amness/traces --plugin .amness/plugins/nocurl.ts
+   ```
+
+   You will see a line such as `40 trace file(s): 2 denied, 0 would ask, 0 allowed by the policy, 900 without an opinion`, then the denied calls. Deny beats ask, and ask beats allow. A policy cannot loosen the safety floor. Details: [Plugins](plugins.md#write-policy-as-code).
+
+## 15. Try a loop strategy and measure it
+
+*Calls your model.* Try it in the chat first:
+
+```text
+/strategy plan-first
+```
+
+Then measure it against the default:
+
+```bash
+amness eval --variants full,strategy:plan-first --builtin hard --trials 3 --metrics diff-lines,tool-calls
+```
+
+Read the report as in recipe 6. On one run with `gpt-4.1-mini` (6 tasks), `plan-first` and `full` had the same pass rate and the result was inconclusive. See [Evaluating the harness](evaluation.md#loop-strategies-2026-10-30).
+
+## 16. Stop regressions in CI with `--gate`
+
+*Calls your model.* Save a baseline once and commit it:
+
+```bash
+amness eval --variants full --builtin hard --trials 3 --yes --out evals/baseline.json
+```
+
+In CI, run the same command with a gate:
+
+```bash
+amness eval --variants full --builtin hard --trials 3 --yes --gate evals/baseline.json
+```
+
+The exit code is 1 when the pass rate dropped by more than 5 points and the drop is clear, or when tokens per solved task grew by more than 25%. Change the limits with `--gate-tol` and `--gate-cost`. A drop that noise could explain is only a warning. See [Custom metrics and the regression gate](evaluation.md#custom-metrics-and-the-regression-gate).
+
+## 17. Make things fail on purpose with a chaos variant
+
+*Calls your model.* Check that the harness recovers when tools or the API fail:
+
+```bash
+amness eval --variants full,chaos:tools,chaos:429 --trials 3
+```
+
+`chaos:tools` makes about 1 in 4 tool calls fail. `chaos:429` makes about 3 in 10 model calls fail with a rate-limit error. Other kinds are `chaos:args` and `chaos:slow-tools`. A lower pass rate under chaos shows where the harness does not recover. Not measured on a real model yet.
+
 ## Related pages
 
 - [Headless and CI](headless.md)
@@ -276,5 +355,6 @@ Limits: `/pr` needs the GitHub CLI (`gh`) and a branch that is not the base bran
 ## Next steps
 
 - Start with recipe 6 or 7 to measure the harness on your own work.
+- Recipes 13 to 17 cover finish gates, policies, strategies, CI gates and chaos.
 - Read [Features in depth](features.md) for permissions, sandbox and memory.
 - Read [Using the chat](usage.md) for all slash commands.

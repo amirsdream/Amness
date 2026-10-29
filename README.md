@@ -57,7 +57,7 @@ New to it? Follow the [step-by-step guide](docs/getting-started.md). Inside the 
 **Fix something and prove it, in CI or a script.** The task only counts as finished when your command passes.
 
 ```bash
-amness run --verify "npm test" "the date parser fails on leap days, fix it"
+amness run --verify "npm test" "the date parser fails on leap days, fix it"   # --verify = the command that must pass; the last text is the task
 amness run --best-of 3 --verify "npm test" "make the flaky test deterministic"   # up to 3 attempts in separate git worktrees, stops at the first pass
 amness run --json --trace run.jsonl --verify "npm test" "..."                     # machine-readable output and a full trace
 ```

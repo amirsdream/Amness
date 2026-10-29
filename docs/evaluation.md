@@ -267,6 +267,134 @@ Most public benchmarks need a separate environment for each instance, often a Do
 - `--variants` and `--baseline`: if the baseline name is not among the variants, Amness uses the first variant.
 - The method follows recent practice: harness choice can change cost per solved task by large factors while pass-rate differences stay small ([The Scaffold Effect in Coding Agents](https://arxiv.org/abs/2607.22585)), and task-level paired bootstrap intervals are the right uncertainty statement ([Harness or Model?](https://arxiv.org/html/2609.11987v1)).
 
+## More variant kinds
+
+Besides `baseline`, `full` and the `full-<guard>` names, `--variants` accepts these kinds. All of them run the full harness with one change. They are **tested** with scripted models (`test/trackc.test.ts`). Only `strategy:` was run on a real model (see below).
+
+| Variant | What it does |
+|---|---|
+| `prompt:<id>` | Replaces the system prompt with the text of `.amness/prompts/<id>.md`, or `~/.amness/prompts/<id>.md`. The id `base` keeps the built-in prompt. A block of front matter between `---` lines at the top of the file is removed. |
+| `model:<id>` | Runs the full harness on another model. It needs a model by id, which `amness eval` provides. |
+| `chaos:tools` | About 1 in 4 tool calls fails with `ERROR: simulated failure`. The `finish` tool is never changed. |
+| `chaos:429` | About 3 in 10 model calls fail with a rate-limit error (HTTP 429). Amness retries them. |
+| `chaos:args` | About 3 in 10 tool calls from the model arrive with broken JSON arguments. |
+| `chaos:slow-tools` | Every tool call waits 400 ms first. |
+| `strategy:<name>` | The full harness with a loop strategy: `plan-first` or `explore-then-act`. See [Plugins](plugins.md#change-the-loop-with-a-strategy). |
+| `full+plugins` | The full harness with every plugin from `--plugin` active. |
+
+Prompt ids may use letters, numbers, `.`, `_` and `-`, up to 40 characters. A project prompt wins over a user prompt with the same id. An unknown id stops the run and lists the ids found.
+
+Example. Compare a short prompt with the built-in one:
+
+```bash
+mkdir -p .amness/prompts
+echo "You are a careful coding agent. Make the smallest change that works." > .amness/prompts/terse.md
+amness eval --variants full,prompt:terse --trials 3
+```
+
+Limits: chaos failures are random but use a fixed seed, so a run is repeatable only in its pattern, not in what the model does. A chaos variant tells you whether the harness recovers. It does not tell you how often real tools fail.
+
+## Custom metrics and the regression gate
+
+**What it is.** A *metric* is a number that Amness records for every run, next to pass or fail. The report shows its mean for each variant and the paired difference to the baseline. A *regression gate* compares a new run with a saved one and exits with code 1 when things got clearly worse.
+
+**Why.** Pass rate alone hides a lot. Two variants can pass the same tasks while one changes twice as many lines. The gate lets CI catch a drop in quality or a rise in cost.
+
+**How to use it.**
+
+1. Choose metrics with `--metrics`:
+
+   ```bash
+   amness eval --variants full,strategy:plan-first --builtin hard --trials 3 --metrics diff-lines,tool-calls
+   ```
+
+   Built-in metrics:
+
+   | Metric | What it counts |
+   |---|---|
+   | `diff-lines` | Lines added or removed, compared with the task's starting files. A smaller change that still passes is usually better. |
+   | `tool-calls` | Tool calls the agent made. |
+   | `tokens-per-step` | Tokens spent per step. |
+   | `overclaim` | 1 when the agent's text says tests or the build passed but the task check failed. This is a text match, so it is a rough signal. |
+
+   A plugin can add more in its `metrics` field. Metrics from a loaded plugin are always recorded. An unknown name stops the run and lists the known names.
+
+2. Read the extra table in the report. It looks like this (the numbers are made up for the layout):
+
+   ```text
+   custom metrics (mean per run; Δ against full with 95% interval over tasks)
+   variant                diff-lines                     tool-calls
+   full                   22.00                          11.50
+   strategy:plan-first    15.30  Δ -6.70 [-14.20, -0.80] 8.60  Δ -2.90 [-6.60, 0.40]
+   ```
+
+   The mean is taken per task first, then over tasks. The difference is paired by task. The interval is a 95% bootstrap interval over tasks. If the interval includes zero, the data cannot tell.
+
+3. Save a good run as your baseline. Every run saves its rows to a file:
+
+   ```bash
+   amness eval --variants full --builtin hard --trials 3 --out evals/baseline.json
+   ```
+
+4. In CI, run again and compare:
+
+   ```bash
+   amness eval --variants full --builtin hard --trials 3 --yes --gate evals/baseline.json
+   ```
+
+   The command prints a block called `regression gate`. It exits with 0 when every variant is `ok`, and with 1 when one `FAIL`s.
+
+**The rules** (from `gateCompare` in `src/evals.ts`). The gate compares each variant with the same variant in the saved file. It uses only tasks that are in both files.
+
+- **Pass rate.** It fails only when the drop is bigger than `--gate-tol` points (default 5) and the drop is clear. Clear means that the whole 95% interval over tasks is below zero. A drop above the tolerance that noise could explain gives only a `warning`.
+- **Cost.** It fails when tokens per solved task grew by more than `--gate-cost` percent (default 25).
+- A variant that is not in the saved file passes with the note `not in the baseline file: nothing to compare`.
+
+Example with looser limits:
+
+```bash
+amness eval --variants full --yes --gate evals/baseline.json --gate-tol 10 --gate-cost 40
+```
+
+**Limits.**
+
+- With few tasks, a real drop is often not "clear", so the gate only warns. The built-in hard suite has 6 tasks. Use more tasks, or more trials, for a gate you trust.
+- Model sampling noise can move the cost figure. Use `--trials 3` or more.
+- The gate and the metrics are **tested** with scripted data. They have not been run in a real CI pipeline.
+
+## Grade real sessions
+
+**What it is.** An eval runs tasks that you wrote. `amness plugin grade` scores sessions that really happened, from the traces in `.amness/traces`. It makes no model call.
+
+**Why.** It shows how the harness does on the work you actually give it.
+
+**How to use it.**
+
+```bash
+amness plugin grade .amness/traces
+```
+
+Without a path, Amness reads `.amness/traces`. You can give trace files or folders. Choose graders with `--grader a,b`. Add graders from a plugin with `--plugin <file>`.
+
+Built-in graders (in `src/grade.ts`):
+
+| Grader | Score 1 means |
+|---|---|
+| `finished` | The agent called the `finish` tool. |
+| `no-rejections` | No finish attempt was rejected. |
+| `tool-errors` | The share of tool calls that did not fail. |
+| `no-loops` | The loop detector never fired. |
+| `verified-edits` | Either no file changed, or a test, build or lint command ran and did not fail. |
+
+You will see one line per grader, such as `finished  mean 62%  over 8 session(s)`, and up to five of the lowest sessions with the task text.
+
+**Limits.**
+
+- `finished` means the `finish` tool was called. A plain chat answer does not call it, so it scores 0 there. Do not use `finished` to judge chat sessions.
+- `verified-edits` looks for words such as `test`, `build` and `lint` in a shell command. It does not check that the command was the right one.
+- A grader that throws is skipped for that session. Sessions with no tool calls and no steps are left out.
+- **Tested** with scripted traces. Not measured on a large set of real sessions.
+
 ## Measured results so far
 
 Real runs, one model (`gpt-6-luna` through the OpenAI API), 2026-10-29. These are small and say little about harder tasks or other models.
@@ -292,9 +420,21 @@ What this means: the built-in tasks are too easy for this model to separate the 
 
 What this says: the guards neither help nor hurt measurably on these tasks and models; the cost overhead is real and shows even on strong models; the injection suite is too easy; and `spec-in-docs` shows a gap worth fixing (neither the reviewer nor any guard makes the model re-read the spec). `gpt-4.1-nano` and `gpt-3.5-turbo` returned HTTP 404 on this account, so they were not tested.
 
+### Loop strategies (2026-10-30)
+
+Model `gpt-4.1-mini`, `--builtin hard` (6 tasks), 2 trials per task, so 12 sessions per variant. Strategies are described in [Plugins](plugins.md#change-the-loop-with-a-strategy).
+
+| Run | Result |
+|---|---|
+| `full` against `strategy:explore-then-act` | `full` 92% pass, 14.4k tokens per solved task. `explore-then-act` 83% pass, 24.2k. No detectable difference. |
+| `strategy:plan-first`, first version | 17% pass. A bug: a reply with only a plan text ended the run, because the loop treated it as the final answer. It is fixed with the `then` field. This result does not describe the strategy. |
+| `full` against `strategy:plan-first`, after the fix, with `--metrics diff-lines,tool-calls` | `full` 83% pass, 35.8k tokens per solved task, 11.9 steps. `plan-first` 83% pass, 20.4k tokens per solved task, 9.0 steps. Pass rate: inconclusive (+0 points, interval -33 to +42). `diff-lines`: 22.0 for `full`, 15.3 for `plan-first` (difference -6.7, interval -14.2 to -0.8). `tool-calls`: 11.5 against 8.6 (difference -2.9, interval -6.6 to +0.4). |
+
+What this says. This is one run with 12 sessions per variant. The token figure for `full` is high because of a few long runs, so the cost difference is not reliable. The smaller diff for `plan-first` is the only interval that excludes zero. This does not show that `plan-first` is better. The pass rate of `full` also changed between the two runs (92% and 83%), which shows how much the numbers move from run to run.
+
 ## Related pages
 
-- [Plugins](plugins.md): write eval tasks and variants as code.
+- [Plugins](plugins.md): write eval tasks, variants, metrics, graders and strategies as code.
 - [Cookbook](cookbook.md): short recipes, including comparing two variants.
 - [Budgets and subagents](budgets.md): why the final report exists.
 - [Features in depth](features.md): guards, replay and failure mining.
