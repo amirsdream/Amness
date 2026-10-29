@@ -17,7 +17,7 @@ export type Model = ((messages: Message[], tools: ToolSpec[], opts?: ModelOpts) 
   api?: () => string;
 };
 
-export type ToolCtx = { registry: Registry; step: number; /** Aborted when the run is interrupted; long-running tools should honour it. */ signal?: AbortSignal; /** Publish a custom event (e.g. a live file diff) to `onEvent`. */ emit?: (e: Event) => void };
+export type ToolCtx = { registry: Registry; step: number; /** id of this tool call (subagent events carry it as `parent` so a UI can nest them under their card) */ callId?: string; /** Aborted when the run is interrupted; long-running tools should honour it. */ signal?: AbortSignal; /** Publish a custom event (e.g. a live file diff) to `onEvent`. */ emit?: (e: Event) => void };
 export type Tool<A = any> = {
   name: string; description: string; schema: Schema; run: (args: A, ctx: ToolCtx) => unknown | Promise<unknown>;
   /** Hidden from the model until it finds it via `tool_search` (keeps prompts small when you have many tools). */
@@ -379,8 +379,8 @@ export function createHarness(o: Options) {
       // Budget awareness (after BATS, arXiv 2511.17006: agents that can see their remaining budget spend it better). A few notes at fixed fractions, appended at the end so the cached prefix stays intact;
       // and when the cap is about to be hit, one last call without tools so the user gets what was found instead of a bare "budget exhausted".
       const frac = o.budget?.fraction ?? 0, over = o.budget?.exceeded();
-      if (o.budget) { stepCost = Math.max(stepCost, o.budget.effective - tokensAtStep); tokensAtStep = o.budget.effective; }
-      const nearCap = !!o.budget && Number.isFinite(o.budget.maxTokens) && o.budget.effective + 2 * Math.max(stepCost, lastPrompt * 0.3) > o.budget.maxTokens;      // another step plus the final report would not fit
+      if (o.budget) { stepCost = o.budget.effective - tokensAtStep; tokensAtStep = o.budget.effective; }
+      const nearCap = !!o.budget && Number.isFinite(o.budget.maxTokens) && o.budget.effective + 1.3 * stepCost + 200 > o.budget.maxTokens;      // another step plus the final report would not fit
       if (!off.has("wrapup") && frac > 0) {
         if (over || frac >= 0.95 || (nearCap && step > 0)) {
           emit({ kind: "budget", detail: over ?? `budget ${Math.round(frac * 100)}% used` });
@@ -514,7 +514,7 @@ export function createHarness(o: Options) {
         }
         let result: string;
         emit({ kind: "toolstart", id: c.id, name, args: raw });
-        try { const r = await t!.run(args, { registry: reg, step, emit: (ev) => { if (ev.kind === "edit") { epoch++; turnEdits.push({ path: ev.path, diff: ev.diff }); if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
+        try { const r = await t!.run(args, { registry: reg, step, callId: c.id, emit: (ev) => { if (ev.kind === "edit") { epoch++; turnEdits.push({ path: ev.path, diff: ev.diff }); if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
         if (name === "sh" && !off.has("ledger")) o.ledger?.onCommand(String(args.cmd ?? ""), result);
         if (o.redact && !off.has("redact")) { const rr = redact(result); if (rr.count) { result = rr.text; emit({ kind: "hook", event: "Redact", detail: `masked ${rr.count} secret(s) (${rr.kinds.join(", ")}) in the output of ${name}`, blocked: false }); } }

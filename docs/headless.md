@@ -16,6 +16,10 @@ amness run --verify "npm test" --json "fix the failing test"      # one-shot, no
 | `--bundle <file>` / `--export <file>` | continue from / write a portable session bundle |
 | `--live [port]` | serve the browser live view |
 | `--review` | independent reviewer (extra model calls) |
+| `--approval-reviewer` | a second model pre-approves clearly safe risky calls (without `--yes`, calls it does not clear are still denied) |
+| `--image <file>` | show the model a picture (repeatable, up to 4; vision model needed) |
+| `--best-of <n>` | try the task up to n times in separate git worktrees, stopping at the first attempt that passes `--verify` (required); the winner is applied |
+| `--parts <file.json>` | run independent parts (`[{"name","task"}]`) concurrently in worktrees, merged one at a time through `--verify` (required) |
 | `--trace <file>` | JSONL trace of every loop event (`AMNESS_OTLP` for OpenTelemetry export) |
 | `--max-tokens <n>` · `--no-memory` | hard token cap · disable memory |
 

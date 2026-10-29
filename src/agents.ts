@@ -34,6 +34,7 @@ export function loadAgents(cwd: string, o: { userHome?: string } = {}): { agents
       if (seen.has(name)) { if (name === "explore") warnings.push(`${conv}/${f}: "explore" is built in; pick another name`); continue; } seen.add(name);
       const asked = (meta.tools ? meta.tools.split(/[,\s]+/).filter(Boolean) : READ_TOOLS), tools = asked.filter((t) => AGENT_TOOLS.includes(t));
       for (const t of asked) if (!AGENT_TOOLS.includes(t)) warnings.push(`${conv}/${f}: tool "${t}" is not available to subagents (allowed: ${AGENT_TOOLS.join(", ")})`);
+      if (!/\b(report|return|summar|answer|finish)/i.test(m[2])) warnings.push(`${conv}/${f}: advice: say what the agent should report back (a short summary with file paths); subagents that do not know tend to ramble or stop without an answer`);
       agents.push({ name, description: meta.description.slice(0, 200), tools: tools.length ? tools : READ_TOOLS, model: meta.model || undefined, isolation: meta.isolation === "worktree" ? "worktree" : undefined, maxSteps: Math.min(60, Math.max(3, Number(meta["max-steps"]) || 20)), prompt: m[2].trim(), scope, source: conv, file: join(dir, f) });
     }
   }

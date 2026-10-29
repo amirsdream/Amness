@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { onRateLimitWait } from "../model.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
@@ -60,7 +61,7 @@ export class App {
   /** One entry per loop iteration of the conversation so far, for /loop. */
   trace: TraceStep[] = [];
   running = false; ac: AbortController | undefined; runStart = 0; runTokens = 0; lastPrompt = 0;
-  inflight = new Map<string, { name: string; args: string; t0: number; agent?: string }>();
+  inflight = new Map<string, { name: string; args: string; t0: number; agent?: string; parent?: string }>();
   pendingEdits = new Map<string, EditEv>();
   streamBuf = ""; msgOpen = false; streamedThisMsg = false;
   todos: { content: string; status: string }[] = [];
@@ -130,6 +131,7 @@ export class App {
 
   // ------------------------------------------------------------------ lifecycle
   async start() {
+    onRateLimitWait((ms, attempt, conc) => this.note(`rate limited by the provider: waiting ${Math.ceil(ms / 1000)}s, then retrying (attempt ${attempt}); ${conc} request${conc === 1 ? "" : "s"} at a time for now`));
     const { input, output } = this.io;
     input.setRawMode?.(true); input.setEncoding?.("utf8"); input.resume?.();
     output.write(PASTE_ON);
@@ -199,7 +201,12 @@ export class App {
     let cursor: { row: number; col: number } | undefined;
     if (this.streamBuf.trim()) { const r = renderMarkdown(this.streamBuf, w - 2).slice(-6); live.push(...r.map((l, i) => (this.msgOpen || i ? "  " : bold("● ")) + l)); }
     const now = Date.now();
-    for (const t of this.inflight.values()) live.push(`${t.agent && t.agent !== "lead" ? dim("  │ ") : ""}${cyan(SPIN[this.frame % SPIN.length])} ${toolCall(t.name, t.args)} ${dim(fmtDuration(now - t.t0))}`);
+    const latest = new Map<string, string>(); for (const [id, t] of this.inflight) if (t.agent && t.agent !== "lead") latest.set(t.parent ?? t.agent, id);        // one line per subagent: its newest step
+    for (const [id, t] of this.inflight) {
+      const subagent = t.agent && t.agent !== "lead";
+      if (subagent && latest.get(t.parent ?? t.agent!) !== id) continue;
+      live.push(`${subagent ? dim("  │ ") : ""}${cyan(SPIN[this.frame % SPIN.length])} ${toolCall(t.name, t.args)} ${dim(fmtDuration(now - t.t0))}${subagent ? dim(`  · ${t.agent}, step ${this.blocks.kids(t.parent ?? "").length || 1}`) : ""}`);
+    }
     if (this.running && this.todos.length) live.push(...todoList(this.todos, w));
     if (this.running && this.thinkBuf.trim() && !this.streamBuf.trim()) {                      // the model's reasoning summary, as it forms (OpenAI Responses)
       const last = this.thinkBuf.replace(/\s+/g, " ").trim().slice(-(w - 8));
@@ -448,7 +455,7 @@ export class App {
         this.session.usage.series = [...(this.session.usage.series ?? []), e.prompt].slice(-200); this.runSeries = [...this.runSeries, e.completion].slice(-40); if (!sub) { this.runTokens = e.tokens; this.lastPrompt = e.prompt; } else this.runTokens += e.completion; break;
       case "text": if (!sub) { this.thinkBuf = ""; this.blocks.endThinking(); this.blocks.streamAssistant(e.delta); this.streamBuf += e.delta; this.streamedThisMsg = true; this.flushStream(false); } break;
       case "assistant": if (!sub) { if (!this.streamedThisMsg || e.streamed === false) { this.blocks.setAssistant(e.text); this.streamBuf = e.text; this.streamedThisMsg = false; } this.blocks.endAssistant(); this.flushStream(true); } break;
-      case "toolstart": this.blocks.toolStart(e.id, e.name, e.args, sub); this.inflight.set(e.id, { name: e.name, args: e.args, t0: Date.now(), agent: sub }); this.ensureTimer(); break;
+      case "toolstart": this.blocks.toolStart(e.id, e.name, e.args, sub, (e as any).parent); this.inflight.set(e.id, { name: e.name, args: e.args, t0: Date.now(), agent: sub, parent: (e as any).parent }); this.ensureTimer(); break;
       case "edit": this.pendingEdits.set(e.path, e); this.edits.push(e); snapshot(this.session.turns.at(-1), e.path, e.before); break;
       case "tool": {
         const t = this.inflight.get(e.id ?? ""); this.inflight.delete(e.id ?? ""); this.idleTimer();
@@ -461,7 +468,7 @@ export class App {
         if (e.name === "apply_patch" && !bad) { [ed, ...more] = [...this.pendingEdits.values()]; this.pendingEdits.clear(); editPath = ed?.path ?? ""; }
         this.blocks.toolEnd(e.id ?? "", e.result, ed ? { path: ed.path, created: ed.created, added: ed.added, removed: ed.removed, diff: ed.diff } : undefined);
         for (const x of more) { const id = `${e.id}#${x.path}`; this.blocks.toolStart(id, "edit_file", JSON.stringify({ path: x.path })); this.blocks.toolEnd(id, `patched ${x.path}`, { path: x.path, created: x.created, added: x.added, removed: x.removed, diff: x.diff }); }
-        if (sub) { this.inlineOnly([toolHeader(e.name, e.args, !bad, sub)]); break; }
+        if (sub) break;                                  // a subagent's steps live inside its own card (full-screen) or the live status line (inline), never scattered in the transcript
         if (e.name === "todo_write") break;
         const lines = ["", toolHeader(e.name, e.args, !bad)];
         if (ed) { lines.push(`  ${gray("⎿")}  ${dim(editSummary(ed))}`, ...renderDiff(ed.diff, w)); for (const x of more) lines.push(`  ${gray("⎿")}  ${dim(editSummary(x))}`, ...renderDiff(x.diff, w)); }

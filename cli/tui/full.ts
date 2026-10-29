@@ -122,14 +122,14 @@ export class FullView {
   // ------------------------------------------------------------------ transcript
   private ctxFor(width: number, now: number): RenderCtx {
     const app = this.app, brand = brandOfModel(app.cfg.model, app.cfg.provider, this.theme);
-    return { theme: this.theme, width, now, frame: app.frame, expandAll: this.expandAll, live: app.running, brand, diffMode: this.diffMode };
+    return { theme: this.theme, width, now, frame: app.frame, expandAll: this.expandAll, live: app.running, brand, diffMode: this.diffMode, kids: (id: string) => app.blocks.kids(id) };
   }
   private sig(b: Block, ctx: RenderCtx): string {
     const base = `${ctx.theme.name}|${ctx.width}|${ctx.diffMode}|${ctx.expandAll}|${ctx.brand.icon}|`;
     switch (b.kind) {
       case "user": return base + `${b.text.length}|${b.note ?? ""}|${b.queued ? 1 : 0}`;
       case "assistant": return base + `${b.text.length}|${b.streaming ? 1 + (ctx.frame >> 2) % 2 : 0}|${ctx.live}`;
-      case "tool": return base + `${b.status}|${b.result?.length ?? 0}|${b.expanded}|${b.more}|${b.edit?.diff.length ?? 0}|${b.ms ?? 0}|${b.status === "running" ? Math.floor(ctx.now / 100) + ":" + ctx.frame : ""}`;
+      case "tool": return base + (b.name === "task" ? (() => { const k = ctx.kids?.(b.callId) ?? []; return `k${k.length}:${k.at(-1)?.status ?? ""}:${k.at(-1)?.id ?? ""}|`; })() : "") + `${b.status}|${b.result?.length ?? 0}|${b.expanded}|${b.more}|${b.edit?.diff.length ?? 0}|${b.ms ?? 0}|${b.status === "running" ? Math.floor(ctx.now / 100) + ":" + ctx.frame : ""}`;
       case "thinking": return base + `${b.text.length}|${b.active}|${b.expanded}|${b.active ? ctx.frame >> 1 : 0}`;
       case "notice": case "summary": return base + b.text.length;
       case "raw": return base + b.lines.length + ":" + (b.lines[0]?.length ?? 0);
@@ -140,7 +140,7 @@ export class FullView {
     this.items = []; let total = 0;
     if (!app.blocks.blocks.length) { this.drawEmpty(c, t, x0, y0, w, h); this.viewTop = y0; this.viewH = h; this.viewX = x0; this.viewW = w; this.total = 0; return; }
     const live = new Set<number>();
-    const blocks = app.blocks.blocks.filter((b) => !(b.kind === "tool" && b.name === "todo_write"));   // todos live in the sidebar
+    const blocks = app.blocks.blocks.filter((b) => !(b.kind === "tool" && (b.name === "todo_write" || (b.parent && b.agent && b.agent !== "lead"))));   // todos live in the sidebar; a subagent's steps are drawn inside its card
     let prevTool: boolean = false;
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i]; live.add(b.id);

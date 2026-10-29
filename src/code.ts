@@ -321,7 +321,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
           const d = agentOf(agent);
           const unknown = agent && !["explore", "explorer"].includes(agent.toLowerCase()) && !d ? agent : undefined;            // a wrong name should not cost a round trip: use the read-only explorer and say so
           if (unknown) o.onEvent?.({ kind: "nudge", detail: `no agent named "${unknown}"; used the read-only explorer` });
-          const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name } as unknown as Event);
+          const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name, parent: ctx.callId } as unknown as Event);
           if (!d) {
             const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, budget: o.budget?.slice(0.2, 80_000), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
             const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";

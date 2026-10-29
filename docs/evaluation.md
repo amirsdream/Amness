@@ -35,3 +35,17 @@ Real runs, one model (`gpt-6-luna` through the OpenAI API), 2026-10-29. These ar
 | Adversarial suite (3 prompt-injection tasks × 3 trials): `full`, `full-taint`, `baseline` | 100% for all three: this model did not follow the injected commands even without the taint check, so the check had nothing to catch. It remains untested whether it helps with models that are more easily led. |
 
 What this means: the built-in tasks are too easy for this model to separate the variants, and the reviewer is not worth its cost on them. The `full+route`, ablation, `tune` and best-of-n features are not measured. Harder tasks (for example a SWE-bench-format suite with `--suite`) are needed before any guard can be shown to help or hurt. Raw results were saved under `.amness/evals/` (not committed).
+
+### Second round (2026-10-30): a harder suite and weaker models
+
+`amness eval --builtin hard` has 6 tasks with hidden edge cases, a misleading symptom, a question to answer from a 50-file repository, a string-dispatch rename, an async-ordering bug and a slow function. All six have a reference solution checked by `--selftest`.
+
+| Run | Result |
+|---|---|
+| `gpt-6-luna`, hard suite × 3 trials: `baseline`, `full`, `full+review` | 100% for all three. Tokens per solved task 9.7k / 11.7k / 20.5k: on a model this strong the guards cost 20% more tokens and the reviewer more than double, for no gain. |
+| `gpt-4.1-mini`, hard suite × 3 trials, same three variants | 89% / 83% / 89%; the one task all variants miss (`spec-in-docs`: hidden edge cases listed only in a spec file) is missed by every variant, including the reviewer. Tokens per solved task 15.2k / 14.7k / 26.3k. No difference is detectable (6 tasks). |
+| `gpt-4.1-mini`, hard suite × 2 trials, `full` against each `full-<guard>` (144 sessions) | Every comparison is inconclusive (pass-rate changes between -17 and +8 points, intervals include zero); removing `taint`, `condense`, `ledger` or `stagnation` was not worse and used fewer tokens, but 6 tasks × 2 trials cannot support removing anything. |
+| Injection suite, `gpt-4o-mini`, 6 trials: `full`, `full-taint`, `baseline` | 100% for all: the model did not follow the injected commands even without the taint check. |
+| Budget fix, `gpt-4.1-mini`, exploration question, cap 2,500 tokens, 8 runs | Without the final report 7 of 8 runs ended with a bare "token budget exhausted" and nothing else; with it all 8 ended with a short report of what was found and what was left (it named the right file in most), but none completed the answer (the cap was smaller than one full exploration). At caps where the task fits (6,000) both behave the same (8 of 8 answered). At 4,000, 7 of 8 answered without the report and 6 of 8 with it: wrapping up early costs a little completion when the cap is very tight (small sample). |
+
+What this says: the guards neither help nor hurt measurably on these tasks and models; the cost overhead is real and shows even on strong models; the injection suite is too easy; and `spec-in-docs` shows a gap worth fixing (neither the reviewer nor any guard makes the model re-read the spec). `gpt-4.1-nano` and `gpt-3.5-turbo` returned HTTP 404 on this account, so they were not tested.

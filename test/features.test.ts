@@ -137,14 +137,14 @@ test("evaluate runs cases x variants, judges with held-out check, aggregates", a
 });
 
 test("budget awareness: notes at 50% and 75%+, and a final no-tools report instead of a bare stop", async () => {
-  const noop = defineTool({ name: "noop", description: "", schema: { type: "object" }, run: () => "ok" }), budget = new Budget({ maxTokens: 1000 }), events: Event[] = [];
-  const replies: Message[] = Array.from({ length: 12 }, (_, i) => call(["noop", { i }]));
+  const noop = defineTool({ name: "noop", description: "", schema: { type: "object" }, run: () => "ok" }), budget = new Budget({ maxTokens: 2000 }), events: Event[] = [];
+  const replies: Message[] = Array.from({ length: 30 }, (_, i) => call(["noop", { i }]));
   const seen: { n: number; tools: number; msgs: Message[] }[] = [];
   const model: Model = async (msgs, specs) => { seen.push({ n: seen.length, tools: specs.length, msgs: msgs.map((m) => ({ ...m })) }); if (specs.length === 0) return { role: "assistant", content: "Found X; Y is left.", usage: { total_tokens: 100 } }; return { ...replies.shift()!, usage: { total_tokens: 100 } }; };
-  const r = await createHarness({ model, tools: [noop], budget, onEvent: (e) => events.push(e) }).run("t");
+  const r = await createHarness({ model, tools: [noop], budget, onEvent: (e) => events.push(e), off: ["stagnation", "loop"] }).run("t");
   const notes = seen.at(-1)!.msgs.filter((m) => m.role === "user" && /^Budget: /.test(m.content ?? "")).map((m) => m.content!);
-  assert.equal(notes.length, 2); assert.match(notes[0], /50% used/); assert.match(notes[1], /80% used/);
-  assert.equal(r.stopped, "budget"); assert.match(r.text, /Found X; Y is left\./); assert.ok(budget.tokens <= 1000, `stayed within the cap, used ${budget.tokens}`);
+  assert.equal(notes.length, 2); assert.match(notes[0], /50% used/); assert.match(notes[1], /75% used/);
+  assert.equal(r.stopped, "budget"); assert.match(r.text, /Found X; Y is left\./); assert.ok(budget.tokens <= 2000, `stayed within the cap, used ${budget.tokens}`);
   assert.equal(seen.at(-1)!.tools, 0);
   const off = await createHarness({ model: scripted(call(["noop", {}]), call(["noop", {}]), call(["noop", {}])).model, tools: [noop], budget: new Budget({ maxTokens: 250 }), off: ["wrapup"] }).run("t");
   assert.equal(off.stopped, "budget"); assert.match(off.text, /^stopped: token budget exhausted/);

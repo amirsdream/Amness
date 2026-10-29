@@ -30,6 +30,26 @@ A question like "explore the codebase" had no natural end: the model kept readin
 
 All of this is tested with scripted models and fake SDK clients. None of it has been measured on a real model for fewer exhausted runs; the eval runner can do that once there are exploration-style tasks in the suite.
 
+## Rate limits (requests and tokens per minute)
+
+Several agents sharing one API key (the lead plus up to three explorers, the reviewer) can exceed the per-minute limits, and failed requests count toward them. What the vendors say ([OpenAI rate limits](https://developers.openai.com/api/docs/guides/rate-limits), [Claude rate limits](https://platform.claude.com/docs/en/api/rate-limits), both *read*):
+
+- Wait at least `Retry-After` plus a little random jitter; use exponential backoff with jitter when it is missing; cap attempts and total wait; do not retry quota or spend-cap errors (they also arrive as 429); if you retry yourself, do not also let an SDK retry.
+- Limits are enforced over short windows (60 requests per minute can mean one per second), and a sharp traffic increase can trigger "acceleration" 429s: ramp up gradually.
+- Claude counts only uncached input toward its input-tokens-per-minute limit, and `max_tokens` does not count toward its output limit; OpenAI counts the larger of `max_tokens` and the estimated request size, so keep `max_tokens` near the expected output.
+
+What Amness does (`src/ratelimit.ts`, every provider, shared by all agents in the process):
+1. One gate per endpoint and key limits requests in flight (default 4, `maxConcurrent` in the config) and starts at 2, adding one after three successes (gradual ramp-up).
+2. On a recoverable 429 every caller pauses for the server's `Retry-After` (or an exponential backoff with jitter), the concurrency is halved (like TCP congestion control), and the TUI says so: "rate limited by the provider: waiting 12s...".
+3. Quota, billing and spend-cap errors, aborts, waits longer than two minutes, and more than six attempts are not retried; the error reaches you.
+4. The OpenAI adapter no longer retries 429 itself (the gate does), but still retries timeouts and 5xx honouring `Retry-After`.
+
+Tested with fake models and clocks; not yet triggered by a real 429 (the evals above ran slower than expected when many sessions ran at once, which is the situation this exists for).
+
+## Subagents in the UI
+
+A subagent's steps used to be drawn as loose lines in the transcript, interleaved when explorers ran in parallel. Every event now carries the id of the `task` call that started it (`parent`). Full-screen: the steps live inside their card (the newest three while it runs, a one-line summary such as "12 steps · 7 files read · 4 searches" when done, the whole list when you open it). Inline: one live line per subagent showing its newest step and step count. An interrupted or failed turn closes every card that was still running.
+
 ## Model-agnostic by design
 
 Everything except item 7 lives in the harness and works the same for OpenAI, Claude and local models: the notes and final report are ordinary messages, the subagent limits are ours, and the prompt rules are plain text. Where a server reports no token usage (common with local servers), the harness estimates it at about 4 characters per token so the cap, notes and final report still work; those figures are marked `estimated`. Only the opt-in `taskBudget` is Claude-specific, and it is ignored for other providers and unsupported Claude models.

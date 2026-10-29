@@ -11,6 +11,7 @@ import { codeBlocks } from "./clipboard.ts";
 
 export type RenderCtx = {
   theme: Theme; width: number; now: number; frame: number; expandAll: boolean; live: boolean;
+  /** the steps a subagent card ran (full-screen view nests them inside the card) */ kids?: (callId: string) => ToolBlock[];
   brand: { icon: string; color: number }; diffMode: "auto" | "stacked" | "split";
   /** The block above is also a tool call: draw no blank line between them, so a run of tool calls reads as one unit. */
   tight?: boolean;
@@ -133,14 +134,22 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
     ? F(t.accent2, spinner) + F(t.dim, ` ${fmtMs(c.now - b.t0)}`)
     : edit ? (edit.created ? chip("new", t.onAccent, t.ok) + " " : "") + F(t.addFg, `+${edit.added}`) + " " + F(t.delFg, `−${edit.removed}`) + (b.ms !== undefined && b.ms >= 50 ? F(t.faint, ` · ${fmtMs(b.ms)}`) : "")
     : F(failed ? t.err : t.ok, failed ? "✗ " : "✓ ") + F(failed ? t.err : t.dim, summarize(b.name, b.args, b.result ?? "")) + (b.ms !== undefined && b.ms >= 50 ? F(t.faint, ` · ${fmtMs(b.ms)}`) : "");
-  const hasBody = b.status !== "running" && !!(edit || (b.result && b.result.trim()));
+  const kids = !sub && b.name === "task" ? c.kids?.(b.callId) ?? [] : [];
+  const hasBody = (b.status !== "running" || kids.length > 0) && !!(edit || kids.length || (b.result && b.result.trim()));
   const caret = F(t.faint, hasBody ? (expanded ? "▾" : "▸") : " ");
   if (!sub && (!c.tight || (hasBody && expanded))) blank();   // collapsed one-liners stack tightly; a card with a body gets air above it
   const head = `${caret} ${F(hue, "●")} ${label}  ${args}`;
   rows.push(sub ? `   ${F(t.faint, "│")} ${F(hue, "●")} ${F(t.dim, toolLabel(b.name))} ${F(t.faint, argSummary(b.name, b.args))}` : split(" " + head, status + " ", bw, bg));
   if (!sub && hasBody) hits.push({ row: rows.length - 1, x0: MARGIN, x1: c.width - MARGIN, kind: "toggle", id: b.id });
 
-  if (!sub && hasBody && expanded) {
+  if (kids.length) {                                       // a subagent's steps, inside its own card: the newest few while it runs, a one-line summary when done, all of them when opened
+    const line = (k: ToolBlock) => fit(`   ${F(t.faint, "│")} ${k.status === "running" ? F(t.accent2, spinner) : k.status === "fail" ? F(t.err, "✗") : F(t.ok, "✓")} ${F(t.dim, toolLabel(k.name).padEnd(7))} ${F(t.text, clipWidth(argSummary(k.name, k.args), bw - 24))}`, bw, t.bg);
+    const running = b.status === "running", shown = expanded ? kids : running ? kids.slice(-3) : [];
+    if (!expanded && running && kids.length > 3) rows.push(fit(`   ${F(t.faint, "│ … " + (kids.length - 3) + " earlier step" + (kids.length - 3 === 1 ? "" : "s"))}`, bw, t.bg));
+    for (const k of shown) rows.push(line(k));
+    if (!running && !expanded) rows.push(fit(`   ${F(t.faint, "│")} ${F(t.dim, `${kids.length} step${kids.length === 1 ? "" : "s"} · ${groupSummary(kids) || "no lookups"}`)}  ${F(t.faint, "(click to see them)")}`, bw, t.bg));
+  }
+  if (!sub && hasBody && expanded && (edit || (b.result && b.result.trim()))) {
     const bar = F(hue, "▏"), body = (s: string) => rows.push(fit(bar + " " + s, bw, bg));
     if (edit) {
       const mode = c.diffMode === "auto" ? (bw >= 120 ? "split" : "stacked") : c.diffMode, max = b.more ? Infinity : 16;

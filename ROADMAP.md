@@ -95,6 +95,10 @@ Everything in the Status table above is built and pushed; most Track B items are
 | E12 | Image input with a live vision model (OpenAI and Claude); local `llava`. | G17 wire format is only unit-tested. | tiny |
 | E13 | Claude `taskBudget` on a supported Claude model (needs an Anthropic key): exhausted-run rate and premature stops at 64k / 150k. | Budget doc says too-small budgets cause early stops. | small |
 
+**Status 2026-10-30:** E1 done (`--builtin hard`, 6 tasks, selftested). E2 run once on gpt-4.1-mini (2 trials: all inconclusive), E3 run on two models (reviewer: no gain, 2× tokens), E5 run on gpt-4o-mini (injections resisted), E9 run ad hoc (final report turns bare stops into useful partial reports; completion slightly lower at very tight caps). E4 (needs a cheap model id), E6, E7, E8, E10 to E13 not run. Results in docs/evaluation.md.
+
+New measurement items: **E14** a stronger injection suite (models resisted all three attacks; try instructions that look like the user's own, injected through test output and error messages, and multi-step lures). **E15** repeat the ablation with 5+ trials and fewer parallel jobs on 12+ tasks before removing any guard. **E16** make `spec-in-docs` pass: the reviewer's criteria did not catch an edge case listed in a spec file; test a "re-read the spec/README before finishing" check and a criteria step that quotes the spec.
+
 ### B. Build
 
 | Id | Item | Priority | Effort | Done |
@@ -115,8 +119,11 @@ Everything in the Status table above is built and pushed; most Track B items are
 | G37 | `amness schedule` end to end on a real crontab (macOS and Linux) and a launchd/systemd-timer option; run the GitHub Action once in a throwaway repo with a real key. | P3 | M | [ ] |
 | G38 | Linux sandbox check: confirm the bubblewrap tests actually run (not skip) in CI; if the runner blocks user namespaces, document it. (Closes the open part of G6.) | P2 | S | [~] |
 | G39 | Cost display: show estimated dollars per run including subagents and the reviewer, and the cache-waste figure, in the final "Worked for" line. | P2 | S | [ ] |
-| G40 | Docs pass: `docs/usage.md` for `/branch`, images, `amness schedule|acp|tune`; a short "Choosing a budget" guide (default 300k, what the notes do, when to raise it). Keep README a landing page. | P2 | S | [ ] |
-| G41 | Memory/skills/subagent briefs: add the Anthropic brief template (objective, output format, boundaries) as a snippet for custom agents in `.amness/agents/*.md`, and a lint warning for agents with no description of what to return. | P3 | S | [ ] |
+| G40 | Docs pass: `docs/usage.md` for `/branch`, images, `amness schedule|acp|tune`; a short "Choosing a budget" guide (default 300k, what the notes do, when to raise it). Keep README a landing page. | P2 | S | [~] |
+| G41 | Memory/skills/subagent briefs: add the Anthropic brief template (objective, output format, boundaries) as a snippet for custom agents in `.amness/agents/*.md`, and a lint warning for agents with no description of what to return. | P3 | S | [x] |
+| G42 | Shared rate limiter for all model calls (Retry-After, jitter, AIMD concurrency, ramp-up, quota errors not retried). Left: see a real 429, tune the defaults (start 2, ceiling 4), and use `x-ratelimit-remaining-tokens` to slow down before the 429. | P1 | M | [~] |
+| G43 | Subagent steps nested inside their card (parent ids), one live line per subagent inline. Left: subagent token/step counts on the card, and click-through to a subagent's full transcript. | P1 | M | [x] |
+| G44 | Reviewer/criteria should catch spec details (see E16); re-read-the-spec check before finishing when the task mentions a spec or docs file. | P2 | M | [ ] |
 
 ### C. Known limits to keep honest in the docs
 
@@ -354,6 +361,8 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G41**: agents with no 'report' instruction in their prompt get an advice warning; brief template is in docs/budgets.md
+- **G40** (partly): usage.md lists /budget /lsp /approver /branch, images and config-only options; headless.md flags for --best-of/--parts/--image/--approval-reviewer not yet listed
 - **G24** (partly): compactAt option: context_management sent on official OpenAI hosts, input before the newest compaction item dropped; wire-level tests only, not measured against our own trimming
 - **G38** (partly): CI step requires a working sandbox (AMNESS_REQUIRE_SANDBOX=1, informational); result to be read from the next run
 - **G34** (partly): name amness is free on npm (404); npm publish --dry-run is clean (203 files, 2.2 MB); CHANGELOG.md added. Left: your npm token and a v0.1.0 tag
@@ -402,3 +411,4 @@ Newest first. When an item is finished, tick it above and add one line here with
 - **Measured on gpt-6-luna (2026-10-29)**: built-in suite baseline 96% / full 100% / full+review 100% (tokens per solved task 9.2k / 8.3k / 14.7k), adversarial suite 100% for full, full-taint and baseline. No detectable effect of any guard on these easy tasks, and the reviewer cost ~77% more tokens for no gain here. L2/L3/L9 stay `[~]`: they need harder tasks. Details in docs/evaluation.md.
 - **Budget exhaustion fix (2026-10-29)**: a run that explored without closing hit the 300k cap with no answer. Added budget notes (50/75/90%), a final no-tools report before the cap, a 12-turn read-only check, and cached input counted at a tenth against the cap. Under the `wrapup` guard; scripted tests only. See docs/agent-loop.md.
 - 2026-10-29 (end of day): added "Next up" with E1 to E13 (measurements) and G24 to G41 (build). First real-model results and the budget fix are in the entries above and docs/evaluation.md, docs/budgets.md.
+- 2026-10-30: hard eval suite, /budget /lsp /approver, sidebar budget, running cards closed at turn end, OpenAI compactAt, CHANGELOG, require-sandbox CI check, subagent steps nested inside their card (parent ids), shared rate limiter (Retry-After, AIMD concurrency, quota errors not retried), maxConcurrent. See docs/budgets.md.

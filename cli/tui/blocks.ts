@@ -7,7 +7,7 @@ export type Edit = { path: string; created: boolean; added: number; removed: num
 export type Block =
   | { id: number; kind: "user"; text: string; note?: string; queued?: boolean }
   | { id: number; kind: "assistant"; text: string; streaming: boolean }
-  | { id: number; kind: "tool"; callId: string; name: string; args: string; status: "running" | "ok" | "fail"; result?: string; edit?: Edit; agent?: string; t0: number; ms?: number; expanded?: boolean; /** show every diff row, not just the first screenful */ more?: boolean }
+  | { id: number; kind: "tool"; callId: string; name: string; args: string; status: "running" | "ok" | "fail"; result?: string; edit?: Edit; agent?: string; /** call id of the subagent card this step belongs to */ parent?: string; t0: number; ms?: number; expanded?: boolean; /** show every diff row, not just the first screenful */ more?: boolean }
   | { id: number; kind: "thinking"; text: string; active: boolean; t0: number; ms?: number; expanded?: boolean }
   | { id: number; kind: "notice"; level: "info" | "warn" | "error" | "ok"; text: string }
   | { id: number; kind: "summary"; text: string }
@@ -44,7 +44,9 @@ export class BlockStore {
     b.text += delta; this.version++;
   }
   endThinking() { const b = this.last("thinking", this.openThinking); if (b) { b.active = false; b.ms = Date.now() - b.t0; this.version++; } this.openThinking = undefined; }
-  toolStart(id: string, name: string, args: string, agent?: string) { this.endAssistant(); this.endThinking(); return this.add<Extract<Block, { kind: "tool" }>>({ kind: "tool", callId: id, name, args, status: "running", agent, t0: Date.now() }); }
+  toolStart(id: string, name: string, args: string, agent?: string, parent?: string) { this.endAssistant(); this.endThinking(); return this.add<Extract<Block, { kind: "tool" }>>({ kind: "tool", callId: id, name, args, status: "running", agent, parent, t0: Date.now() }); }
+  /** The steps a subagent card ran, in order. */
+  kids(callId: string) { return this.blocks.filter((b): b is Extract<Block, { kind: "tool" }> => b.kind === "tool" && b.parent === callId); }
   tool(callId: string) { return [...this.blocks].reverse().find((b) => b.kind === "tool" && b.callId === callId) as Extract<Block, { kind: "tool" }> | undefined; }
   toolEnd(callId: string, result: string, edit?: Edit) {
     const b = this.tool(callId);

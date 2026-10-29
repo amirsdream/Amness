@@ -444,3 +444,14 @@ test("interrupting while an Explore subagent runs leaves no card spinning, and a
   const task = t.app.blocks.blocks.find((b: any) => b.kind === "tool" && b.name === "task") as any; assert.equal(task.status, "fail");
   await t.key(KEY.ctrlD);
 });
+
+test("a subagent's steps are drawn inside its own card (not scattered), summarised when done, and listed when opened", async () => {
+  const t = rig([call("task", { description: "survey" }), call("read_file", { path: "a.txt" }), call("grep", { pattern: "one" }), call("finish", { summary: "a.txt holds one" }), say("It holds one.")], { ui: "full", cols: 132, rows: 40 }); await t.start();
+  await t.submit("explore"); assert.ok(await t.until(() => t.idle()));
+  const top = t.app.blocks.blocks.filter((b: any) => b.kind === "tool" && !b.parent).map((b: any) => b.name); assert.deepEqual(top, ["task"]);
+  assert.equal(t.app.blocks.kids((t.app.blocks.blocks.find((b: any) => b.name === "task") as any).callId).length, 2);
+  let s = plain(t.screen()); assert.match(s, /2 steps · 1 file read · 1 search/);
+  const task = t.app.blocks.blocks.find((b: any) => b.name === "task") as any; t.app.blocks.toggle(task.id); t.app.render(); await t.settle(200);
+  s = plain(t.screen()); assert.match(s, /✓ Read\s+a\.txt/); assert.match(s, /✓ \w+\s+.*one/);
+  await t.key(KEY.ctrlD);
+});

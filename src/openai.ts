@@ -10,6 +10,8 @@ import type { Message, Model, ModelOpts, ToolSpec } from "./harness.ts";
  */
 export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type OpenAIOptions = {
+  /** Let the caller handle 429 responses (the shared rate limiter does); the adapter still retries timeouts and 5xx. */
+  externalRetry?: boolean;
   /** Server-side compaction (Responses API): once the prompt passes this many tokens the server compacts the conversation into an opaque item, and we stop re-sending what came before it. Off by default; ignored on servers that do not know the parameter. */
   compactAt?: number;
   model?: string; apiKey?: string; baseUrl?: string; retries?: number;
@@ -27,8 +29,8 @@ export type OpenAIOptions = {
 };
 
 export class ApiError extends Error {
-  status: number;
-  constructor(status: number, message: string) { super(message); this.status = status; }
+  status: number; /** the server's Retry-After, in milliseconds, when it sent one */ retryAfterMs?: number;
+  constructor(status: number, message: string, retryAfterMs?: number) { super(message); this.status = status; this.retryAfterMs = retryAfterMs; }
 }
 
 export const isReasoningModel = (m: string) => /^(o\d|gpt-([5-9]|\d{2,}))/i.test(m);
@@ -171,15 +173,17 @@ export function openai(opts: OpenAIOptions = {}): Model {
         const r = await fetch(base + path, { method: "POST", body: payload, signal, headers: { "content-type": "application/json", authorization: `Bearer ${key}` } });
         if (r.ok) return r;
         const status = r.status, text = await r.text();
-        err = new ApiError(status, `HTTP ${status}: ${text}`);
+        const ra = r.headers.get("retry-after-ms") ? Number(r.headers.get("retry-after-ms")) : r.headers.get("retry-after") && Number.isFinite(Number(r.headers.get("retry-after"))) ? Number(r.headers.get("retry-after")) * 1000 : undefined;
+        err = new ApiError(status, `HTTP ${status}: ${text}`, ra);
         if (status !== 408 && status !== 429 && status < 500) throw err;
+        if (status === 429 && opts.externalRetry) throw err;                   // a shared rate limiter owns 429s: retrying here would bypass it
       } catch (e) {
         if (e instanceof ApiError && e.status !== 408 && e.status !== 429 && e.status < 500) throw e;
         if (signal?.aborted) throw e;
         err = e as Error;
       }
       if (i >= retries - 1) throw err;
-      await new Promise((res) => setTimeout(res, 2 ** i * 1000));
+      await new Promise((res) => setTimeout(res, Math.max(2 ** i * 1000, (err as ApiError).retryAfterMs ?? 0) + Math.random() * 500));
     }
   }
 

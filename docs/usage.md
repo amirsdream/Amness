@@ -78,6 +78,9 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/procs` | background processes the agent started (`/procs stop <id>`) |
 | `/review [base]` · `/pr [draft]` | read-only review of your changes · draft and (after you confirm) create a pull request with gh |
 | `/report [case <name>]` | recurring problems in your traces; turn the last request into an eval task |
+| `/budget [tokens]` | show or set the token cap per turn (default 300k; cached input counts a tenth); the model is told to wrap up at 50 / 75 / 90% and writes a final report before the cap |
+| `/lsp [on\|off]` | append language-server errors (typescript-language-server, pyright, gopls, rust-analyzer) to edit results |
+| `/approver [on\|off]` | a second model pre-approves clearly safe risky calls (never the safety floor); one short model call per risky action |
 | `/reviewer [on\|off]` | independent reviewer: acceptance criteria first, a check before work is accepted |
 | `/policy` | why recent actions were allowed, asked or refused |
 | `/hooks` · `/permissions` | lifecycle hooks in effect · permission rules (list, or `allow`/`ask`/`deny <rule>`) |
@@ -87,3 +90,10 @@ Prefer your terminal's own scrollback? Run `amness --inline` (or set `ui: "inlin
 | `/theme` · `/sidebar` · `/details` · `/diffmode` · `/mouse` · `/ui` | appearance and interface: theme (live preview), sidebar, expand tool details, stacked/split diffs, mouse on/off, full-screen/inline |
 
 **Memory, long sessions and portability.** Plain markdown notes (`.amness/memory`, `~/.amness/memory`) that the agent saves and recalls, ranked, merged and forgotten reversibly; automatic handoff (and `/compact`) keeps long sessions going; `/export` writes a provider-neutral bundle you can continue elsewhere with another model. Details: [Memory](features.md#memory) · [Long sessions](agent-loop.md).
+
+## Pictures and other options
+
+- **Images:** mention a file with `@screenshot.png` (png, jpg, gif, webp; 5 MB, 4 per message). Needs a vision model; images are re-sent with every later request.
+- **Options without a command** (put them in `~/.amness/config.json`): `"taskBudget": 150000` (Claude's own budget countdown, at least 20000, supported models only), `"compactAt": 150000` (OpenAI Responses server-side compaction). See [Budgets](budgets.md).
+- **Concurrency:** `"maxConcurrent": 4` caps model requests in flight (lead agent plus subagents); lower it if your provider returns 429s often. See [Budgets](budgets.md#rate-limits-requests-and-tokens-per-minute).
+- **Other commands:** `amness tune`, `amness schedule`, `amness acp` and the headless flags are in [Features](features.md) and [Headless](headless.md).

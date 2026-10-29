@@ -24,7 +24,7 @@ test("agents: discovered from .amness/agents and .claude/agents, tools filtered 
   assert.deepEqual(by("reviewer").tools, ["read_file", "grep"]); assert.equal(by("reviewer").model, "fast"); assert.equal(by("reviewer").maxSteps, 60);
   assert.deepEqual([by("fixer").isolation, by("fixer").scope, by("fixer").tools], ["worktree", "project", ["read_file", "edit_file", "sh"]]);         // the project's wins over the user's
   assert.deepEqual(by("home").tools, ["list_files", "read_file", "grep"]);
-  assert.equal(r.warnings.length, 4); assert.ok(r.warnings.some((w) => /nonsense_tool/.test(w)) && r.warnings.some((w) => /"explore" is built in/.test(w)) && r.warnings.some((w) => /needs a "description:"/.test(w)) && r.warnings.some((w) => /needs front matter/.test(w)));
+  assert.equal(r.warnings.filter((w) => !/advice:/.test(w)).length, 4); assert.ok(r.warnings.some((w) => /advice: say what the agent should report back/.test(w))); assert.ok(r.warnings.some((w) => /nonsense_tool/.test(w)) && r.warnings.some((w) => /"explore" is built in/.test(w)) && r.warnings.some((w) => /needs a "description:"/.test(w)) && r.warnings.some((w) => /needs front matter/.test(w)));
 });
 
 test("worktree: isolated copy of HEAD; changes come back as a diff; the main tree is untouched; the diff can be applied", async () => {
