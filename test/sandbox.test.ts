@@ -46,3 +46,7 @@ test("sandbox: background processes are sandboxed too", { skip }, async () => {
     const r = await m.read(p.id); assert.ok(!existsSync(join(out, "bg.txt")) && /done/.test(r.output), r.output);
   } finally { await m.dispose(); try { (await import("node:fs")).rmSync(out, { recursive: true, force: true }); } catch { /* */ } }
 });
+
+test("CI only: the OS sandbox must actually be usable here (AMNESS_REQUIRE_SANDBOX=1), so its tests are not silently skipped", { skip: !process.env.AMNESS_REQUIRE_SANDBOX && "set AMNESS_REQUIRE_SANDBOX=1 to require a working sandbox" }, () => {
+  assert.ok(sandboxKind(), "no working OS sandbox on this machine (macOS needs sandbox-exec; Linux needs bubblewrap and permission to create user namespaces)");
+});

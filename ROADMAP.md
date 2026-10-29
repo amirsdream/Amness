@@ -109,11 +109,11 @@ Everything in the Status table above is built and pushed; most Track B items are
 | G31 | Clipboard image paste (macOS `pbpaste`/osascript, Linux `wl-paste`/`xclip`) in the TUI. | P3 | S–M | [ ] |
 | G32 | ACP: `session/load`, expose the editor's `fs/*` and `terminal/*` when offered, tool-call content as diffs; try it in real Zed. Then a thin VS Code extension. | P3 | L | [ ] |
 | G33 | Windows: the CI job now passes, so remove `continue-on-error`; add a PTY-equivalent smoke test and decide the OS sandbox story (none on Windows today: say so in the UI when `/sandbox` is requested). | P2 | M | [ ] |
-| G34 | Publish to npm: pick the version, add `CHANGELOG.md`, dry-run `npm publish --dry-run`, then (user's token) tag `v0.1.0`. Decide the package name availability (`amness`) first. | P1 | S | [ ] |
+| G34 | Publish to npm: pick the version, add `CHANGELOG.md`, dry-run `npm publish --dry-run`, then (user's token) tag `v0.1.0`. Decide the package name availability (`amness`) first. | P1 | S | [~] |
 | G35 | LSP in CI: install `typescript-language-server` and run one real diagnostics test; add `pyright`/`gopls` if cheap. | P2 | S | [ ] |
 | G36 | L13 coordinator: let the model split a task into independent parts itself (today `--parts` needs a file) and show the plan before running. | P3 | M | [ ] |
 | G37 | `amness schedule` end to end on a real crontab (macOS and Linux) and a launchd/systemd-timer option; run the GitHub Action once in a throwaway repo with a real key. | P3 | M | [ ] |
-| G38 | Linux sandbox check: confirm the bubblewrap tests actually run (not skip) in CI; if the runner blocks user namespaces, document it. (Closes the open part of G6.) | P2 | S | [ ] |
+| G38 | Linux sandbox check: confirm the bubblewrap tests actually run (not skip) in CI; if the runner blocks user namespaces, document it. (Closes the open part of G6.) | P2 | S | [~] |
 | G39 | Cost display: show estimated dollars per run including subagents and the reviewer, and the cache-waste figure, in the final "Worked for" line. | P2 | S | [ ] |
 | G40 | Docs pass: `docs/usage.md` for `/branch`, images, `amness schedule|acp|tune`; a short "Choosing a budget" guide (default 300k, what the notes do, when to raise it). Keep README a landing page. | P2 | S | [ ] |
 | G41 | Memory/skills/subagent briefs: add the Anthropic brief template (objective, output format, boundaries) as a snippet for custom agents in `.amness/agents/*.md`, and a lint warning for agents with no description of what to return. | P3 | S | [ ] |
@@ -354,6 +354,8 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G38** (partly): CI step requires a working sandbox (AMNESS_REQUIRE_SANDBOX=1, informational); result to be read from the next run
+- **G34** (partly): name amness is free on npm (404); npm publish --dry-run is clean (203 files, 2.2 MB); CHANGELOG.md added. Left: your npm token and a v0.1.0 tag
 - **G27** (partly): /lsp, /approver, /budget commands; taskBudget still config.json only; docs/usage.md not updated yet
 - **G26**: running cards are closed when a turn ends; interrupted subagent results show as failed; tested with an interrupted Explore
 - **G25** (partly): budget % in the sidebar, /budget to show/set the cap; per-subagent slices and estimated-usage markers not shown yet
