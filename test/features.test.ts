@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Budget, createCodeAgent, createDeepAgent, createHarness, defineTool, evaluate, riskOf, type Case, type Event, type Message, type Model } from "../src/index.ts";
+import { Budget, codeTools, createCodeAgent, createDeepAgent, createHarness, defineTool, evaluate, riskOf, type Case, type Event, type Message, type Model } from "../src/index.ts";
 
 let n = 0;
 const call = (...cs: [string, unknown][]): Message => ({
@@ -185,4 +185,13 @@ test("a step that ran subagents is not mistaken for the lead's own step cost (no
   const r = await createHarness({ model, tools: [heavy], budget, off: ["stagnation", "loop"] }).run("t");
   assert.equal(r.finished, true, r.text);
   assert.ok(seen.every((s) => s.length >= 2)); assert.equal(r.stopped, undefined);
+});
+
+test("a wrong file name gets the closest real files back, and grep on a missing path says so instead of 'no matches'", async () => {
+  const d = tmp(); mkdirSync(join(d, "docs"), { recursive: true }); mkdirSync(join(d, "src"), { recursive: true }); writeFileSync(join(d, "docs", "architecture.md"), "# a\n"); writeFileSync(join(d, "src", "harness.ts"), "x\n");
+  const tools = codeTools(d), read = tools.find((t) => t.name === "read_file")!, grep = tools.find((t) => t.name === "grep")!;
+  await assert.rejects(Promise.resolve().then(() => read.run({ path: "src/architecture.ts" }, {} as any)), /no such file: src\/architecture\.ts\. Did you mean: docs\/architecture\.md\?/);
+  await assert.rejects(Promise.resolve().then(() => read.run({ path: "zzz.ts" }, {} as any)), /Use list_files or grep/);
+  assert.match(String(await grep.run({ pattern: "x", path: "src/gemini.ts" }, {} as any)), /ERROR: src\/gemini\.ts does not exist, so nothing was searched\./);
+  assert.match(String(await grep.run({ pattern: "x", path: "src" }, {} as any)), /harness\.ts:1:x/);
 });

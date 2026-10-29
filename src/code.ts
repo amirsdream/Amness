@@ -78,6 +78,15 @@ export function codeTools(cwd: string, o: { /** called before a command that may
     return out;
   };
 
+  /** A missing file is usually a wrong guess at a name: offer the closest real files (same name elsewhere, or a similar name) so the next call is not another guess. */
+  const suggest = (p: string): string => {
+    const all: string[] = []; const scan = (d: string) => { for (const e of readdirSync(d)) { if (IGNORE.has(e) || all.length >= 6000) continue; const f = resolve(d, e); try { statSync(f).isDirectory() ? scan(f) : all.push(slash(relative(root, f))); } catch { /* unreadable */ } } };
+    try { scan(root); } catch { /* none */ }
+    const base = p.split(/[\\/]/).pop()!.toLowerCase(), stem = base.replace(/\.[^.]*$/, "");
+    const scored = all.map((f) => { const b = f.split("/").pop()!.toLowerCase(), s = b.replace(/\.[^.]*$/, ""); return { f, score: b === base ? 3 : s === stem ? 2 : stem.length >= 3 && (s.includes(stem) || stem.includes(s)) ? 1 : 0 }; }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.f.length - b.f.length).slice(0, 4);
+    return scored.length ? ` Did you mean: ${scored.map((x) => x.f).join(", ")}?` : " Use list_files or grep to find the right path.";
+  };
+
   return [
     defineTool<{ path?: string }>({ name: "list_files", description: "List files in the workspace (skips node_modules, .git, dist). Max 300.",
       schema: { type: "object", properties: { path: { type: "string" } } }, readOnly: true,
@@ -85,13 +94,13 @@ export function codeTools(cwd: string, o: { /** called before a command that may
     defineTool<{ path: string; start?: number; end?: number }>({ name: "read_file", description: "Read a file with line numbers (optionally lines start..end).",
       schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, start: { type: "integer" }, end: { type: "integer" } } }, readOnly: true,
       run: ({ path, start, end }) => {
-        const a = abs(path); readSet.add(a);
+        const a = abs(path); if (!existsSync(a)) throw new Error(`no such file: ${path}.${suggest(path)}`); readSet.add(a);
         const all = readFileSync(a, "utf8").split("\n"); if (all.at(-1) === "") all.pop();            // a trailing newline is not an extra empty line
         return all.slice((start ?? 1) - 1, end).map((l, i) => `${(start ?? 1) + i}\t${l}`).join("\n") + (o.guidance?.nested(path) ?? "");
       } }),
     defineTool<{ pattern: string; path?: string }>({ name: "grep", description: "Recursive regex search (file:line:text). Counts as having read matching files.",
       schema: { type: "object", required: ["pattern"], properties: { pattern: { type: "string" }, path: { type: "string" } } }, readOnly: true,
-      run: ({ pattern, path }) => new Promise<string>((res) => execFile("grep", ["-rnIE", "-m", "20", ...[...IGNORE].map((d) => `--exclude-dir=${d}`), "-e", pattern, path ?? "."],
+      run: ({ pattern, path }) => path && !existsSync(abs(path)) ? `ERROR: ${path} does not exist, so nothing was searched.${suggest(path)}` : new Promise<string>((res) => execFile("grep", ["-rnIE", "-m", "20", ...[...IGNORE].map((d) => `--exclude-dir=${d}`), "-e", pattern, path ?? "."],
         { cwd: root, maxBuffer: 10 << 20 }, (_e, out) => {
           for (const l of out.split("\n")) { const f = l.split(":")[0]; if (f) { try { readSet.add(abs(f)); } catch { /* outside */ } } }
           res(out.split("\n").slice(0, 100).join("\n") || "no matches");
