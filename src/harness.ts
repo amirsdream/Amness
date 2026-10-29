@@ -369,7 +369,7 @@ export function createHarness(o: Options) {
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
-    let budgetTier = 0, readStreak = 0, tokensAtStep = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
+    let budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     for (let step = 0; step < max; step++) {
@@ -379,12 +379,13 @@ export function createHarness(o: Options) {
       // Budget awareness (after BATS, arXiv 2511.17006: agents that can see their remaining budget spend it better). A few notes at fixed fractions, appended at the end so the cached prefix stays intact;
       // and when the cap is about to be hit, one last call without tools so the user gets what was found instead of a bare "budget exhausted".
       const frac = o.budget?.fraction ?? 0, over = o.budget?.exceeded();
-      if (o.budget) { stepCost = o.budget.effective - tokensAtStep; tokensAtStep = o.budget.effective; }
+      if (o.budget) stepCost = lastCost;                      // what this agent's own last request cost: the budget delta would also count subagents that ran in between
       const nearCap = !!o.budget && Number.isFinite(o.budget.maxTokens) && o.budget.effective + 1.3 * stepCost + 200 > o.budget.maxTokens;      // another step plus the final report would not fit
       if (!off.has("wrapup") && frac > 0) {
         if (over || frac >= 0.95 || (nearCap && step > 0)) {
           emit({ kind: "budget", detail: over ?? `budget ${Math.round(frac * 100)}% used` });
           const text = await finalReport(msgs, o.budget?.exceeded() ?? "the budget is almost used up");
+          if (text) emit({ kind: "assistant", text, streamed: false });
           return end(`stopped: ${over ?? "budget nearly exhausted"}${text ? `\n\n${text}` : ""}`, false, step, "budget");
         }
         const tier = frac >= 0.9 ? 3 : frac >= 0.75 ? 2 : frac >= 0.5 ? 1 : 0;
@@ -432,7 +433,7 @@ export function createHarness(o: Options) {
         if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
         throw e;
       }
-      ensureUsage(m, msgs); o.budget?.add(m); tokens += m.usage?.total_tokens ?? 0; lastPrompt = m.usage?.prompt_tokens ?? 0;
+      ensureUsage(m, msgs); o.budget?.add(m); tokens += m.usage?.total_tokens ?? 0; lastCost = Math.max(0, (m.usage?.total_tokens ?? 0) - 0.9 * (m.usage?.cached_tokens ?? 0)); lastPrompt = m.usage?.prompt_tokens ?? 0;
       if (o.record) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
       emit({ kind: "turn", step, tokens, prompt: m.usage?.prompt_tokens ?? 0, completion: m.usage?.completion_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0, reasoning: m.usage?.reasoning_tokens ?? 0 });
       if (m.content?.trim()) emit({ kind: "assistant", text: m.content, streamed });

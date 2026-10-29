@@ -417,7 +417,7 @@ export class App {
     try {
       const r = await this.agent.chat(this.session.messages, full, { images });
       this.session.messages = r.messages; ok = true;
-      if (r.stopped === "budget") this.notify("error", r.text, ["", `  ${red("$")} ${r.text}`]);
+      if (r.stopped === "budget") { const head = r.text.split("\n")[0]; this.notify("warn", head, ["", `  ${yellow("$")} ${head}`]); }
       else if (r.stopped === "stuck") this.notify("warn", r.text + "; tell it what to try next", ["", `  ${yellow("!")} ${r.text}; tell it what to try next`]);
       else if (r.stopped === "maxSteps") this.notify("warn", "stopped after the maximum number of steps; send a message to continue", ["", `  ${yellow("!")} stopped after the maximum number of steps; send a message to continue`]);
     } catch (e) {
@@ -495,11 +495,11 @@ export class App {
       case "finish": if (!sub) { this.flushStream(true); this.blocks.summary(e.summary); this.inlineOnly(["", ...renderMarkdown(e.summary, w - 4).map((l, i) => (i ? "    " : "  " + green("✔ ")) + l)]); } break;
       case "rejected": this.stepNow().notes.push("finish rejected: " + one(e.detail, 120)); this.notify("warn", `finish rejected by verification: ${one(e.detail, 300)}`, ["", `  ${yellow("⛔")} ${dim("finish rejected by verification:")} ${one(e.detail, w - 10)}`]); break;
       case "denied": this.stepNow().notes.push("denied: " + one(e.detail, 120)); this.notify("warn", `denied: ${one(e.detail, 300)}`, ["", `  ${red("⊘")} ${dim("denied: " + one(e.detail, w - 14))}`]); break;
-      case "nudge": this.stepNow().notes.push("nudged: " + one(e.detail, 80)); this.notify("info", "nudged the model to act instead of describing", [dim("  ↻ nudged the model to act instead of describing")]); break;
+      case "nudge": if (sub) break; this.stepNow().notes.push("nudged: " + one(e.detail, 80)); { const msg = /^budget \d+% used/.test(e.detail) ? `${e.detail}: asked the model to wrap up` : /^(step limit|stagnation|stuck|explored)/.test(e.detail) ? e.detail : "nudged the model to act instead of describing"; this.notify("info", msg, [dim(`  ↻ ${msg}`)]); } break;
       case "repair": this.stepNow().notes.push("repaired a tool call: " + one(e.detail, 100)); this.notify("info", `repaired a malformed tool call: ${one(e.detail, 200)}`, [dim(`  ⚒ repaired a malformed tool call: ${one(e.detail, w - 30)}`)]); break;
       case "loop": this.stepNow().notes.push("loop guard: " + one(e.detail, 100)); this.notify("info", "blocked a repeated identical call", [dim("  ∞ blocked a repeated identical call")]); break;
       case "rollover": this.notify("info", "context getting large: continued from a handoff note", [magenta("  ⟳ ") + dim("context getting large: continued from a handoff note")]); break;
-      case "budget": this.notify("error", e.detail, ["", `  ${red("$")} ${e.detail}`]); break;
+      case "budget": if (sub) break; if (/exhausted/.test(e.detail)) this.notify("error", e.detail, ["", `  ${red("$")} ${e.detail}`]); else this.notify("warn", `${e.detail}: writing a final report`, [dim(`  $ ${e.detail}: writing a final report`)]); break;
       case "aborted": this.notify("warn", "interrupted. Your progress is kept; send a message to continue.", ["", `  ${yellow("⏹")} ${dim("interrupted. Your progress is kept; send a message to continue.")}`]); break;
       case "steer": case "tools": break;
     }

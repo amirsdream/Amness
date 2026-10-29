@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyDiff, createCodeAgent, createWorktree, isRepo, loadAgents, removeWorktree, worktreeDiff, type Message, type Model } from "../src/index.ts";
+import { Budget, applyDiff, createCodeAgent, createWorktree, isRepo, loadAgents, removeWorktree, worktreeDiff, type Message, type Model } from "../src/index.ts";
 
 const root = () => mkdtempSync(join(tmpdir(), "amness-ag-"));
 const put = (base: string, rel: string, text: string) => { mkdirSync(join(base, rel, ".."), { recursive: true }); writeFileSync(join(base, rel), text); };
@@ -81,4 +81,14 @@ test("task tool: at most 3 subagents run at once, and a subagent's report is cli
   const leadQ: Message[] = [{ role: "assistant", content: null, tool_calls: Array.from({ length: 5 }, (_, i) => ({ id: "t" + i, function: { name: "task", arguments: JSON.stringify({ description: "look " + i }) } })) }, { role: "assistant", content: "done" }];
   const r = await a.chat([], "go");
   assert.equal(peak, 3); const outs = r.messages.filter((m) => m.role === "tool").map((m) => m.content!); assert.equal(outs.length, 5); assert.ok(outs.every((o) => o.length < 9000));
+});
+
+test("task tool: at most 6 subagents per request, and each report says what it cost against the budget", async () => {
+  const d = repo(); const budget = new Budget({ maxTokens: 1_000_000 });
+  const sub: Model = async () => ({ role: "assistant", content: null, usage: { total_tokens: 3000 }, tool_calls: [{ id: "f", function: { name: "finish", arguments: JSON.stringify({ summary: "found it" }) } }] });
+  const leadQ: Message[] = [{ role: "assistant", content: null, tool_calls: Array.from({ length: 8 }, (_, i) => ({ id: "t" + i, function: { name: "task", arguments: JSON.stringify({ description: "look " + i }) } })) }, { role: "assistant", content: "done" }];
+  const a = createCodeAgent({ model: async (m, s) => ((m[0].content ?? "").includes("read-only code explorer") ? sub(m, s) : leadQ.shift()!), cwd: d, memory: false, chat: true, permissions: { mode: () => "default" }, index: false, guidance: false, budget });
+  const r = await a.chat([], "go"), outs = r.messages.filter((m) => m.role === "tool").map((m) => m.content!);
+  assert.equal(outs.filter((o) => /subagents have already run for this request/.test(o)).length, 2);
+  const good = outs.filter((o) => /^found it/.test(o)); assert.equal(good.length, 6); assert.ok(good.every((o) => /\[subagent used about 3k tokens; the budget for this request is \d+% used\]/.test(o)));
 });

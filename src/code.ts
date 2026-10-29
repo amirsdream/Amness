@@ -274,6 +274,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const agentOf = (name?: string) => (name && name !== "explore" ? agentList.find((a) => a.name === name) : undefined);
   const rescanAgents = () => { if (o.agents === false) return; const r = loadAgents(o.cwd); agentList = r.agents; agentWarnings.splice(0, agentWarnings.length, ...r.warnings); };
   rescanAgents();
+  let tasksThisRequest = 0; const MAX_SUBAGENTS_PER_REQUEST = 6;
   let taskSlots = 3; const taskWaiters: (() => void)[] = [];
   const acquireTask = async () => { if (taskSlots > 0) { taskSlots--; return; } await new Promise<void>((r) => taskWaiters.push(r)); };
   const releaseTask = () => { const w = taskWaiters.shift(); if (w) w(); else taskSlots++; };
@@ -318,12 +319,19 @@ export function createCodeAgent(o: CodeAgentOptions) {
   }
   /** The `task` tool's work: a read-only explorer, or one of the custom agents. */
   async function runTask({ description, agent }: { description: string; agent?: string }, ctx: ToolCtx): Promise<string> {
+    let slice: Budget | undefined;
+    const out = await runTaskInner({ description, agent }, ctx, (b) => (slice = b));
+    return out + (slice && o.budget && Number.isFinite(o.budget.maxTokens) ? `\n[subagent used about ${Math.max(1, Math.round(slice.effective / 1000))}k tokens; the budget for this request is ${Math.round(o.budget.fraction * 100)}% used]` : "");
+  }
+  async function runTaskInner({ description, agent }: { description: string; agent?: string }, ctx: ToolCtx, setSlice: (b: Budget | undefined) => void): Promise<string> {
+    const track = <T,>(b: T) => { setSlice(b as unknown as Budget); return b; };
+    if (++tasksThisRequest > MAX_SUBAGENTS_PER_REQUEST) return `ERROR: ${MAX_SUBAGENTS_PER_REQUEST} subagents have already run for this request. Work with what they reported, read the few remaining files yourself, or answer and say what you did not cover.`;
           const d = agentOf(agent);
           const unknown = agent && !["explore", "explorer"].includes(agent.toLowerCase()) && !d ? agent : undefined;            // a wrong name should not cost a round trip: use the read-only explorer and say so
           if (unknown) o.onEvent?.({ kind: "nudge", detail: `no agent named "${unknown}"; used the read-only explorer` });
           const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name, parent: ctx.callId } as unknown as Event);
           if (!d) {
-            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, budget: o.budget?.slice(0.2, 80_000), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
             const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";
             return note + clip(r.text || "(the explorer returned nothing)", 8000);                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
           }
@@ -334,7 +342,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
             if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList));
             const r = await createHarness({
               model: (d.model && o.agentModels?.[d.model]) || o.model, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
-              budget: o.budget?.slice(0.3, 150_000), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
+              budget: track(o.budget?.slice(0.25, 120_000)), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
             }).run(description);
             let out = clip(r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`, 8000);
             if (wt) {
@@ -396,6 +404,7 @@ ${note}
     get todos() { return todos; },
     /** One conversational turn: `history` is everything so far (empty to start); returns the updated transcript in `messages`. */
     async chat(history: Message[], userText: string, extra: { images?: { mime: string; data: string }[] } = {}) {
+      tasksThisRequest = 0;
       task ||= userText;
       let text = userText;
       const gate = await promptHooks(history.length === 0, userText); if (gate.block) return { text: gate.block, finished: false, steps: 0, messages: history, stopped: "blocked" as const, tokens: 0 };
@@ -415,6 +424,7 @@ ${note}
       return res;
     },
     async run(t: string, opts: RunOptions = {}) {
+      tasksThisRequest = 0;
       task = t;
       let resume = opts.resume && o.checkpointFile && existsSync(o.checkpointFile) ? (JSON.parse(readFileSync(o.checkpointFile, "utf8")) as Message[]) : undefined;
       // resuming with a NEW instruction: add it as a follow-up rather than silently ignoring it

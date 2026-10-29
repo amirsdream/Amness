@@ -177,3 +177,12 @@ test("model-agnostic: a server that reports no usage still gets a working cap, n
   const r = await createHarness({ model, tools: [noop], budget, maxSteps: 40, off: ["loop", "stagnation"] }).run("t");
   assert.equal(r.stopped, "budget"); assert.match(r.text, /Summary: looked around\./); assert.ok(budget.tokens > 0 && budget.tokens < 6000, `used ${budget.tokens}`);
 });
+
+test("a step that ran subagents is not mistaken for the lead's own step cost (no premature final report)", async () => {
+  const budget = new Budget({ maxTokens: 100_000 });
+  const heavy = defineTool({ name: "heavy", description: "", schema: { type: "object" }, run: () => { budget.add({ role: "assistant", content: "", usage: { total_tokens: 40_000 } }); return "subagents done"; } });
+  const { model, seen } = scripted(call(["heavy", {}]), call(["heavy", {}]), call(["finish", { summary: "ok" }]));
+  const r = await createHarness({ model, tools: [heavy], budget, off: ["stagnation", "loop"] }).run("t");
+  assert.equal(r.finished, true, r.text);
+  assert.ok(seen.every((s) => s.length >= 2)); assert.equal(r.stopped, undefined);
+});

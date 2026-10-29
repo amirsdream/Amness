@@ -30,6 +30,12 @@ A question like "explore the codebase" had no natural end: the model kept readin
 
 All of this is tested with scripted models and fake SDK clients. None of it has been measured on a real model for fewer exhausted runs; the eval runner can do that once there are exploration-style tasks in the suite.
 
+## What went wrong in the second report, and the fix
+
+A "survey the whole codebase" run stopped at "budget nearly exhausted" while the display said 46% used. Three bugs: (1) the step-cost estimate behind the early final report was the change in the shared budget, which also contains what the subagents spent in the meantime, so a step that ran three explorers looked enormously expensive; it now uses the lead's own last request. (2) Subagent budget notes were drawn as red errors and every nudge was labelled "nudged the model to act instead of describing"; nudges now say what happened, subagent notes are not shown, and the final report is shown as a normal answer. (3) Nothing limited fan-out: a request may now start at most 6 subagents, explorers get 12% of what is left (60k tokens at most), and every subagent report ends with what it cost and how much of the budget is used, so the lead can decide to stop delegating.
+
+After the fix, the same kind of request on `gpt-6-luna` (300k cap) finished in 83 seconds with a full answer, using 132k of the 300k (counting cached input at a tenth; 234k raw), two subagents wrapped up inside their slices. One run, not a measurement.
+
 ## Rate limits (requests and tokens per minute)
 
 Several agents sharing one API key (the lead plus up to three explorers, the reviewer) can exceed the per-minute limits, and failed requests count toward them. What the vendors say ([OpenAI rate limits](https://developers.openai.com/api/docs/guides/rate-limits), [Claude rate limits](https://platform.claude.com/docs/en/api/rate-limits), both *read*):
