@@ -219,7 +219,7 @@ export function buildCommands(): Cmd[] {
       a.cfg.maxTokens = n; b.maxTokens = n; a.saveConfig(); a.say(`cap per turn is now ${n.toLocaleString()} tokens`, dim);
     } },
     { name: "reload-plugins", help: "load the plugin files again (after you edited one)", run: async (a) => {
-      await a.loadPluginsNow(); a.buildAgent(); a.say(`${a.plugins.length} plugin${a.plugins.length === 1 ? "" : "s"} loaded${a.plugins.length ? ": " + a.plugins.map((p) => p.name).join(", ") : ""}. Project plugins that you have not approved are skipped.`, dim);
+      await a.askPluginTrust(); a.buildAgent(); a.say(`${a.plugins.length} plugin${a.plugins.length === 1 ? "" : "s"} loaded${a.plugins.length ? ": " + a.plugins.map((p) => p.name).join(", ") : ""}. Project plugins you did not approve are skipped (if you edited one, Amness asks you to approve the new version first).`, dim);
     } },
     { name: "prompt", help: "choose the system prompt from .amness/prompts (or off for the built-in one)", args: "[id|list|off]", run: (a, arg) => {
       const list = loadPrompts(a.cwd);

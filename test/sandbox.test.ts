@@ -25,7 +25,7 @@ test("sandbox: writes inside the workspace work; writes outside and into .git ar
     const o1 = await runShell(`echo no > ${join(out, "x.txt")}`, d, 10_000, undefined, "workspace"); assert.ok(!o1.startsWith("exit=0") && !existsSync(join(out, "x.txt")), o1);
     const o2 = await runShell("echo no > .git/HEAD", d, 10_000, undefined, "workspace"); assert.ok(!o2.startsWith("exit=0") && readFileSync(join(d, ".git", "HEAD"), "utf8") === "ref: x\n", o2);
     assert.match(await runShell("cat .git/HEAD && ls / | head -1", d, 10_000, undefined, "workspace"), /exit=0\nref: x/);
-    assert.match(await runShell("echo t > $TMPDIR/sbtest.$$ && echo temp-ok", d, 10_000, undefined, "workspace"), /temp-ok/);       // temp folders stay usable: builds need them
+    assert.match(await runShell("echo t > ${TMPDIR:-/tmp}/sbtest.$$ && echo temp-ok", d, 10_000, undefined, "workspace"), /temp-ok/);       // temp folders stay usable: builds need them
     const rm = await runShell(`rm -rf ${out}`, d, 10_000, undefined, "workspace"); assert.ok(existsSync(out), "rm outside the workspace must fail: " + rm);
   } finally { try { (await import("node:fs")).rmSync(out, { recursive: true, force: true }); } catch { /* */ } }
 });

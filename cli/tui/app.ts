@@ -669,7 +669,7 @@ export class App {
     const r = await loadPlugins(this.cwd, { trustProject: trusted }); this.plugins = r.plugins; for (const w of r.warnings) this.note(`plugin: ${w}`);
     return { r, fp };
   }
-  private async askPluginTrust() {
+  async askPluginTrust() {
     const { r, fp } = await this.loadPluginsNow();
     if (!r.untrusted || !fp || !this.persist) return;
     const ok = await this.pick(`This project has ${r.untrusted.count} plugin file${r.untrusted.count === 1 ? "" : "s"} (.amness/plugins). A plugin is code that runs with your permissions and can change what the agent does. Trust this version of the files?\n${describeProjectPlugins(this.cwd).map((l) => "  " + l).join("\n")}\n(a text scan, not a guarantee: read them first)`, [{ label: "Yes, trust this version", value: "y" }, { label: "No, run without them", value: "n" }]);

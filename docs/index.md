@@ -8,6 +8,7 @@ These pages explain how to install, use, extend and trust Amness. Start with "Ge
 | [Using the chat](usage.md) | The interface, keys, permission modes, slash commands, themes and copying |
 | [Features in depth](features.md) | Permissions, sandbox, hooks, skills, subagents, routing, memory, tracing, replay and undo |
 | [Plugins](plugins.md) | Change the agent with code: loop rules, guardrails, tools, graders and variants you can evaluate |
+| [Build your own harness](build-your-own-harness.md) | A tutorial: from one small rule to a custom harness that you measure |
 | [Cookbook](cookbook.md) | Short recipes for common jobs |
 | [Evaluating the harness](evaluation.md) | `amness eval`: measure a change with statistics, ablations, benchmarks and an injection suite |
 | [Budgets and subagents](budgets.md) | Why runs ran out of budget, what vendors and papers say, and what Amness does about it |

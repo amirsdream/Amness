@@ -127,3 +127,12 @@ test("plan-first: the text plan does not end the run; the model is asked to carr
   const r = await createCodeAgent({ model, cwd: d, memory: false, chat: true, plugins: [planFirst()], index: false, guidance: false }).chat([], "what is in a.txt?");
   assert.equal(seen.length, 3); assert.ok(seen[1].some((m) => /carry out the plan/.test(m.content ?? ""))); assert.match(r.text, /It says one/); assert.ok(r.messages.some((m) => m.role === "tool" && /one/.test(m.content ?? "")));
 });
+
+test("spec-check: a task that points at a document must walk through it once before finishing; other tasks are not delayed", async () => {
+  const { specCheck, composeHooks: ch } = await import("../src/index.ts"); const d = tmp(); put(d, "docs/SPEC.md", "# spec\n- must throw on empty input\n");
+  const h = ch(undefined, [specCheck()], d)!, base = { summary: "done", changed: ["a.js"], notes: [] as string[] };
+  const first = await h.run("Stop", { ...base, task: "Implement parse() as described in docs/SPEC.md" }); assert.match(first.block!, /open docs\/SPEC\.md again.*numbered list/s);
+  assert.equal((await h.run("Stop", { ...base, task: "Implement parse() as described in docs/SPEC.md" })).block, undefined);          // asks once only
+  assert.equal((await h.run("Stop", { ...base, task: "rename a variable" })).block, undefined);
+  assert.match((await h.run("Stop", { ...base, task: "follow the specification for dates" })).block!, /the document or requirements the task refers to/);
+});

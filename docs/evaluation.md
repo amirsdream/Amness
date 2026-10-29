@@ -444,3 +444,7 @@ What this says. This is one run with 12 sessions per variant. The token figure f
 - Run `amness eval --selftest`, then a small `--variants ab` run on your own tasks.
 - Read [Plugins](plugins.md) to compare your own harness against `full`.
 - Try the recipes in the [Cookbook](cookbook.md).
+
+### The `spec-in-docs` task and `strategy:spec-check` (2026-10-31)
+
+Every variant had missed the `spec-in-docs` task (a function whose edge cases are listed only in `docs/SPEC.md`). `strategy:spec-check` makes the model, once before it finishes, open the document again, list each requirement and say how it checked it. On `gpt-4.1-mini`, 8 trials of that one task: `full` passed 0 of 8; `strategy:spec-check` passed 1 of 8, using about twice the steps (15.0 against 8.1 on average). One task and 8 trials cannot show a difference, and 1 of 8 is within noise. So this check is available (`/strategy spec-check`) but is **not** shown to help, and it is off by default. The model still misses edge cases such as unit order (`30m1h`) even after re-reading the spec; a stronger check would run the spec's examples as tests, which is a task for the model or for a plugin gate you write for your project.

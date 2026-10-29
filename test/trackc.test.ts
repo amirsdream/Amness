@@ -100,3 +100,14 @@ test("amness plugin add copies a file into .amness/plugins, shows what it touche
     assert.equal(await runPlugin(["add", "http://example.com/p.ts"], d), 2); assert.match(err.join("\n"), /only https/);
   } finally { console.log = log; console.error = error; }
 });
+
+test("/reload-plugins asks you to approve an edited project plugin and loads it only if you say yes", async () => {
+  const { rig, KEY } = await import("./helpers/apprig.ts"); const t = rig([]); await t.start();
+  t.app.persist = true; process.env.AMNESS_HOME = tmp(); mkdirSync(join(t.dir, ".amness", "plugins"), { recursive: true });
+  writeFileSync(join(t.dir, ".amness", "plugins", "p.ts"), 'export default { name: "edited", description: "v1" };\n');
+  await t.submit("/reload-plugins"); assert.ok(await t.until(() => t.has("plugin file")));
+  await t.key(KEY.enter); assert.ok(await t.until(() => t.app.plugins.some((p) => p.name === "edited")));
+  writeFileSync(join(t.dir, ".amness", "plugins", "p.ts"), 'export default { name: "edited", description: "v2" };\n');
+  await t.submit("/reload-plugins"); assert.ok(await t.until(() => t.has("plugin file"))); await t.key(KEY.down); await t.key(KEY.enter);
+  assert.ok(await t.until(() => t.has("0 plugins loaded"))); assert.equal(t.app.plugins.length, 0); await t.key(KEY.ctrlD);
+});

@@ -41,7 +41,7 @@ Each step ends with a check. Do the check before you go on.
 
    You will see a line with `my-harness` and its description. The template also adds a `/my-harness` command. Type it. You will see `hello from the my-harness plugin`.
 
-**Important.** Amness approves the exact content of your plugin files. After you edit a file, the approval no longer matches. Stop Amness, start it again and approve again. `/reload-plugins` loads only the version you already approved.
+**Important.** Amness approves the exact content of your plugin files. After you edit a file, the approval no longer matches. Run `/reload-plugins`: Amness asks you to approve the new version, then loads it.
 
 For the next steps, you replace the whole file. The complete file is at the end of step 7. In each step you add one property to the exported object.
 
@@ -292,7 +292,7 @@ To use the prompt in the comparison, add `prompt:terse` as a variant. For exampl
 
 ### The complete plugin file
 
-Put the pieces together. This file passed `--selftest` and a type check against `src/plugins.ts`. It was not run against a real model.
+Put the pieces together. This file passed `--selftest`. Its hook, gate and context functions were also called directly with sample input. It was not run against a real model.
 
 ```ts
 export default {

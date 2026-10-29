@@ -2,6 +2,8 @@
 
 A plugin is a TypeScript or JavaScript file that runs inside Amness and can change how the agent behaves, and `amness eval` can measure it against the built-in harness.
 
+New to plugins? Start with the [tutorial: Build your own harness](build-your-own-harness.md).
+
 In this page you will learn:
 
 - what a plugin can add, and where plugin files live
@@ -28,6 +30,9 @@ Hooks in a config file run shell commands at fixed points. A plugin goes further
 | **Policy** | `policy: (call) => ...` | Allow, ask or deny each tool call, in code. |
 | **Loop strategy** | `PreModel` returns `tools` and `then` | Limit which tools the model may use in a turn. |
 | **Context strategy** | `context: (msgs, info) => ...` | Your own way to trim or rewrite the message list. |
+| **Memory backend** | `memory: ...` | Keep notes in your own store instead of Markdown files. |
+| **Model routing** | `route: (info) => id` | Choose the model for each request. |
+| **Status line** | `status: (ctx) => text` | Show a short text in the sidebar. |
 | **Metrics and graders** | `metrics`, `graders` | Extra numbers for evals, and scores for real sessions. |
 
 Status: all of this is **tested** with scripted models (no real model), in `test/plugins.test.ts` and `test/trackc.test.ts`. Only the two built-in loop strategies were also run once on a real model (see [Evaluating the harness](evaluation.md)). No other feature on this page is **measured** on a real model.
@@ -290,7 +295,7 @@ A command can also take an argument: `run(ctx, arg)` gets the text after the com
 
 - A plugin command whose name is already used by a built-in command is skipped. Your own `.amness/commands/*.md` files also win over plugin commands.
 - If the command throws, the chat shows `plugin <name>: /<command> failed: <message>`. Nothing else breaks.
-- `/reload-plugins` loads your user plugins and the project plugins you already approved. It skips project plugins that you did not approve.
+- `/reload-plugins` loads your user plugins and the project plugins you already approved. If you edited a project plugin file, the approval no longer matches, so Amness shows the same approval question again (with what the file appears to touch). If you say no, the edited plugin is skipped.
 - `amness plugin list` shows project plugins as loaded only with `--trust-project`. Without it, the list says how many files were skipped.
 - Tested in `test/trackc.test.ts` with scripted input. The full-screen chat was not driven by a person in these tests.
 
@@ -461,6 +466,167 @@ Return nothing to keep the list. An empty list is ignored. If several plugins de
 
 **Limits.** Amness does not check that your new list is valid. If you cut a tool result away from its tool call, the provider may reject the request. Keep each tool call and its result together. Tested with a scripted model. Not measured.
 
+## Replace the memory backend
+
+**What it is.** *Memory* is the set of notes that Amness saves in one session and recalls in the next. The built-in memory keeps Markdown files in `.amness/memory`. A plugin can provide its own backend with the `memory` field. The backend can use a database, a wiki or a ticket system.
+
+**Why.** Your team may already keep knowledge somewhere else. A backend lets the agent read and write it.
+
+**How to use it.** Set `memory` to an object, or to a function that gets the working folder and returns the object. The object must have the seven methods of the `MemoryBackend` interface in `src/memory.ts`:
+
+| Method | What it is for |
+|---|---|
+| `list()` | Returns all notes. |
+| `save(entry)` | Saves one note (`name`, `type`, `description`, `content`, optional `scope`). Returns the saved note. |
+| `forget(name, scope?)` | Deletes a note. Returns `true` if it existed. |
+| `search(query, n?)` | Finds notes for the `memory_search` tool. It may be `async`. |
+| `context(task, maxChars?, seen?)` | Returns text for the first message of a conversation. Return `""` for none. |
+| `delta(text, seen)` | Returns text for a later message, with only notes that are new and relevant. Return `""` for none. |
+| `endTurn(success)` | Tells the backend how the run ended. |
+
+`endTurn` gets `true` when the agent finished and the result was verified, `false` when it gave up or got stuck, and `undefined` when the outcome is unknown (for example, a chat answer). A backend can use this to rank notes that helped higher. The built-in store does this. `warmQuery(query)` is optional. It lets a backend prepare a semantic search.
+
+This backend keeps notes in memory only. It is small, but complete:
+
+```ts
+const notes = new Map<string, any>();
+
+export default {
+  name: "scratch-memory",
+  description: "notes kept in memory for one session",
+  memory: () => ({
+    list: () => [...notes.values()],
+    save: (e: any) => {
+      const entry = { scope: "project", ...e, updated: new Date().toISOString().slice(0, 10) };
+      notes.set(e.name, entry);
+      return entry;
+    },
+    forget: (name: string) => notes.delete(name),
+    search: (q: string, n = 5) =>
+      [...notes.values()].filter((e) => `${e.name} ${e.description} ${e.content}`.toLowerCase().includes(q.toLowerCase())).slice(0, n),
+    context: (task: string) =>
+      notes.size ? "## Notes\n" + [...notes.values()].map((e) => `- ${e.name}: ${e.description}`).join("\n") : "",
+    delta: () => "",
+    endTurn: (success?: boolean) => { console.error("run ended, success:", success); },
+  }),
+};
+```
+
+**Limits.**
+
+- The first plugin that provides a memory wins. A `memory` option passed to `createCodeAgent` wins over a plugin.
+- Amness checks that the seven methods exist (`isMemoryBackend`). It does not check what they return.
+- The built-in store has extras (embeddings, consolidation, a note graph). A custom backend does not need them. Not verified: how each `/memory` subcommand behaves with a custom backend.
+- Evals run with memory off, so `amness eval` does not test a backend.
+- Tested in `test/trackc.test.ts` with scripted models only.
+
+## Route requests to different models
+
+**What it is.** The `route` function picks the model for each request. It gets `{ messages, promptTokens, tail }` and returns a model id, or nothing to use the default model. `tail` describes the end of the conversation: `streak` (read-only steps in a row), `trouble` (something just failed), `first` (no model answer yet) and `steering` (a new user message).
+
+**Why.** Reading files rarely needs the strongest model. You can send those steps to a cheaper one. Remember that each model has its own prompt cache. A switch can cost more than it saves. The built-in `/router` weighs this. Your function does not, unless you write it.
+
+**How to use it.**
+
+```ts
+export default {
+  name: "cheap-reads",
+  description: "use a cheaper model after three read-only steps in a row",
+  route: ({ tail }: { tail: { streak: number; trouble: boolean } }) =>
+    tail.streak >= 3 && !tail.trouble ? "gpt-4.1-mini" : undefined,
+};
+```
+
+Use an id that your provider accepts. Amness turns the id into a model with `modelById`. The chat and `amness run` provide it. They build a new model for the id with your current provider settings, and create it once per id. If several plugins have a `route`, Amness uses the first answer that is not empty (`routedByFunction` in `src/router.ts`).
+
+**Limits.**
+
+- The id must belong to the **same provider** as the current model.
+- Routing works only where `modelById` exists. When you use `createCodeAgent` as a library, pass `modelById` yourself, or `route` is ignored.
+- If `route` throws, Amness uses the default model.
+- Tested with scripted models. Not measured: whether any routing rule saves money or keeps quality.
+
+## Show a status line
+
+**What it is.** `status` is a function that returns a short text. The chat shows it in the sidebar as `<plugin name>: <text>`, cut at 60 characters.
+
+**How to use it.**
+
+```ts
+import { readFileSync } from "node:fs";
+
+export default {
+  name: "branch",
+  description: "show the git branch",
+  status: ({ cwd, running }: { cwd: string; running: boolean }) => {
+    const head = readFileSync(cwd + "/.git/HEAD", "utf8").trim().replace("ref: refs/heads/", "");
+    return running ? `${head} (working)` : head;
+  },
+};
+```
+
+The function gets the working folder and whether the agent is running. Return nothing to show no line.
+
+**Limits.** The function runs on every redraw, and Amness caches the result for one second. Keep it fast and do not run slow commands. If it throws, the line is left out. If you do not see the sidebar, type `/sidebar`.
+
+## Choose a system prompt
+
+**What it is.** The *prompt registry* is a folder of Markdown files. Each file `.amness/prompts/<id>.md` (or `~/.amness/prompts/<id>.md`) is a complete system prompt. The id `base` is the built-in prompt. The code is in `src/prompts.ts`.
+
+**Why.** A prompt in a file has a name. You can keep it in git, compare it with others and measure it.
+
+**How to use it.**
+
+1. Create a prompt:
+
+   ```bash
+   mkdir -p .amness/prompts
+   echo "You are a careful coding agent. Make the smallest change that works." > .amness/prompts/terse.md
+   ```
+
+2. In the chat, choose it:
+
+   ```text
+   /prompt terse
+   ```
+
+   `/prompt` or `/prompt list` shows the ids and the current choice. `/prompt off` returns to the built-in prompt. The choice is saved in your config and applies to new conversations.
+
+3. Measure it. This calls your model and asks first:
+
+   ```bash
+   amness eval --variants full,prompt:terse --trials 3
+   ```
+
+**Limits.**
+
+- The prompt replaces the **whole** system prompt, including the built-in rules for tools. Test it before you rely on it.
+- A block of front matter between `---` lines at the top of the file is removed.
+- An id may use letters, numbers, `.`, `_` and `-`, up to 40 characters. A project prompt wins over a user prompt with the same id.
+- Tested with scripted models. Not measured on a real model.
+
+## Add a plugin from a file or a URL
+
+**What it is.** `amness plugin add` copies a plugin file into `.amness/plugins/`. The code is in `cli/plugincli.ts`.
+
+**How to use it.**
+
+```bash
+amness plugin add ./their-plugin.ts
+amness plugin add https://example.com/their-plugin.ts
+```
+
+Amness then:
+
+- accepts a local file or an `https` URL (it rejects `http`)
+- rejects a file over 300 KB, or a file with no `export default`
+- never overwrites a file that exists
+- prints what the file seems to touch (a text scan, see below)
+
+The command does not run the plugin. The plugin still needs your approval the first time you start Amness in the project. Read the file before you approve it.
+
+**Limits.** It does not check that the plugin works, or who wrote it. It cannot install a package from npm.
+
 ## Metrics and graders
 
 Two more fields let a plugin measure things.
@@ -496,10 +662,12 @@ Amness looks for these things: shell commands, network use, file writes, file re
 
 - The loop order (steer, budget, compact, model, tools, verify) and the permission engine are fixed. Plugins act at the events around them. A strategy limits tools and adds notes. It does not replace the loop.
 - A policy cannot loosen the safety floor or the untrusted-text check.
-- There is no plugin router (the choice of a cheaper model for a step). The built-in `/router` is separate.
+- Replacing the turn order itself. A plugin cannot change the order of the steps in the loop.
+- Installing a plugin from npm. `amness plugin add` copies one file from a path or an `https` URL.
+- Isolation of plugin code. Plugins run in the Amness process with your permissions.
 - `PostModel` cannot change anything. `PostToolUse` cannot block.
 - A plugin cannot add UI panels. A slash command can only use `say`, `ask` and `run`.
-- Plugins are not sandboxed (see the safety section).
+- Memory backends and model routing **are** pluggable now (see the sections above). The built-in `/router` is still separate from a plugin `route`.
 
 ## Limits and common problems
 
