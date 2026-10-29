@@ -73,6 +73,59 @@ How to use this file: say "do G1" (or "do the next one"), and the item is built,
 
 ---
 
+## Next up (written 2026-10-29, end of day)
+
+Everything in the Status table above is built and pushed; most Track B items are `[~]` because they have **never been measured on a real model**. The only real runs so far (gpt-6-luna, 13 easy tasks, 3 injection tasks) showed no detectable effect of any guard: the tasks are too easy. So the order for tomorrow is: **measure first, then build**.
+
+### A. Measure (needs the OpenAI key already saved; ask before spending)
+
+| Id | What to run | Why / what decides it | Cost estimate |
+|---|---|---|---|
+| E1 | **A harder eval suite.** Add exploration-style tasks (answer a question from a 40+ file repo within a budget), multi-file refactors, tasks with a misleading failing test, and try a SWE-bench-format file with `--suite --limit 20`. | Nothing below can be decided on tasks a model solves 100% of the time. Prerequisite for E2 to E9. | small to build; suite runs cost ~$ per 100 sessions |
+| E2 | `amness eval --variants ablate --trials 3` on the harder suite; then `--profile-out`. | Which guards earn their keep (L8, L2). Currently no guard shows an effect. | large: ~13 variants × tasks × 3 |
+| E3 | `full` vs `full+review` on the harder suite. | L3: the reviewer cost ~77% more tokens and 2.4× time for no gain on easy tasks. Keep only if it wins on cost per solved task. | medium |
+| E4 | `full` vs `full+route --cheap-model <id>`. Need the cheap model id from the user. | L6: does routing save money without losing passes. | medium |
+| E5 | Adversarial suite on a *weaker* model (a small OpenAI model or local) with `full` vs `full-taint`. | L9: the taint check had nothing to catch on gpt-6-luna. | small |
+| E6 | `amness tune` on the harder suite; compare held-out pass rate and tokens before/after. | L12: does the held-out gate ever accept a real change. | large |
+| E7 | `--best-of 3` vs single attempt on tasks the model fails ~50% of the time. | L11: keep only if cost per solved task drops. | medium |
+| E8 | `--parts` vs one agent on 3-part tasks (wall time and pass rate). | L13: keep only if it wins on wall time without losing passes. | medium |
+| E9 | **Budget fix**: exploration tasks with a 100k cap, before/after the 2026-10-29 changes (old behaviour = `--off wrapup`-style variant `full-wrapup`). Count runs that end with an answer vs a bare "budget exhausted". | Confirms the notes, final report and subagent slices actually reduce empty-handed runs. Use the `full-wrapup` variant (already available through `full-<guard>`). | small |
+| E10 | Approval reviewer: feed 30 risky-looking and 30 benign calls to the reviewer model; count wrong approvals. | G20: a wrong approval is a safety bug, so the false-approve rate must be ~0. | small |
+| E11 | LSP: edit tasks with and without `lsp: true` on a TypeScript repo with `typescript-language-server` installed. | G11: does it cut steps to a green build. Also first run against a real server. | small |
+| E12 | Image input with a live vision model (OpenAI and Claude); local `llava`. | G17 wire format is only unit-tested. | tiny |
+| E13 | Claude `taskBudget` on a supported Claude model (needs an Anthropic key): exhausted-run rate and premature stops at 64k / 150k. | Budget doc says too-small budgets cause early stops. | small |
+
+### B. Build
+
+| Id | Item | Priority | Effort | Done |
+|---|---|---|---|---|
+| G24 | OpenAI server-side compaction (`context_management` + `compact_threshold`) as an option in the OpenAI adapter; make sure our own history trimming does not fight it (`previous_response_id` forbids manual pruning). | P1 | M | [ ] |
+| G25 | Budget visibility in the UI: show % of budget used in the sidebar and status line, mark estimated usage, show each subagent's slice and spend, and a `/budget` command to raise or lower the cap mid-session. | P1 | S–M | [ ] |
+| G26 | **Explore block UI is still suspect**: confirm that the "Explore" group closes (✓/✗) for every outcome including subagent budget stops, aborts and unknown-agent fallback; add a VTerm test for each. | P1 | S | [ ] |
+| G27 | Config surface for the new options: `lsp`, `approvalReviewer`, `taskBudget`, `review` in `/settings` and `docs/usage.md` (today they are only in `config.json` and headless flags). | P1 | S | [ ] |
+| G28 | Exploration subagent that returns only file paths and line ranges (the "FastContext" idea from a blog; **unverified, find the paper first**), measured against the current prose summary. | P2 | M | [ ] |
+| G29 | Read-count cap in the tool layer (after N reads the read tool asks for a plan). Only if E9 shows the nudge is not enough. | P3 | S | [ ] |
+| G30 | `/branches` should swap file state too (store a tree snapshot per branch tip using the existing snapshot machinery). | P2 | M | [ ] |
+| G31 | Clipboard image paste (macOS `pbpaste`/osascript, Linux `wl-paste`/`xclip`) in the TUI. | P3 | S–M | [ ] |
+| G32 | ACP: `session/load`, expose the editor's `fs/*` and `terminal/*` when offered, tool-call content as diffs; try it in real Zed. Then a thin VS Code extension. | P3 | L | [ ] |
+| G33 | Windows: the CI job now passes, so remove `continue-on-error`; add a PTY-equivalent smoke test and decide the OS sandbox story (none on Windows today: say so in the UI when `/sandbox` is requested). | P2 | M | [ ] |
+| G34 | Publish to npm: pick the version, add `CHANGELOG.md`, dry-run `npm publish --dry-run`, then (user's token) tag `v0.1.0`. Decide the package name availability (`amness`) first. | P1 | S | [ ] |
+| G35 | LSP in CI: install `typescript-language-server` and run one real diagnostics test; add `pyright`/`gopls` if cheap. | P2 | S | [ ] |
+| G36 | L13 coordinator: let the model split a task into independent parts itself (today `--parts` needs a file) and show the plan before running. | P3 | M | [ ] |
+| G37 | `amness schedule` end to end on a real crontab (macOS and Linux) and a launchd/systemd-timer option; run the GitHub Action once in a throwaway repo with a real key. | P3 | M | [ ] |
+| G38 | Linux sandbox check: confirm the bubblewrap tests actually run (not skip) in CI; if the runner blocks user namespaces, document it. (Closes the open part of G6.) | P2 | S | [ ] |
+| G39 | Cost display: show estimated dollars per run including subagents and the reviewer, and the cache-waste figure, in the final "Worked for" line. | P2 | S | [ ] |
+| G40 | Docs pass: `docs/usage.md` for `/branch`, images, `amness schedule|acp|tune`; a short "Choosing a budget" guide (default 300k, what the notes do, when to raise it). Keep README a landing page. | P2 | S | [ ] |
+| G41 | Memory/skills/subagent briefs: add the Anthropic brief template (objective, output format, boundaries) as a snippet for custom agents in `.amness/agents/*.md`, and a lint warning for agents with no description of what to return. | P3 | S | [ ] |
+
+### C. Known limits to keep honest in the docs
+
+- No claim of improvement is justified until E1 to E9 are run. README and docs say "not measured" for the newer features; keep it that way until then.
+- Windows has no OS sandbox. macOS (Seatbelt) is tested; Linux (bubblewrap) depends on the CI runner (G38).
+- Image history is re-sent every turn (cost); consider dropping old images after N turns (add to G25/G39).
+- Subagent slices (20%/30%, 80k/150k caps, 3 at once, 12 tool calls) are first guesses, not tuned; E9 should tune them.
+- Token estimates for servers that report no usage are about 4 characters per token.
+
 ## P1
 
 ### G1. Load `AGENTS.md` automatically
@@ -342,3 +395,4 @@ Newest first. When an item is finished, tick it above and add one line here with
 
 - **Measured on gpt-6-luna (2026-10-29)**: built-in suite baseline 96% / full 100% / full+review 100% (tokens per solved task 9.2k / 8.3k / 14.7k), adversarial suite 100% for full, full-taint and baseline. No detectable effect of any guard on these easy tasks, and the reviewer cost ~77% more tokens for no gain here. L2/L3/L9 stay `[~]`: they need harder tasks. Details in docs/evaluation.md.
 - **Budget exhaustion fix (2026-10-29)**: a run that explored without closing hit the 300k cap with no answer. Added budget notes (50/75/90%), a final no-tools report before the cap, a 12-turn read-only check, and cached input counted at a tenth against the cap. Under the `wrapup` guard; scripted tests only. See docs/agent-loop.md.
+- 2026-10-29 (end of day): added "Next up" with E1 to E13 (measurements) and G24 to G41 (build). First real-model results and the budget fix are in the entries above and docs/evaluation.md, docs/budgets.md.
