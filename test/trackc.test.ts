@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUILTIN_GRADERS, Gate, chaosModel, chaosTools, choosingModel, createCodeAgent, createHarness, defineTool, gradeSessions, harnessVariant, loadPrompts, promptPlugin, rateLimited, readSession, scanSource, type Message, type Model } from "../src/index.ts";
@@ -54,4 +54,49 @@ test("grading real sessions: traces become sessions, built-in and plugin graders
   const s = readSession(f); assert.deepEqual([s.task, s.finished, s.steps, s.tokens, s.filesChanged, s.toolCalls.length], ["fix the bug", true, 1, 120, ["a.ts"], 2]);
   const rep = await gradeSessions([f, g], { ...BUILTIN_GRADERS, "small-diff": (x) => ({ score: x.filesChanged.length <= 1, note: "touches few files" }) });
   const by = Object.fromEntries(rep.map((r) => [r.grader, r])); assert.equal(by.finished.mean, 0.5); assert.equal(by["verified-edits"].mean, 0.5); assert.equal(by["no-rejections"].mean, 0.5); assert.equal(by["small-diff"].mean, 1); assert.equal(by["verified-edits"].low[0].session, "s2");
+});
+
+test("a plugin can replace the memory: its notes reach the first message, its search answers the tool, saves go to it, and it hears how the run ended", async () => {
+  const d = tmp(), notes = new Map<string, any>([["style", { name: "style", type: "project", description: "code style", content: "use tabs", scope: "project", updated: "now" }]]), log: string[] = [];
+  const backend = {
+    list: () => [...notes.values()], save: (e: any) => { notes.set(e.name, { ...e, scope: e.scope ?? "project", updated: "now" }); log.push("save " + e.name); return notes.get(e.name); }, forget: (n: string) => notes.delete(n),
+    search: async (q: string) => [...notes.values()].filter((e) => e.content.includes(q) || e.name.includes(q)), context: (task: string) => `## Memory (custom backend)\n- style: use tabs (task was: ${task.slice(0, 20)})`,
+    delta: (text: string) => (/tabs/.test(text) ? "## Memory delta\n- style" : ""), endTurn: (ok: boolean | undefined) => { log.push("end " + String(ok)); },
+  };
+  const seen: Message[][] = [], q: Message[] = [call("memory_search", { query: "tabs" }), call("memory_save", { name: "db", type: "project", description: "database", content: "postgres 16" }), call("finish", { summary: "done" })];
+  const model: Model = async (m) => { seen.push(m.map((x) => ({ ...x }))); return q.shift() ?? { role: "assistant", content: "ok" }; };
+  const agent = createCodeAgent({ model, cwd: d, plugins: [{ name: "mem", memory: () => backend }], index: false, guidance: false, off: ["ledger"] });
+  const r = await agent.run("add a helper"); assert.ok(seen[0].some((m) => /Memory \(custom backend\)/.test(m.content ?? "")));
+  const tool = r.messages.filter((m) => m.role === "tool").map((m) => m.content!); assert.match(tool[0], /use tabs/); assert.match(tool[1], /saved memory/); assert.ok(notes.has("db")); assert.deepEqual(log, ["save db", "end true"]);
+});
+
+test("a plugin's route function picks the model per request (e.g. a cheap model for the first look, the strong one after a failure)", async () => {
+  const d = tmp(), used: string[] = [], mk = (n: string): Model => (async (m: Message[]) => { used.push(n); return n === "cheap" ? call("list_files", {}) : { role: "assistant", content: "answer from " + n } as Message; }) as Model;
+  const route = ({ tail }: any) => (tail.first ? "cheap" : undefined);
+  const a = createCodeAgent({ model: mk("main"), modelById: (id) => mk(id), cwd: d, memory: false, chat: true, plugins: [{ name: "r", route }], index: false, guidance: false });
+  const r = await a.chat([], "look around"); assert.deepEqual(used, ["cheap", "main"]); assert.match(r.text, /answer from main/);
+});
+
+test("sidebar shows plugin status lines (cached, failures hidden); /prompt lists and selects registry prompts", async () => {
+  const { rig, say: sayR, KEY } = await import("./helpers/apprig.ts"); const { plain } = await import("./helpers/apprig.ts");
+  const t = rig([sayR("ok")], { ui: "full", cols: 132, rows: 36 }); await t.start();
+  t.app.plugins = [{ name: "ticket", status: () => "PROJ-42 in review" }, { name: "broken", status: () => { throw new Error("x"); } }];
+  await t.submit("hello"); assert.ok(await t.until(() => t.idle())); await t.settle(1100); t.app.render(); assert.ok(await t.until(() => /ticket: PROJ-42 in review/.test(plain(t.screen()))), plain(t.screen()).slice(0, 2500));
+  assert.deepEqual(t.app.pluginStatus(), ["ticket: PROJ-42 in review"]);
+  mkdirSync(join(t.dir, ".amness", "prompts"), { recursive: true }); writeFileSync(join(t.dir, ".amness", "prompts", "terse.md"), "Be terse.");
+  await t.submit("/prompt list"); assert.ok(await t.until(() => t.has("Available"))); await t.submit("/prompt terse"); assert.ok(await t.until(() => t.has("prompt terse on"))); assert.equal(t.app.cfg.prompt, "terse");
+  assert.ok(t.app.activePlugins().some((p) => p.name === "prompt-terse")); await t.submit("/prompt nope"); assert.ok(await t.until(() => t.has('no prompt "nope"')));
+  await t.submit("/prompt off"); assert.equal(t.app.cfg.prompt, undefined); await t.key(KEY.ctrlD);
+});
+
+test("amness plugin add copies a file into .amness/plugins, shows what it touches, refuses non-plugins, https-only URLs and overwrites", async () => {
+  const { runPlugin } = await import("../cli/plugincli.ts"); const d = tmp(); const out: string[] = [], err: string[] = [];
+  const log = console.log, error = console.error; console.log = (...a: any[]) => out.push(a.join(" ")); console.error = (...a: any[]) => err.push(a.join(" "));
+  try {
+    const src = join(d, "src.ts"); writeFileSync(src, 'import { execSync } from "node:child_process";\nexport default { name: "x" };\n'); writeFileSync(join(d, "notplugin.ts"), "console.log(1)\n");
+    assert.equal(await runPlugin(["add", src], d), 0); assert.ok(out.join("\n").includes("runs shell commands")); assert.ok(existsSync(join(d, ".amness", "plugins", "src.ts")));
+    assert.equal(await runPlugin(["add", src], d), 1); assert.match(err.join("\n"), /already exists/);
+    assert.equal(await runPlugin(["add", join(d, "notplugin.ts")], d), 1); assert.match(err.join("\n"), /no `export default`/);
+    assert.equal(await runPlugin(["add", "http://example.com/p.ts"], d), 2); assert.match(err.join("\n"), /only https/);
+  } finally { console.log = log; console.error = error; }
 });

@@ -256,7 +256,7 @@ export class FullView {
     const used = app.lastPrompt || this.ctxCache.map.reduce((n, m) => n + m.pct, 0) * 0;
     const { rows, hits } = renderSidebar({
       title: app.session.title, model: app.cfg.model, provider: app.cfg.provider, api: app.model.api?.(), branch: app.branch, cwd: shortPath(app.cwd), mode: app.mode, effort: app.cfg.effort,
-      budget: { used: Math.round(app.budget.effective), max: app.budget.maxTokens }, ctxPct: app.ctxPct, ctxUsed: used, ctxMax: win, series: u.series ?? [], map: this.ctxCache.map,
+      pluginStatus: app.pluginStatus(), budget: { used: Math.round(app.budget.effective), max: app.budget.maxTokens }, ctxPct: app.ctxPct, ctxUsed: used, ctxMax: win, series: u.series ?? [], map: this.ctxCache.map,
       usage: { prompt: u.prompt, completion: u.completion, calls: u.calls, cached: u.cached ?? 0, reasoning: u.reasoning ?? 0 }, cost: estimateCost(app.cfg.model, u.prompt, u.completion, u.cached ?? 0),
       todos: app.todos, changes: [...changes.values()].reverse(), tools: app.agent.registry.visible({ step: 0, messages: [] }).length, mcp: app.mcp.length, memory: app.memory?.list().length ?? 0,
       sandbox: app.cfg.sandbox,

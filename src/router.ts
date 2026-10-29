@@ -89,3 +89,16 @@ export function choosingModel(models: Record<string, Model>, choose: (info: { me
   }) as Model;
   return Object.assign(call, models[keys[0]]);
 }
+
+export type RouteInfo = { messages: Message[]; promptTokens: number; tail: ReturnType<typeof tailShape> };
+/** Send each request to the model id your function returns (or the base model when it returns nothing). Models are created once per id, on first use. */
+export function routedByFunction(base: Model, modelById: (id: string) => Model, route: (info: RouteInfo) => string | undefined | void, o: { onRoute?: (id: string | undefined) => void } = {}): Model {
+  const cache = new Map<string, Model>();
+  const call = (async (messages: Message[], tools: ToolSpec[], opts?: ModelOpts) => {
+    let id: string | undefined; try { id = route({ messages, promptTokens: tokensOf(messages), tail: tailShape(messages) }) || undefined; } catch { id = undefined; }
+    o.onRoute?.(id); if (!id) return base(messages, tools, opts);
+    let m = cache.get(id); if (!m) { m = modelById(id); cache.set(id, m); }
+    return m(messages, tools, opts);
+  }) as Model;
+  return Object.assign(call, base);
+}

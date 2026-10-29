@@ -1,6 +1,6 @@
 // Slash commands. Each gets the running App and the raw argument string.
 import { relatives } from "./session.ts";
-import { STRATEGIES } from "../../src/index.ts";
+import { STRATEGIES, loadPrompts } from "../../src/index.ts";
 import { join, resolve } from "node:path";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, type ProviderId } from "../config.ts";
@@ -220,6 +220,13 @@ export function buildCommands(): Cmd[] {
     } },
     { name: "reload-plugins", help: "load the plugin files again (after you edited one)", run: async (a) => {
       await a.loadPluginsNow(); a.buildAgent(); a.say(`${a.plugins.length} plugin${a.plugins.length === 1 ? "" : "s"} loaded${a.plugins.length ? ": " + a.plugins.map((p) => p.name).join(", ") : ""}. Project plugins that you have not approved are skipped.`, dim);
+    } },
+    { name: "prompt", help: "choose the system prompt from .amness/prompts (or off for the built-in one)", args: "[id|list|off]", run: (a, arg) => {
+      const list = loadPrompts(a.cwd);
+      if (!arg || arg === "list") return void a.say(`prompt: ${a.cfg.prompt ?? "built-in"}. ${list.length ? "Available: " + list.map((p) => p.id).join(", ") + ". Use /prompt <id>, or /prompt off." : "None saved yet: put a Markdown file at .amness/prompts/<id>.md (its text replaces the system prompt)."} Compare them with: amness eval --variants full,prompt:<id>`, dim);
+      if (arg === "off") { a.cfg.prompt = undefined; a.saveConfig(); a.buildAgent(); return void a.say("prompt: built-in", dim); }
+      if (!list.some((p) => p.id === arg)) return void a.say(`no prompt "${arg}". Available: ${list.map((p) => p.id).join(", ") || "none"}`, dim);
+      a.cfg.prompt = arg; a.saveConfig(); a.buildAgent(); a.say(`prompt ${arg} on: it replaces the whole system prompt for new conversations`, dim);
     } },
     { name: "strategy", help: "loop strategy: plan-first, explore-then-act, or off", args: "[name|off]", run: (a, arg) => {
       const names = Object.keys(STRATEGIES);

@@ -13,6 +13,7 @@ export type SidebarData = {
   todos: { content: string; status: string }[]; changes: { path: string; added: number; removed: number; created: boolean; blockId: number }[];
   run?: { phase: string; step: number; max: number; elapsedMs: number; frame: number; live: { label: string; ms: number; agent?: string }[]; done: { label: string; ok: boolean; ms: number }[] };
   sandbox?: string;
+  /** one line per plugin status (see Plugin.status) */ pluginStatus?: string[];
   /** the token cap for the current/last turn: tokens counted (cached input at a tenth), the cap, and whether usage was estimated */ budget?: { used: number; max: number };
   procs?: { id: string; name: string; status: string; secs: number }[];
   tools: number; mcp: number; memory: number; running: boolean; elapsedMs: number; tip?: string;
@@ -74,6 +75,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
   if (d.procs?.length) { head("PROCESSES"); for (const p of d.procs.slice(0, 5)) push((p.status === "running" ? F(t.ok, "● ") : F(t.faint, "○ ")) + F(t.text, clipWidth(`${p.id} ${p.name}`, inner - 10)) + F(t.faint, ` ${p.status === "running" ? p.secs + "s" : p.status}`)); }
   head("WORKSPACE");
   if (d.sandbox && d.sandbox !== "off") push(F(t.ok, "⛨ ") + F(t.dim, `sandbox ${d.sandbox}`));
+  for (const s of d.pluginStatus ?? []) push(F(t.accent2, "◇ ") + F(t.dim, clipWidth(s, inner - 3)));
   push(F(t.dim, `${d.tools} tools`) + (d.mcp ? F(t.faint, ` · ${d.mcp} mcp`) : "") + (d.memory ? F(t.faint, ` · ${d.memory} notes`) : ""));
   if (d.tip) { push(); for (const l of wrap(d.tip, inner, 3)) push(F(t.faint, ITAL(l))); }
 

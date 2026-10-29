@@ -10,6 +10,8 @@ import { pathToFileURL } from "node:url";
 import type { Case, MetricFn, Variant } from "./evals.ts";
 import type { Grader } from "./grade.ts";
 import type { Guard, Message, Model, Tool } from "./harness.ts";
+import type { MemoryBackend } from "./memory.ts";
+import type { RouteInfo } from "./router.ts";
 import type { HookEvent, HookResult, HookRunner } from "./hooks.ts";
 import { exec } from "node:child_process";
 import { posixShell } from "./shell.ts";
@@ -66,6 +68,9 @@ export type Plugin = {
   hooks?: Partial<Record<HookEvent, HookHandler>>;
   /** a handler that throws blocks instead of warning (for hooks that enforce a rule) */ failClosed?: boolean;
   /** your own context strategy (compaction, clearing, memory injection): called before every model request, may return a replacement message list */ context?: (msgs: Message[], info: { step: number; promptTokens: number; budget: number }) => Message[] | void | Promise<Message[] | void>;
+  /** replace the built-in memory (notes saved and recalled across sessions) with your own backend; the first plugin that provides one wins */ memory?: MemoryBackend | ((cwd: string) => MemoryBackend);
+  /** choose the model for each request: return a model id (same provider; needs `modelById`), or nothing to use the default. Sees the conversation, its size and what the last steps were. */ route?: (info: RouteInfo) => string | undefined | void;
+  /** a short line shown in the sidebar (and updated as you work): branch policy, build state, ticket id, anything. Keep it fast: it runs on every redraw (the result is cached for one second). */ status?: (ctx: { cwd: string; running: boolean }) => string | undefined | void;
   /** policy as code: decide allow, ask or deny for each tool call before it runs. It can tighten anything, and it can skip an ordinary approval prompt, but it can never loosen the safety floor or the untrusted-text check. */ policy?: (call: PolicyCall) => PolicyResult | Promise<PolicyResult>;
   /** finish gates: your own checks that must pass before the agent may finish (see GateCtx) */ gates?: FinishGate[];
   /** slash commands for the chat (a name that a built-in command already uses is skipped) */ commands?: PluginCommand[];

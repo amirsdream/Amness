@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { onRateLimitWait } from "../model.ts";
-import { STRATEGIES, describeProjectPlugins, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
+import { STRATEGIES, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { PROVIDERS, home, saveConfig, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
@@ -124,7 +124,7 @@ export class App {
         onRoute: (d) => { this.lastRoute = `${d.tier === "cheap" ? m.cheap : this.cfg.model}`; if (d.switched) this.stepNow().notes.push(`route → ${d.tier === "cheap" ? m.cheap : this.cfg.model}: ${d.reason}`); } });
     }
     this.agent = createCodeAgent({
-      model: this.model, cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
+      model: this.model, modelById: (id) => make({ ...this.cfg, model: id }), cwd: this.cwd, chat: true, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
       signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.profileOptions(), embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
@@ -650,8 +650,19 @@ export class App {
     return { fp, trusted };
   }
   plugins: Plugin[] = [];
-  /** loaded plugins plus the loop strategy chosen with /strategy */
-  activePlugins(): Plugin[] { const s = this.cfg.strategy && STRATEGIES[this.cfg.strategy]; return s ? [...this.plugins, s()] : this.plugins; }
+  private statusAt = 0; private statusLines: string[] = [];
+  /** one line per plugin that has a `status` function, cached for a second; a failing plugin shows nothing */
+  pluginStatus(): string[] {
+    if (Date.now() - this.statusAt < 1000) return this.statusLines; this.statusAt = Date.now();
+    this.statusLines = this.plugins.flatMap((p) => { try { const s = p.status?.({ cwd: this.cwd, running: this.running }); return s ? [`${p.name}: ${String(s).slice(0, 60)}`] : []; } catch { return []; } });
+    return this.statusLines;
+  }
+  /** loaded plugins plus the loop strategy chosen with /strategy and the prompt chosen with /prompt */
+  activePlugins(): Plugin[] {
+    const extra: Plugin[] = []; const s = this.cfg.strategy && STRATEGIES[this.cfg.strategy]; if (s) extra.push(s());
+    if (this.cfg.prompt) { try { extra.push(promptPlugin(this.cwd, this.cfg.prompt)); } catch (e) { this.note(`prompt ignored: ${(e as Error).message}`); this.cfg.prompt = undefined; } }
+    return extra.length ? [...this.plugins, ...extra] : this.plugins;
+  }
   /** Load plugins: yours always, the project's only once you approved exactly these files. */
   async loadPluginsNow() {
     const fp = pluginFingerprint(this.cwd), trusted = !!fp && loadState().pluginTrust?.[this.cwd] === fp;

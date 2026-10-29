@@ -1,13 +1,15 @@
 // `amness plugin new <name>` and `amness plugin list`.
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
 import { join, resolve } from "node:path";
-import { BUILTIN_GRADERS, gradeSessions, sessionFiles, describeProjectPlugins, checkPolicies, importPlugins, loadPlugins, pluginTemplate, projectPluginDir } from "../src/index.ts";
+import { scanSource, BUILTIN_GRADERS, gradeSessions, sessionFiles, describeProjectPlugins, checkPolicies, importPlugins, loadPlugins, pluginTemplate, projectPluginDir } from "../src/index.ts";
 import { dim, green, red } from "./ui.ts";
 
 export const PLUGIN_HELP = `usage: amness plugin <command>
   new <name>     create .amness/plugins/<name>.ts from a template (never overwrites)
   policy <traces...> --plugin <file>   replay the tool calls recorded in traces (a file, or a folder such as .amness/traces) through the plugin policies and show what each would allow, ask or deny
   grade <traces...> [--plugin <file>] [--grader a,b]   score real recorded sessions (a trace file, or a folder such as .amness/traces) with built-in or plugin graders
+  add <file|https-url>   copy a plugin file into .amness/plugins/ (never overwrites) and show what it appears to touch; it still needs your approval the first time you start Amness
   list           show the plugins that load here (project plugins need --trust-project to be listed as loaded)
 A plugin is a TypeScript file that runs inside Amness: guardrails, loop rules, tools, slash commands and eval variants. See docs/plugins.md.`;
 
@@ -28,6 +30,23 @@ export async function runPlugin(argv: string[], cwd = process.cwd()): Promise<nu
     if (r.untrusted) { console.log(dim(`${r.untrusted.count} project plugin file(s) not loaded (not approved); add --trust-project to load them here. What they appear to touch (a text scan, not a guarantee):`)); for (const l of describeProjectPlugins(root)) console.log("  " + l); }
     if (!r.plugins.length && !r.untrusted) console.log("no plugins");
     return 0;
+  }
+  if (cmd === "add") {
+    if (!name) { console.error(red("✗ ") + "usage: amness plugin add <file or https URL>"); return 2; }
+    let text: string, base: string;
+    try {
+      if (/^https:\/\//.test(name)) { const r = await fetch(name); if (!r.ok) throw new Error(`HTTP ${r.status}`); text = await r.text(); base = basename(new URL(name).pathname) || "plugin.ts"; }
+      else if (/^http:\/\//.test(name)) { console.error(red("✗ ") + "only https URLs are accepted"); return 2; }
+      else { text = readFileSync(resolve(name), "utf8"); base = basename(name); }
+    } catch (e) { console.error(red("✗ ") + `could not read ${name}: ${(e as Error).message}`); return 1; }
+    if (text.length > 300_000) { console.error(red("✗ ") + "that file is too large for a plugin (300 KB limit)"); return 1; }
+    if (!/\bexport\s+default\b|\bexport\s*\{[^}]*\bas default\b|module\.exports/.test(text)) { console.error(red("✗ ") + "this does not look like a plugin: it has no `export default`"); return 1; }
+    const file = join(projectPluginDir(root), /\.(m?[jt]s)$/.test(base) ? base : base + ".ts");
+    if (existsSync(file)) { console.error(red("✗ ") + `${file} already exists`); return 1; }
+    mkdirSync(projectPluginDir(root), { recursive: true }); writeFileSync(file, text);
+    const caps = scanSource(text); console.log(green("added ") + file);
+    console.log(caps.length ? "It appears to: " + caps.map((c) => c.label).join("; ") : "It shows no shell, network, file or environment access (a text scan, not a guarantee).");
+    console.log(dim("Read it before you trust it. Amness asks for your approval the first time it starts in this project.")); return 0;
   }
   if (cmd === "grade") {
     const rest = argv.slice(1), take = (f: string) => { const i = rest.indexOf(f); return i >= 0 ? rest.splice(i, 2)[1] : undefined; };

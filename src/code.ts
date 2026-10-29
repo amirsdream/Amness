@@ -7,7 +7,7 @@ import { applyBundle, collectFiles, readBundle, writeBundle, type Bundle } from 
 import { unifiedDiff } from "./diff.ts";
 import { createToolTool, loadSavedTools } from "./dynamic.ts";
 import { createHarness, defineTool, clip, makeHandoff, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
-import { MemoryStore, memoryTools } from "./memory.ts";
+import { MemoryStore, isMemoryBackend, memoryTools, type MemoryBackend } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
 import { posixShell, slash } from "./shell.ts";
@@ -23,6 +23,7 @@ import { loadSkills, skillsBlock, skillTool, type Skill } from "./skills.ts";
 import { applyOps, parsePatch, replaceMany } from "./patch.ts";
 import { proposeContract, reviewWork } from "./review.ts";
 import type { HookRunner } from "./hooks.ts";
+import { routedByFunction } from "./router.ts";
 import { applySystem, checkPolicies, composeHooks, type Plugin } from "./plugins.ts";
 import { OBFUSCATED_EXEC, Permissions, commandViews, type PermissionChecker } from "./permissions.ts";
 
@@ -219,7 +220,7 @@ export type CodeAgentOptions = {
   /** Persist transcript here after every turn; run(task, {resume:true}) continues from it. */
   checkpointFile?: string;
   /** Durable memory across sessions (markdown files in <cwd>/.amness/memory + ~/.amness/memory). Default on. */
-  memory?: boolean | MemoryStore;
+  memory?: boolean | MemoryStore | MemoryBackend;
   /** Load AGENTS.md (or CLAUDE.md / GEMINI.md) from the workspace root and from folders the agent works in. Default on. */
   guidance?: boolean;
   /** Called before a command that may change files runs: take a snapshot, note that it cannot be undone. */
@@ -252,6 +253,8 @@ export type CodeAgentOptions = {
   background?: boolean;
   /** Lifecycle hooks, e.g. `Hooks.load(cwd, { trustProject: true })`. Nothing runs unless you pass this. */
   hooks?: HookRunner;
+  /** Create a model from an id (same provider): needed for plugins that route requests with `route`. */
+  modelById?: (id: string) => Model;
   /** Wrap or replace every tool the agent gets (chaos evals use it to make tools fail on purpose). */
   wrapTools?: (tools: Tool[]) => Tool[];
   /** Plugins (see plugins.ts): extra tools, in-process hooks on every loop event, system-prompt rewrites. */
@@ -272,7 +275,8 @@ export type RunOptions = { /** pictures to show the model with the task (needs a
 
 export function createCodeAgent(o: CodeAgentOptions) {
   const plugins = o.plugins ?? [];
-  if (plugins.length) o = { ...o, hooks: composeHooks(o.hooks, plugins, o.cwd), tools: [...(o.tools ?? []), ...plugins.flatMap((p) => p.tools ?? [])] };
+  const routers = plugins.filter((p) => p.route);
+  if (plugins.length) o = { ...o, model: routers.length && o.modelById ? routedByFunction(o.model, o.modelById, (i) => { for (const p of routers) { const r = p.route!(i); if (r) return r; } }) : o.model, hooks: composeHooks(o.hooks, plugins, o.cwd), tools: [...(o.tools ?? []), ...plugins.flatMap((p) => p.tools ?? [])] };
   const policyFn = plugins.some((p) => p.policy) ? (c: { tool: string; args: Record<string, unknown> }) => checkPolicies(plugins, { ...c, cwd: o.cwd }) : undefined;
   const SYS = (chat: boolean | undefined) => applySystem(plugins, chat ? CHAT_SYSTEM : CODE_SYSTEM, o.cwd);
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
@@ -291,7 +295,9 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let skillList: Skill[] = []; const skillWarnings: string[] = [];
   const rescan = () => { if (o.skills === false) return; const r = loadSkills(o.cwd); skillList = r.skills; skillWarnings.splice(0, skillWarnings.length, ...r.warnings); if (skillList.length && !registry.get("skill")) registry.add(skillTool(() => skillList)); };
   const procs = o.background === false ? undefined : new ProcessManager(resolve(o.cwd), { sandbox: sandboxMode });
-  const memory = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : MemoryStore.forWorkspace(resolve(o.cwd));
+  const fromPlugin = plugins.map((p) => (typeof p.memory === "function" ? p.memory(o.cwd) : p.memory)).find(Boolean);
+  const backend: MemoryBackend | undefined = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : isMemoryBackend(o.memory) ? o.memory : fromPlugin ?? MemoryStore.forWorkspace(resolve(o.cwd));
+  const memory = backend instanceof MemoryStore ? backend : undefined;       // the built-in store has extras (embeddings, consolidation, graph) that a custom backend does not need to offer
   if (memory && o.embedder) memory.embedder = o.embedder;
   const mode = o.permissions?.mode;
   const approve: Approve | undefined = o.approve && o.approvalReviewer ? reviewedApprove(o.approve, { model: (typeof o.approvalReviewer === "object" && o.approvalReviewer.model) || o.model, task: () => task, onDecision: (d) => o.onEvent?.({ kind: "policy", tool: d.tool, action: d.decision === "approve" ? "allow" : "ask", reason: `reviewer: ${d.reason}` }) }) : o.approve;
@@ -299,7 +305,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const shellCheck = o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined;
   const postEdit = shellCheck || lsp ? async (paths: string[]) => (await shellCheck?.() ?? "") + (await lsp?.report(paths) ?? "") : undefined;
   const wrap = o.wrapTools ?? ((t: Tool[]) => t);
-  const registry = new Registry(wrap([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: postEdit }), ...(memory ? memoryTools(memory) : []), ...(o.tools ?? [])]));
+  const registry = new Registry(wrap([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: postEdit }), ...(backend ? memoryTools(backend) : []), ...(o.tools ?? [])]));
   const shown = new Set<string>();   // memory notes already in this conversation
   const rescanIndex = () => { if (codeIndex && !registry.get("repo_map") && codeIndex.list().length >= indexMin) registry.add(...indexTools(codeIndex)); };
   rescan(); rescanIndex();
@@ -423,14 +429,14 @@ ${note}
       if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
       if (!history.length && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
       if (!history.length) { rescanIndex(); rescanAgents(); rescan(); const sb = skillsBlock(skillList); if (sb) text += "\n\n" + sb; }
-      if (!history.length && memory) { shown.clear(); const ctx = memory.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
-      else if (memory) { const d = memory.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
+      if (!history.length && backend) { shown.clear(); const ctx = backend.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
+      else if (backend) { const d = backend.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const img = extra.images?.length ? { images: extra.images } : {};
       const msgs: Message[] = history.length ? [...history, { role: "user", content: text, ...img }]
         : [{ role: "system", content: SYS(o.chat) }, { role: "user", content: text, ...img }];
       const res = await h.run(text, { resume: msgs });
       // Learning from outcomes: a finished (verified) run credits the notes that were in front of the model, a run that gave up or got stuck counts against them.
-      memory?.endTurn(res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined);
+      backend?.endTurn(res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined);
       return res;
     },
     async run(t: string, opts: RunOptions = {}) {
@@ -450,9 +456,11 @@ ${note}
       }
       if (guidance && !resume) { const g = guidance.start(); if (g) prompt += "\n\n" + g; }
       if (!resume) { rescanIndex(); rescan(); const sb = skillsBlock(skillList); if (sb) prompt += "\n\n" + sb; }
-      if (memory && !resume) { const ctx = memory.context(prompt); if (ctx) prompt += "\n\n" + ctx; }
+      if (backend && !resume) { const ctx = backend.context(prompt); if (ctx) prompt += "\n\n" + ctx; }
       if (opts.images?.length && !resume) resume = [{ role: "system", content: SYS(o.chat) }, { role: "user", content: prompt, images: opts.images }];
-      return h.run(prompt, { resume });
+      const res = await h.run(prompt, { resume });
+      backend?.endTurn(res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined);
+      return res;
     },
     /** Keep talking to the agent after it finished (or stopped): same conversation, full context. */
     followUp(prev: { messages: Message[] }, text: string) {
@@ -470,7 +478,7 @@ ${note}
       const note = handoff ?? (await makeHandoff(o.models?.compact ?? o.model, registry.visible({ step: 0, messages: result.messages }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema })), result.messages, o.budget));
       const bundle: Bundle = {
         schema: "amness.session/1", createdAt: new Date().toISOString(), task: result.messages.find((m) => m.role === "user")?.content?.split("\n\n## ")[0] ?? task,
-        status: { finished: result.finished, summary: result.text.slice(0, 500) }, handoff: note, memory: memory?.list() ?? [],
+        status: { finished: result.finished, summary: result.text.slice(0, 500) }, handoff: note, memory: backend?.list() ?? [],
         files: collectFiles(o.cwd, touched), from: { ...o.meta, cwd: basename(resolve(o.cwd)) },
       };
       return { bundle, path: path ? writeBundle(path, bundle) : undefined };

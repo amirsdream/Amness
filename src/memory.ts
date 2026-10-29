@@ -24,7 +24,27 @@ const daysSince = (d?: string) => (d ? Math.max(0, (Date.now() - Date.parse(d)) 
 const overlap = (a: string[], b: string[]) => { const A = new Set(a), B = new Set(b); if (!A.size || !B.size) return 0; let n = 0; for (const x of A) if (B.has(x)) n++; return n / Math.min(A.size, B.size); };
 
 /** Plain markdown files with frontmatter + a MEMORY.md index: human-editable, diffable, and portable between tools and machines. */
-export class MemoryStore {
+/**
+ * What the agent needs from a memory: save, find, list, forget, and the two places memory is injected (the first message of a conversation, and later messages).
+ * `MemoryStore` (files on disk, BM25 ranking, outcome learning) is the built-in one; a plugin can provide another (a vector database, a wiki, a ticket system).
+ */
+export interface MemoryBackend {
+  list(): MemoryEntry[];
+  save(e: { name: string; type: MemoryType; description: string; content: string; scope?: Scope }): MemoryEntry & { merged?: string };
+  forget(name: string, scope?: Scope): boolean;
+  search(q: string, n?: number): MemoryEntry[] | Promise<MemoryEntry[]>;
+  /** notes to add to the first message of a conversation (empty string for none) */
+  context(task: string, maxChars?: number, seen?: Set<string>): string;
+  /** only the notes that are new and relevant for a follow-up message (so the cached prefix stays intact) */
+  delta(text: string, seen: Set<string>): string;
+  /** the run ended: true = finished and verified, false = gave up or got stuck, undefined = unknown (a backend can learn from this) */
+  endTurn(success: boolean | undefined): void;
+  /** optional: prepare a semantic search for this query */
+  warmQuery?(q: string): Promise<void>;
+}
+export const isMemoryBackend = (x: unknown): x is MemoryBackend => !!x && typeof x === "object" && ["list", "save", "forget", "search", "context", "delta", "endTurn"].every((k) => typeof (x as Record<string, unknown>)[k] === "function");
+
+export class MemoryStore implements MemoryBackend {
   dirs: Partial<Record<Scope, string>>;
   /** Optional: enables semantic (embedding) retrieval on top of BM25. */
   embedder?: Embedder;
@@ -256,7 +276,7 @@ export class MemoryStore {
 
 export type ConsolidationPlan = { merges: { keep: string; from: string[]; description: string; content: string }[]; archive: string[] };
 
-export function memoryTools(store: MemoryStore, onSave?: (e: MemoryEntry) => void): Tool[] {
+export function memoryTools(store: MemoryBackend, onSave?: (e: MemoryEntry) => void): Tool[] {
   return [
     defineTool<{ name: string; type: MemoryType; description: string; content: string; scope?: Scope }>({
       name: "memory_save",
@@ -270,7 +290,7 @@ export function memoryTools(store: MemoryStore, onSave?: (e: MemoryEntry) => voi
     defineTool<{ query: string }>({
       name: "memory_search", description: "Search saved memory notes by keyword; returns matching notes in full.",
       schema: { type: "object", required: ["query"], properties: { query: { type: "string" } } },
-      run: async ({ query }) => { await store.warmQuery(query); return store.search(query).map((e) => `### ${e.name} [${e.scope}/${e.type}]\n${e.content}`).join("\n\n") || "no matching memory"; },
+      run: async ({ query }) => { await store.warmQuery?.(query); return (await store.search(query)).map((e) => `### ${e.name} [${e.scope}/${e.type}]\n${e.content}`).join("\n\n") || "no matching memory"; },
     }),
     defineTool<{ name: string }>({
       name: "memory_forget", description: "Delete a memory note that is wrong or obsolete.",
