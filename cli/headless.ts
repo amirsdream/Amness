@@ -28,6 +28,7 @@ export const HELP = `usage: amness run [flags] "task"
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
 
 export async function runHeadless(argv: string[]): Promise<number> {
+  if (argv.includes("--help") || argv.includes("-h")) { console.log(HELP); return 0; }       // asking for help must never start a model run
   const args = [...argv];
   const val = (f: string) => { const i = args.indexOf(f); return i < 0 ? undefined : args.splice(i, 2)[1]; };
   const bool = (f: string) => { const i = args.indexOf(f); return i >= 0 && !!args.splice(i, 1); };

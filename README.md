@@ -27,11 +27,11 @@ More ways to start:
 ```bash
 amness "fix the failing test"                                  # start with a prompt
 amness -c                                                      # continue the last conversation here
-amness --provider ollama --model qwen2.5-coder:7b              # a local model, no key needed
+amness run --provider ollama --model qwen2.5-coder:7b "list the TODO comments"   # a local model, no key needed (in the chat, use /provider and /model)
 amness demo                                                    # a scripted tour of the guardrails, no key needed
 ```
 
-Inside the chat: `/help` lists everything · `Shift+Tab` changes how much it may do without asking · `Ctrl+P` opens the command palette · `@file` attaches a file or image · `!cmd` runs a shell command · `#note` saves a memory.
+New to it? Follow the [step-by-step guide](docs/getting-started.md). Inside the chat: `/help` lists everything · `Shift+Tab` changes how much it may do without asking · `Ctrl+P` opens the command palette · `@file` attaches a file or image · `!cmd` runs a shell command · `#note` saves a memory.
 
 ## What it looks like
 
@@ -130,6 +130,8 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 
 | | |
 |---|---|
+| [Getting started](docs/getting-started.md) | a step-by-step first session, with screenshots |
+| [Cookbook](docs/cookbook.md) | 12 task-based recipes: CI, best-of-n, budgets, plugins, evals, schedules |
 | [Using the chat](docs/usage.md) | commands, keys, modes, mentions, images |
 | [Features in depth](docs/features.md) | everything above, one section each |
 | [Plugins: the harness as code](docs/plugins.md) | write your own loop rules, guardrails, tools and graders |

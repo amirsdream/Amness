@@ -1,18 +1,23 @@
 # Amness documentation
 
+These pages explain how to install, use, extend and trust Amness. Start with "Getting started" if you are new.
+
 | Page | What is in it |
 |---|---|
-| [Using the chat](usage.md) | the interface, keys, permission modes, slash commands, themes, copying |
-| [Features in depth](features.md) | permissions and the safety floor, sandbox, hooks, skills, subagents, routing, memory, tracing, replay, failure mining, undo |
-| [Providers and models](providers.md) | OpenAI, Claude, local models (Ollama, LM Studio, vLLM), how requests are made |
-| [Headless and CI](headless.md) | `amness run`, flags, JSON events, exit codes, Docker |
-| [Use it as a library](library.md) | `createCodeAgent`, `createHarness`, tools, models |
-| [Why: what Amness checks](why.md) | the mechanical failures it guards against |
-| [The agent loop](agent-loop.md) | staged compaction, guards, the claims ledger, cache behaviour, sources |
-| [Plugins](plugins.md) | the harness as code: loop rules, guardrails, tools, graders and variants you can evaluate |
-| [Budgets and subagents](budgets.md) | why runs ran out of budget, what the vendors and papers say, what is done about it |
-| [Architecture](architecture.md) | layers, files, how the full-screen UI draws |
-| [Evaluating the harness](evaluation.md) | `amness eval`: statistics, ablations, benchmarks, injection suite |
-| [Safety and privacy](safety.md) | what leaves your machine and what protects it |
-| [Development and limitations](development.md) | running the tests, known limits |
-| [Roadmap](../ROADMAP.md) | what is done and what is next |
+| [Getting started](getting-started.md) | Install Amness, set a key, and finish your first task |
+| [Using the chat](usage.md) | The interface, keys, permission modes, slash commands, themes and copying |
+| [Features in depth](features.md) | Permissions, sandbox, hooks, skills, subagents, routing, memory, tracing, replay and undo |
+| [Plugins](plugins.md) | Change the agent with code: loop rules, guardrails, tools, graders and variants you can evaluate |
+| [Cookbook](cookbook.md) | Short recipes for common jobs |
+| [Evaluating the harness](evaluation.md) | `amness eval`: measure a change with statistics, ablations, benchmarks and an injection suite |
+| [Budgets and subagents](budgets.md) | Why runs ran out of budget, what vendors and papers say, and what Amness does about it |
+| [The agent loop](agent-loop.md) | Staged compaction, guards, the claims ledger, cache behavior and sources |
+| [Architecture](architecture.md) | The layers, the files, and how the full-screen interface draws |
+| [Providers and models](providers.md) | OpenAI, Claude, and local models (Ollama, LM Studio, vLLM), and how requests are made |
+| [Headless and CI](headless.md) | `amness run`, flags, JSON events, exit codes and Docker |
+| [Use it as a library](library.md) | Use `createCodeAgent`, `createHarness`, tools and models in your own TypeScript code |
+| [Safety and privacy](safety.md) | What leaves your machine, what protects you, and what does not |
+| [Why: what Amness checks](why.md) | The mechanical agent failures that Amness guards against, with examples |
+| [Development and limitations](development.md) | Run the tests, find your way around the code, add a feature, and see the known limits |
+| [How we write the documentation](writing-guide.md) | The rules for writing these pages in plain English (CEFR level B1) |
+| [Roadmap](../ROADMAP.md) | What is done and what is next |

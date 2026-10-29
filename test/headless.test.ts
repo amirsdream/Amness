@@ -56,3 +56,9 @@ test("amness run: risky command denied without --yes (model sees why); usage err
   const noKey = await cli(["run", "--provider", "anthropic", "x"], { ANTHROPIC_API_KEY: "" });
   assert.equal(noKey.code, 2); assert.match(noKey.err, /ANTHROPIC_API_KEY/);
 });
+
+test("amness run --help prints usage and exits 0 without calling any model", async () => {
+  const srv = await mockOpenAI([]); const out: string[] = [];
+  const code = await new Promise<number>((res) => { const p = spawn("node", ["cli/amness.ts", "run", "--help"], { env: { ...process.env, OPENAI_BASE_URL: srv.url, OPENAI_API_KEY: "k" } }); p.stdout.on("data", (d) => out.push(String(d))); p.on("close", (c) => res(c ?? 1)); });
+  srv.close(); assert.equal(code, 0); assert.match(out.join(""), /usage: amness run/); assert.equal(srv.seen.length, 0);
+});
