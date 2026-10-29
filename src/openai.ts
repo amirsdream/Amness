@@ -10,6 +10,8 @@ import type { Message, Model, ModelOpts, ToolSpec } from "./harness.ts";
  */
 export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type OpenAIOptions = {
+  /** Server-side compaction (Responses API): once the prompt passes this many tokens the server compacts the conversation into an opaque item, and we stop re-sending what came before it. Off by default; ignored on servers that do not know the parameter. */
+  compactAt?: number;
   model?: string; apiKey?: string; baseUrl?: string; retries?: number;
   /** extra request fields merged into every body */
   extra?: object;
@@ -55,7 +57,9 @@ export function toResponsesInput(msgs: Message[], model: string): { instructions
       for (const c of m.tool_calls ?? []) input.push({ type: "function_call", call_id: c.id, name: c.function.name, arguments: c.function.arguments || "{}" });
     }
   }
-  return { instructions, input };
+  // Everything before the newest compaction item is already inside it: sending it again would defeat the point.
+  let cut = -1; input.forEach((it, i) => { if (it?.type === "compaction") cut = i; });
+  return { instructions, input: cut > 0 ? input.slice(cut) : input };
 }
 
 const toResponsesTool = (t: ToolSpec) => ({
@@ -154,7 +158,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
   const mode = opts.api ?? "auto";
   // adapter state that self-corrects at runtime
   // optional request fields a server may not know; if it says so we stop sending that one field
-  const OPTIONAL = ["prompt_cache_key", "prompt_cache_retention", "include", "stream_options", "parallel_tool_calls"], dropped = new Set<string>();
+  const OPTIONAL = ["prompt_cache_key", "prompt_cache_retention", "include", "stream_options", "parallel_tool_calls", "context_management"], dropped = new Set<string>();
   let useResponses = mode === "responses" || (mode === "auto" && official && isReasoningModel(model));
   let sendSummary = opts.summary ?? true, sendEffort = opts.effort !== undefined, chatNoReasoning = false, flips = 0, chatRefused = false;
 
@@ -189,6 +193,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
       ...(reasoning && Object.keys(reasoning).length && { reasoning }),
       ...(reasoning && !store && { include: ["reasoning.encrypted_content"] }),     // older reasoning models only return the replayable blob when asked; newer ones always do
       ...(opts.promptCacheKey && official && { prompt_cache_key: opts.promptCacheKey, prompt_cache_retention: "24h" }),   // keep the cached prefix alive across idle gaps; dropped automatically if a model refuses it
+      ...(opts.compactAt && official && { context_management: [{ type: "compaction", compact_threshold: opts.compactAt }] }),
       ...opts.extra,
     };
     for (const k of dropped) delete body[k];

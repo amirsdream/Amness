@@ -211,3 +211,16 @@ test("optional fields a server does not know (prompt_cache_key, include, stream_
     assert.ok("stream_options" in s.seen[3].body && !("stream_options" in s.seen[4].body));
   } finally { s.close(); }
 });
+
+test("compactAt: context_management is sent on official hosts only, and input before the newest compaction item is not re-sent", async () => {
+  const bodies: any[] = []; const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_u: any, init: any) => { bodies.push(JSON.parse(init.body)); return new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }], usage: {} }), { headers: { "content-type": "application/json" } }); }) as any;
+  try {
+    await openai({ apiKey: "k", baseUrl: "https://api.openai.com/v1", model: "gpt-5", api: "responses", compactAt: 150000 })([{ role: "user", content: "hi" }], []);
+    await openai({ apiKey: "k", baseUrl: "http://localhost:1/v1", model: "gpt-5", api: "responses", compactAt: 150000 })([{ role: "user", content: "hi" }], []);
+  } finally { globalThis.fetch = realFetch; }
+  assert.deepEqual(bodies[0].context_management, [{ type: "compaction", compact_threshold: 150000 }]); assert.equal(bodies[1].context_management, undefined);
+  const raw = (items: any[]): Message => ({ role: "assistant", content: null, raw: { api: "responses", model: "gpt-5", items } });
+  const { input } = toResponsesInput([{ role: "system", content: "S" }, { role: "user", content: "old question" }, raw([{ type: "message", role: "assistant", content: "old" }]), { role: "user", content: "newer" }, raw([{ type: "compaction", id: "c1", encrypted_content: "xx" }, { type: "message", role: "assistant", content: "after" }]), { role: "user", content: "latest" }], "gpt-5");
+  assert.deepEqual(input.map((i: any) => i.type ?? i.role), ["compaction", "message", "user"]);
+});

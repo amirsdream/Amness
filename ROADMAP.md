@@ -99,7 +99,7 @@ Everything in the Status table above is built and pushed; most Track B items are
 
 | Id | Item | Priority | Effort | Done |
 |---|---|---|---|---|
-| G24 | OpenAI server-side compaction (`context_management` + `compact_threshold`) as an option in the OpenAI adapter; make sure our own history trimming does not fight it (`previous_response_id` forbids manual pruning). | P1 | M | [ ] |
+| G24 | OpenAI server-side compaction (`context_management` + `compact_threshold`) as an option in the OpenAI adapter; make sure our own history trimming does not fight it (`previous_response_id` forbids manual pruning). | P1 | M | [~] |
 | G25 | Budget visibility in the UI: show % of budget used in the sidebar and status line, mark estimated usage, show each subagent's slice and spend, and a `/budget` command to raise or lower the cap mid-session. | P1 | S–M | [~] |
 | G26 | **Explore block UI is still suspect**: confirm that the "Explore" group closes (✓/✗) for every outcome including subagent budget stops, aborts and unknown-agent fallback; add a VTerm test for each. | P1 | S | [x] |
 | G27 | Config surface for the new options: `lsp`, `approvalReviewer`, `taskBudget`, `review` in `/settings` and `docs/usage.md` (today they are only in `config.json` and headless flags). | P1 | S | [~] |
@@ -354,6 +354,7 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G24** (partly): compactAt option: context_management sent on official OpenAI hosts, input before the newest compaction item dropped; wire-level tests only, not measured against our own trimming
 - **G38** (partly): CI step requires a working sandbox (AMNESS_REQUIRE_SANDBOX=1, informational); result to be read from the next run
 - **G34** (partly): name amness is free on npm (404); npm publish --dry-run is clean (203 files, 2.2 MB); CHANGELOG.md added. Left: your npm token and a v0.1.0 tag
 - **G27** (partly): /lsp, /approver, /budget commands; taskBudget still config.json only; docs/usage.md not updated yet

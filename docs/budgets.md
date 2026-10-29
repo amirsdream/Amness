@@ -36,6 +36,6 @@ Everything except item 7 lives in the harness and works the same for OpenAI, Cla
 
 ## Not done, and why
 
-- **OpenAI server-side compaction** (`compact_threshold`): documented, but our history editing and cache handling would need to change with it; worth doing as its own item.
+- **OpenAI server-side compaction** is now an option (`"compactAt": 150000` in the config; Responses API on official hosts only): the request carries `context_management` with that threshold, and input before the newest compaction item is no longer re-sent. Tested at the wire level only. Not measured: it is unknown yet whether it beats our own staged trimming, and it is off by default.
 - **A hard cap on reads in the tool layer** (stop the read tool after N reads until a plan is stated): proposed in blogs, unverified, and risky for legitimate large reads. The nudge comes first; measure before making it a hard stop.
 - **Exploration that returns only file paths and line ranges** (a paper named FastContext is cited in a blog, *snippet*, unverified): not implemented.

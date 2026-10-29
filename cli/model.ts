@@ -6,7 +6,7 @@ export function createModel(cfg: Config, retries?: number, o: { cacheKey?: strin
   return cfg.provider === "anthropic"
     ? anthropic({ model: cfg.model, apiKey: cfg.apiKey, taskBudget: cfg.taskBudget, effort: cfg.effort && !["none", "minimal"].includes(cfg.effort) ? (cfg.effort as "low" | "medium" | "high" | "xhigh" | "max") : undefined, baseUrl: cfg.baseUrl === PROVIDERS.anthropic.baseUrl ? undefined : cfg.baseUrl })
     : openai({
-      model: cfg.model, apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, retries, api: cfg.api, promptCacheKey: o.cacheKey,
+      model: cfg.model, apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, retries, api: cfg.api, promptCacheKey: o.cacheKey, compactAt: cfg.compactAt,
       effort: cfg.effort && effortsFor(cfg.model).includes(cfg.effort) ? cfg.effort : undefined,        // a value this model does not accept is never sent
     });
 }
