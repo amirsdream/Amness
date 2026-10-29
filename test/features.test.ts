@@ -195,3 +195,11 @@ test("a wrong file name gets the closest real files back, and grep on a missing 
   assert.match(String(await grep.run({ pattern: "x", path: "src/gemini.ts" }, {} as any)), /ERROR: src\/gemini\.ts does not exist, so nothing was searched\./);
   assert.match(String(await grep.run({ pattern: "x", path: "src" }, {} as any)), /harness\.ts:1:x/);
 });
+
+test("sh: a command that is not found (exit 127) explains what that means, and says when the name is really one of the agent's tools", async () => {
+  const d = tmp(), a = createCodeAgent({ model: (async () => ({ role: "assistant", content: "x" })) as any, cwd: d, memory: false, chat: true, index: false, guidance: false }), sh = a.registry.get("sh")!;
+  const ctx = { registry: a.registry, step: 0 } as any;
+  const plain = String(await sh.run({ cmd: "frobnicate-xyz --now" }, ctx)); assert.match(plain, /exit=127/); assert.match(plain, /"frobnicate-xyz" is not a program on this machine/); assert.doesNotMatch(plain, /is one of your tools/);
+  const tool = String(await sh.run({ cmd: "read_file src/a.ts" }, ctx)); assert.match(tool, /"read_file" is one of your tools: call it as a tool/);
+  assert.doesNotMatch(String(await sh.run({ cmd: "echo hi" }, ctx)), /exit 127/);
+});

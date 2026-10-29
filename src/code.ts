@@ -158,7 +158,9 @@ export function codeTools(cwd: string, o: { /** called before a command that may
         if (mode?.() === "plan" && !READONLY_CMD.test(cmd))
           return "ERROR: plan mode is read-only; only inspection commands are allowed (ls, cat, head, tail, grep, find, git status/log/diff/show, wc, pwd). Finish your plan and call exit_plan_mode.";
         if (o.beforeShell && !READONLY_CMD.test(cmd)) { try { await o.beforeShell(cmd); } catch { /* a failed snapshot must not stop the command */ } }
-        return runShell(cmd, root, (timeout ?? 60) * 1000, ctx.signal, o.sandbox?.() ?? "off");
+        const out = await runShell(cmd, root, (timeout ?? 60) * 1000, ctx.signal, o.sandbox?.() ?? "off");
+        const miss = /^exit=127\b/.test(out) ? /(?:^|\n|: )([\w.@+-]+): (?:command )?not found/.exec(out)?.[1] : undefined;
+        return miss ? `${out.trimEnd()}\n[exit 127 means "${miss}" is not a program on this machine. ${ctx.registry.get(miss) ? `"${miss}" is one of your tools: call it as a tool, not as a command. ` : ""}Check the spelling, check that it is installed (for example: command -v ${miss}), or use a different command. The \`cmd\` argument must be a shell command line, such as "ls src".]` : out;
       } }),
   ];
 }
