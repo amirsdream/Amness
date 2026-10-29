@@ -23,7 +23,10 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - name: bubblewrap (lets the Linux sandbox tests run when the runner allows user namespaces)
-        run: sudo apt-get install -y bubblewrap || true
+        run: |
+          sudo apt-get install -y bubblewrap || true
+          # Ubuntu 24.04 runners block unprivileged user namespaces with AppArmor, so bwrap cannot start; allow them for the sandbox tests
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: npm test
       - name: "The Linux sandbox is really exercised (informational, some runners forbid user namespaces)"
         continue-on-error: true
