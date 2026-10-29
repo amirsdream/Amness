@@ -39,3 +39,16 @@ test("gives up after the retry budget, on abort, and when asked to wait too long
 test("the wrapper keeps the model's flags (appendOnly) so cache handling still works", () => {
   const m: Model = (async () => ok) as Model; m.appendOnly = true; assert.equal(rateLimited(m).appendOnly, true);
 });
+
+test("end to end over HTTP: a 429 with Retry-After reaches the shared gate through the OpenAI adapter, the call waits and then succeeds", async () => {
+  const { createServer } = await import("node:http"); const { openai } = await import("../src/index.ts");
+  let hits = 0; const stamps: number[] = [];
+  const srv = createServer((req, res) => { req.resume().on("end", () => { stamps.push(Date.now()); if (++hits === 1) { res.writeHead(429, { "retry-after": "1", "content-type": "application/json" }); return res.end('{"error":{"message":"Rate limit reached for requests"}}'); } res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "hello" } }], usage: {} })); }); });
+  await new Promise<void>((r) => srv.listen(0, r)); const port = (srv.address() as any).port;
+  try {
+    const gate = new Gate({ ceiling: 4, start: 4 }), waits: number[] = [];
+    const m = rateLimited(openai({ apiKey: "k", baseUrl: `http://127.0.0.1:${port}/v1`, model: "local", api: "chat", externalRetry: true, retries: 1 }), { gate, onWait: (ms) => waits.push(ms) });
+    const r = await m([{ role: "user", content: "hi" }], []);
+    assert.equal(r.content, "hello"); assert.equal(hits, 2); assert.ok(stamps[1] - stamps[0] >= 950, `waited ${stamps[1] - stamps[0]}ms`); assert.equal(waits.length, 1); assert.equal(gate.max, 2);
+  } finally { srv.closeAllConnections(); srv.close(); }
+});

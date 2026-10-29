@@ -44,7 +44,7 @@ What Amness does (`src/ratelimit.ts`, every provider, shared by all agents in th
 3. Quota, billing and spend-cap errors, aborts, waits longer than two minutes, and more than six attempts are not retried; the error reaches you.
 4. The OpenAI adapter no longer retries 429 itself (the gate does), but still retries timeouts and 5xx honouring `Retry-After`.
 
-Tested with fake models and clocks; not yet triggered by a real 429 (the evals above ran slower than expected when many sessions ran at once, which is the situation this exists for).
+Tested with fake models and clocks; tested end to end against a local server that returns 429 with Retry-After; not yet seen with a real provider 429 (the evals above ran slower than expected when many sessions ran at once, which is the situation this exists for).
 
 ## Subagents in the UI
 
