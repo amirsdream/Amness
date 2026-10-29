@@ -6,7 +6,7 @@ import { basename, dirname, relative, resolve, sep } from "node:path";
 import { applyBundle, collectFiles, readBundle, writeBundle, type Bundle } from "./bundle.ts";
 import { unifiedDiff } from "./diff.ts";
 import { createToolTool, loadSavedTools } from "./dynamic.ts";
-import { createHarness, defineTool, clip, makeHandoff, Registry, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
+import { createHarness, defineTool, clip, makeHandoff, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, memoryTools } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
@@ -170,7 +170,7 @@ function bgTools(procs: ProcessManager, risky: (a: { cmd: string }) => string | 
 
 export const CODE_SYSTEM = `You are an expert software engineer working autonomously in a repository. Complete the task, then call \`finish\`.
 Workflow:
-1. EXPLORE: list_files / grep / read_file to understand the code before changing it. Reproduce the problem or run the existing tests first when possible.
+1. EXPLORE (proportionate: a small fix needs a handful of reads, not a survey; stop when you know where to change): list_files / grep / read_file to understand the code before changing it. Reproduce the problem or run the existing tests first when possible.
 2. EDIT: smallest correct change, matching surrounding style. Prefer edit_file over rewriting files (several replacements in one file: its \`edits\` list); use apply_patch when one change spans several files. Do not touch unrelated code. Never edit tests to make them pass unless the task says so.
 3. VERIFY: run the tests/build/command that proves it works. Read failures carefully and fix the root cause. If an approach fails twice, rethink.
 4. FINISH: \`finish(summary)\` with what changed, how you verified, and assumptions. It is rejected if verification fails.
@@ -181,6 +181,7 @@ Never invent file contents or command output. Don't ask the user questions; choo
 export const CHAT_SYSTEM = `You are an expert software engineer pair-programming with the user in their terminal, inside their repository. Be concise and direct; format with Markdown (short paragraphs, \`inline code\`, fenced code blocks).
 How to work:
 - Questions: answer from the code. Explore first (list_files, grep, read_file; in a large repository start with repo_map, find_refs and impact when you have them) instead of guessing; cite files as path:line. Use the \`task\` tool for broad searches so your own context stays clean.
+- Effort: match effort to the question. A fact or one-file question: 3-10 tool calls, no subagent. Comparing or tracing a few things: 10-15 calls. Only a genuinely broad survey justifies \`task\`, and then give each subagent a distinct slice. When your budget notes say it is running low, stop exploring and give the best answer you have, saying what you did not cover.
 - Changes: read a file before editing it, make the smallest correct change, then verify it (run the tests/build). For anything with 3+ steps, keep a checklist with \`todo_write\` and update it as you go (exactly one item in_progress).
 - When you finish a coding task, call \`finish(summary)\` (what changed, how you verified). For plain questions just answer; no \`finish\` needed.
 - Permissions: the user may be asked to approve edits and shell commands. If a call is denied, do not retry it; use another approach or explain what you need. In plan mode you are read-only: investigate, then present a plan with \`exit_plan_mode\` and wait for approval.
@@ -273,6 +274,9 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const agentOf = (name?: string) => (name && name !== "explore" ? agentList.find((a) => a.name === name) : undefined);
   const rescanAgents = () => { if (o.agents === false) return; const r = loadAgents(o.cwd); agentList = r.agents; agentWarnings.splice(0, agentWarnings.length, ...r.warnings); };
   rescanAgents();
+  let taskSlots = 3; const taskWaiters: (() => void)[] = [];
+  const acquireTask = async () => { if (taskSlots > 0) { taskSlots--; return; } await new Promise<void>((r) => taskWaiters.push(r)); };
+  const releaseTask = () => { const w = taskWaiters.shift(); if (w) w(); else taskSlots++; };
   const codeIndex = o.index === false ? undefined : new CodeIndex(o.cwd), indexMin = typeof o.index === "object" ? o.index.minFiles ?? 25 : 25;
   let skillList: Skill[] = []; const skillWarnings: string[] = [];
   const rescan = () => { if (o.skills === false) return; const r = loadSkills(o.cwd); skillList = r.skills; skillWarnings.splice(0, skillWarnings.length, ...r.warnings); if (skillList.length && !registry.get("skill")) registry.add(skillTool(() => skillList)); };
@@ -300,9 +304,20 @@ export function createCodeAgent(o: CodeAgentOptions) {
       }),
       defineTool<{ description: string; agent?: string }>({
         name: "task", readOnly: true, parallel: true, concurrent: ({ agent }) => { const d = agentOf(agent); return !d || !isWriter(d) || d.isolation === "worktree"; },
-        get description() { return `Delegate work to a subagent with its own fresh context: it sees only your brief and returns only its summary, so give it a complete brief (the question, where to look, what to report). Default: a read-only explorer for broad searches or questions that need reading many files; several calls in one turn run in parallel.${agentList.length ? ` Other agents (pass \`agent\`): ${agentList.map((a) => `${a.name}: ${a.description}${isWriter(a) ? (a.isolation === "worktree" ? " [edits in an isolated copy and returns a patch]" : " [can edit files]") : ""}`).join("; ")}.` : ""}`; },
+        get description() { return `Delegate work to a subagent with its own fresh context: it sees only your brief and returns only its summary, so the brief must state the objective, where to look, what NOT to cover (so parallel subagents do not repeat each other) and what to report. Default: a read-only explorer for broad searches or questions that need reading many files; at most 3 run at once. Do not delegate what one grep or read would answer: a subagent costs a full session of tokens.${agentList.length ? ` Other agents (pass \`agent\`): ${agentList.map((a) => `${a.name}: ${a.description}${isWriter(a) ? (a.isolation === "worktree" ? " [edits in an isolated copy and returns a patch]" : " [can edit files]") : ""}`).join("; ")}.` : ""}`; },
         schema: { type: "object", required: ["description"], properties: { description: { type: "string", description: "complete brief: the question or job, where to look, what to report" }, agent: { type: "string", description: "which agent (default: the read-only explorer)" } } },
-        run: async ({ description, agent }, ctx) => {
+        run: async (args, ctx) => { await acquireTask(); try { return await runTask(args, ctx); } finally { releaseTask(); } },
+      }),
+      defineTool<{ plan: string }>({
+        name: "exit_plan_mode", readOnly: true, risky: true, when: () => mode?.() === "plan", preview: ({ plan }) => plan,
+        description: "Plan mode only: present your finished plan to the user for approval. After approval you can edit files.",
+        schema: { type: "object", required: ["plan"], properties: { plan: { type: "string", description: "the plan, in Markdown: what you will change and why, in order" } } },
+        run: () => "The user approved the plan. Implement it now.",
+      }),
+    );
+  }
+  /** The `task` tool's work: a read-only explorer, or one of the custom agents. */
+  async function runTask({ description, agent }: { description: string; agent?: string }, ctx: ToolCtx): Promise<string> {
           const d = agentOf(agent);
           const unknown = agent && !["explore", "explorer"].includes(agent.toLowerCase()) && !d ? agent : undefined;            // a wrong name should not cost a round trip: use the read-only explorer and say so
           if (unknown) o.onEvent?.({ kind: "nudge", detail: `no agent named "${unknown}"; used the read-only explorer` });
@@ -310,7 +325,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
           if (!d) {
             const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, budget: o.budget?.slice(0.2, 80_000), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
             const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";
-            return note + (r.text || "(the explorer returned nothing)");
+            return note + clip(r.text || "(the explorer returned nothing)", 8000);                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
           }
           const names = plan ? d.tools.filter((t) => !WRITE_TOOLS.has(t)) : d.tools, isolated = d.isolation === "worktree" && isWriter(d) && !plan;
           let wt: Worktree | undefined; if (isolated) { if (!(await isRepo(o.cwd))) return "ERROR: isolation: worktree needs a git repository with at least one commit"; wt = await createWorktree(o.cwd); }
@@ -321,7 +336,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
               model: (d.model && o.agentModels?.[d.model]) || o.model, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
               budget: o.budget?.slice(0.3, 150_000), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
             }).run(description);
-            let out = r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`;
+            let out = clip(r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`, 8000);
             if (wt) {
               const diff = await worktreeDiff(wt);
               if (diff) { const n = ++patchCount, rel = `.amness/agents/out/${d.name}-${Date.now().toString(36)}-${n}.patch`; mkdirSync(dirname(resolve(o.cwd, rel)), { recursive: true }); writeFileSync(resolve(o.cwd, rel), diff + "\n");
@@ -330,15 +345,6 @@ export function createCodeAgent(o: CodeAgentOptions) {
             }
             return out;
           } finally { if (wt) await removeWorktree(wt); }
-        },
-      }),
-      defineTool<{ plan: string }>({
-        name: "exit_plan_mode", readOnly: true, risky: true, when: () => mode?.() === "plan", preview: ({ plan }) => plan,
-        description: "Plan mode only: present your finished plan to the user for approval. After approval you can edit files.",
-        schema: { type: "object", required: ["plan"], properties: { plan: { type: "string", description: "the plan, in Markdown: what you will change and why, in order" } } },
-        run: () => "The user approved the plan. Implement it now.",
-      }),
-    );
   }
   if (o.selfExtend) { mkdirSync(dirname(toolsFile), { recursive: true }); registry.add(...loadSavedTools(toolsFile, o.cwd), createToolTool({ cwd: o.cwd, file: toolsFile })); }
   /** SessionStart (first message of a conversation) and UserPromptSubmit hooks: may add context to the message or refuse it. */

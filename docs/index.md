@@ -9,6 +9,7 @@
 | [Use it as a library](library.md) | `createCodeAgent`, `createHarness`, tools, models |
 | [Why: what Amness checks](why.md) | the mechanical failures it guards against |
 | [The agent loop](agent-loop.md) | staged compaction, guards, the claims ledger, cache behaviour, sources |
+| [Budgets and subagents](budgets.md) | why runs ran out of budget, what the vendors and papers say, what is done about it |
 | [Architecture](architecture.md) | layers, files, how the full-screen UI draws |
 | [Evaluating the harness](evaluation.md) | `amness eval`: statistics, ablations, benchmarks, injection suite |
 | [Safety and privacy](safety.md) | what leaves your machine and what protects it |

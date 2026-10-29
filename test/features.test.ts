@@ -170,3 +170,10 @@ test("a budget slice is capped to a share of what is left and charges the parent
   s.add({ role: "assistant", content: "", usage: { total_tokens: 100 } }); assert.equal(s.tokens, 100); assert.equal(b.tokens, 500);
   assert.equal(new Budget().slice(0.5).maxTokens, Infinity);
 });
+
+test("model-agnostic: a server that reports no usage still gets a working cap, notes and final report (tokens are estimated)", async () => {
+  const noop = defineTool({ name: "noop", description: "", schema: { type: "object" }, run: () => "x".repeat(2000) }), budget = new Budget({ maxTokens: 3000 });
+  let n = 0; const model: Model = async (_m, specs) => (specs.length === 0 ? { role: "assistant", content: "Summary: looked around." } : call(["noop", { i: n++ }]) && { role: "assistant", content: null, tool_calls: [{ id: "u" + n, function: { name: "noop", arguments: JSON.stringify({ i: n++ }) } }] });
+  const r = await createHarness({ model, tools: [noop], budget, maxSteps: 40, off: ["loop", "stagnation"] }).run("t");
+  assert.equal(r.stopped, "budget"); assert.match(r.text, /Summary: looked around\./); assert.ok(budget.tokens > 0 && budget.tokens < 6000, `used ${budget.tokens}`);
+});

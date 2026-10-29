@@ -37,7 +37,7 @@ test("worktree: isolated copy of HEAD; changes come back as a diff; the main tre
   await removeWorktree(w); assert.ok(!existsSync(w.dir)); assert.ok(!git(d, "worktree", "list").includes("amness-wt"));
 });
 
-const lead = (cwd: string, leadQ: Message[], subModel: Model, extra: object = {}) => createCodeAgent({ model: async (m, s) => (m[0].content ?? "").includes("subagent") || /careful|reviewer/.test(m[0].content ?? "") ? subModel(m, s) : leadQ.shift()!, cwd, memory: false, guidance: false, chat: true, permissions: { mode: () => "yolo" }, ...extra });
+const lead = (cwd: string, leadQ: Message[], subModel: Model, extra: object = {}) => createCodeAgent({ model: async (m, s) => (m[0].content ?? "").includes("You are a subagent") || /careful|reviewer/.test(m[0].content ?? "") ? subModel(m, s) : leadQ.shift()!, cwd, memory: false, guidance: false, chat: true, permissions: { mode: () => "yolo" }, ...extra });
 
 test("task tool: a custom read-only agent gets only its tools and its own prompt, returns only its summary, and an unknown agent name falls back to the explorer with a note", async () => {
   const d = repo(); put(d, ".amness/agents/reviewer.md", agentMd("reviewer", "tools: read_file, grep", "You are careful and review."));
@@ -72,4 +72,13 @@ test("task tool: isolation: worktree leaves the working tree alone, saves a patc
   const none = repo(); put(none, ".amness/agents/fixer.md", agentMd("fixer", "tools: edit_file\nisolation: worktree")); const nonGit = root(); put(nonGit, ".amness/agents/fixer.md", agentMd("fixer", "tools: edit_file\nisolation: worktree"));
   const a3 = lead(nonGit, [call("task", { description: "x", agent: "fixer" }), { role: "assistant", content: "ok" }], async () => call("finish", { summary: "n" }));
   assert.match((await a3.chat([], "go")).messages.find((m) => m.role === "tool")!.content!, /needs a git repository/);
+});
+
+test("task tool: at most 3 subagents run at once, and a subagent's report is clipped", async () => {
+  const d = repo(); let live = 0, peak = 0;
+  const sub: Model = async () => { live++; peak = Math.max(peak, live); await new Promise((r) => setTimeout(r, 40)); live--; return call("finish", { summary: "x".repeat(20000) }); };
+  const a = createCodeAgent({ model: async (m, s) => ((m[0].content ?? "").includes("read-only code explorer") ? sub(m, s) : leadQ.shift()!), cwd: d, memory: false, chat: true, permissions: { mode: () => "default" }, index: false, guidance: false });
+  const leadQ: Message[] = [{ role: "assistant", content: null, tool_calls: Array.from({ length: 5 }, (_, i) => ({ id: "t" + i, function: { name: "task", arguments: JSON.stringify({ description: "look " + i }) } })) }, { role: "assistant", content: "done" }];
+  const r = await a.chat([], "go");
+  assert.equal(peak, 3); const outs = r.messages.filter((m) => m.role === "tool").map((m) => m.content!); assert.equal(outs.length, 5); assert.ok(outs.every((o) => o.length < 9000));
 });

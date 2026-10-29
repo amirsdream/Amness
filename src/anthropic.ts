@@ -6,6 +6,8 @@ import type { Message, Model, ToolCall, ToolSpec } from "./harness.ts";
  * server-side refusal fallbacks. Credentials: `apiKey`, ANTHROPIC_API_KEY, or an `ant auth login` profile.
  */
 export type AnthropicOptions = {
+  /** Advisory token budget for each agentic turn (Claude's `task_budget`, beta): the model sees a running countdown and wraps up gracefully. At least 20000; only sent to models that support it. Set once; it is not changed between requests (that would break the prompt cache). */
+  taskBudget?: number;
   model?: string;
   apiKey?: string;
   baseUrl?: string;
@@ -72,10 +74,13 @@ const toTool = (t: ToolSpec) => ({
   input_schema: t.parameters.type === "object" ? t.parameters : { type: "object", properties: {} },
 });
 
+/** Models that accept `task_budget` (beta). Not Sonnet 5, Opus 4.6, Sonnet 4.6 or Haiku 4.5. */
+const TASK_BUDGET_OK = /claude-(fable|mythos|opus-(4-7|4-8|5)|sonnet-5-5|haiku-5-5)/;
 export function anthropic(o: AnthropicOptions = {}): Model {
   const model = o.model ?? process.env.AMNESS_MODEL ?? DEFAULT_CLAUDE;
   const fallbacks = o.fallbacks ?? FALLBACK_OK.test(model);
   const thinking = o.thinking ?? ADAPTIVE.test(model);
+  const taskBudget = o.taskBudget && o.taskBudget >= 20_000 && TASK_BUDGET_OK.test(model) ? o.taskBudget : undefined;
   let client: any = o.client;
 
   const call: Model = async (messages, tools, opts) => {
@@ -86,12 +91,13 @@ export function anthropic(o: AnthropicOptions = {}): Model {
     const req = {
       model, max_tokens: opts?.maxTokens ?? o.maxTokens ?? 32_000, ...(system && { system }), messages: msgs,
       ...(tools.length && { tools: tools.map(toTool) }),
-      ...(thinking && { thinking: { type: "adaptive" }, output_config: { effort: o.effort ?? "high" } }),
+      ...((thinking || taskBudget) && { ...(thinking && { thinking: { type: "adaptive" } }), output_config: { ...(thinking && { effort: o.effort ?? "high" }), ...(taskBudget && { task_budget: { type: "tokens", total: taskBudget } }) } }),
       cache_control: { type: "ephemeral" }, // the transcript is append-only, so each turn reads the previous one from cache
     };
     // Streaming avoids HTTP timeouts on long outputs; we only need the assembled message.
-    const stream = fallbacks
-      ? client.beta.messages.stream({ ...req, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" }, { signal: opts?.signal })
+    const betas = [...(fallbacks ? ["server-side-fallback-2026-07-01"] : []), ...(taskBudget ? ["task-budgets-2026-03-13"] : [])];
+    const stream = betas.length
+      ? client.beta.messages.stream({ ...req, betas, ...(fallbacks && { fallbacks: "default" }) }, { signal: opts?.signal })
       : client.messages.stream(req, { signal: opts?.signal });
     if (opts?.onText) stream.on?.("text", (delta: string) => opts.onText!(delta));
     return fromAnthropic(await stream.finalMessage());

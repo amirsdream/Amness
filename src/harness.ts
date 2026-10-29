@@ -3,7 +3,7 @@ import { type Schema, validate, parseLooseJson } from "./schema.ts";
 import { ProgressTracker, type TurnFacts } from "./progress.ts";
 import { redact } from "./secrets.ts";
 export type ToolCall = { id: string; type?: "function"; function: { name: string; arguments: string } };
-export type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
+export type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** set when the provider reported nothing and the harness estimated (about 4 characters per token) */ estimated?: boolean; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
 export type Message = { role: "system" | "user" | "assistant" | "tool"; content: string | null; /** pictures attached to a user message (base64) */ images?: { mime: string; data: string }[]; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: Usage;
   /** Provider-native content blocks (e.g. Claude thinking blocks). Kept verbatim in history and handed back to the adapter. */
   raw?: unknown };
@@ -91,6 +91,12 @@ export type Event =
   | { kind: "finish"; summary: string };
 
 /** Shared token/time cap. Pass one instance to a harness (and its subagents) to bound the whole run. */
+/** Servers that report no token usage (many local ones) would make every cap useless, so estimate it: about 4 characters per token. Marked, so a UI can show it as approximate. */
+export function ensureUsage(m: Message, sent: Message[]): Message {
+  if (m.usage) return m;
+  const chars = (xs: Message[]) => xs.reduce((n, x) => n + (x.content?.length ?? 0) + (x.tool_calls ?? []).reduce((k, c) => k + c.function.name.length + c.function.arguments.length, 0), 0);
+  const p = Math.ceil(chars(sent) / 4), c = Math.ceil(chars([m]) / 4); m.usage = { prompt_tokens: p, completion_tokens: c, total_tokens: p + c, estimated: true } as Usage; return m;
+}
 export class Budget {
   tokens = 0; promptTokens = 0; completionTokens = 0; /** prompt tokens the provider served from its cache */ cachedTokens = 0; calls = 0; t0 = Date.now(); maxTokens: number; maxMs: number;
   constructor(o: { maxTokens?: number; maxMs?: number } = {}) { this.maxTokens = o.maxTokens ?? Infinity; this.maxMs = o.maxMs ?? Infinity; }
@@ -340,7 +346,7 @@ export function createHarness(o: Options) {
   async function finalReport(msgs: Message[], why: string): Promise<string> {
     try {
       const m = await o.model([...msgs, { role: "user", content: `Stop: ${why}. You cannot use any more tools. In plain text, give the user: what you found or did, the current state of the work, and what is left to do. Be brief.` }], [], { signal: sig() });
-      o.budget?.add(m); return (m.content ?? "").trim();
+      const sent = [...msgs]; o.budget?.add(ensureUsage(m, sent)); return (m.content ?? "").trim();
     } catch { return ""; }
   }
   /**
@@ -426,7 +432,7 @@ export function createHarness(o: Options) {
         if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
         throw e;
       }
-      o.budget?.add(m); tokens += m.usage?.total_tokens ?? 0; lastPrompt = m.usage?.prompt_tokens ?? 0;
+      ensureUsage(m, msgs); o.budget?.add(m); tokens += m.usage?.total_tokens ?? 0; lastPrompt = m.usage?.prompt_tokens ?? 0;
       if (o.record) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
       emit({ kind: "turn", step, tokens, prompt: m.usage?.prompt_tokens ?? 0, completion: m.usage?.completion_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0, reasoning: m.usage?.reasoning_tokens ?? 0 });
       if (m.content?.trim()) emit({ kind: "assistant", text: m.content, streamed });

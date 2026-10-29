@@ -85,3 +85,12 @@ test("missing SDK / credentials surface as clear errors, not silent failures", a
   f.client.beta.messages.stream = () => { throw new Error("401 authentication_error"); };
   await assert.rejects(anthropic({ client: f.client })([{ role: "user", content: "x" }], []), /authentication/);
 });
+
+test("taskBudget: sent as output_config.task_budget with the beta header on supported models only, and never below 20000", async () => {
+  const ask = async (model: string, taskBudget?: number) => { const f = fakeClient(resp([{ type: "text", text: "a" }])); await anthropic({ client: f.client, model, taskBudget })([{ role: "user", content: "U" }], []); return f.reqs[0]; };
+  const on = await ask("claude-sonnet-5-5", 64000);
+  assert.equal(on.via, "beta"); assert.deepEqual(on.req.output_config.task_budget, { type: "tokens", total: 64000 }); assert.ok(on.req.betas.includes("task-budgets-2026-03-13"));
+  assert.equal((await ask("claude-sonnet-5", 64000)).req.output_config?.task_budget, undefined);         // not supported on Sonnet 5
+  assert.equal((await ask("claude-sonnet-5-5", 5000)).req.output_config?.task_budget, undefined);        // below the 20000 minimum: not sent
+  assert.equal((await ask("claude-sonnet-5-5")).req.output_config?.task_budget, undefined);
+});
