@@ -17,7 +17,8 @@ A plugin can contribute:
 
 ```ts
 // .amness/plugins/no-lockfiles.ts
-import { definePlugin } from "amness";   // or "../../src/index.ts" inside this repository
+// definePlugin() only adds type checking; a plain exported object works the same, with no import.
+import { definePlugin } from "<path to Amness>/src/index.ts";
 
 export default definePlugin({
   name: "no-lockfiles",
