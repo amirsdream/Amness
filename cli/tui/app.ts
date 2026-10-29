@@ -418,7 +418,7 @@ export class App {
       const msg = (e as Error).message;
       this.notify("error", one(msg, 400) + (/40[13]|auth|api key|credential/i.test(msg) ? "  (check your key with /provider)" : ""), ["", `  ${red("✗")} ${one(msg, this.width * 2)}`, ...(/40[13]|auth|api key|credential/i.test(msg) ? [`  ${dim("check your key with /provider")}`] : [])]);
     }
-    this.flushStream(true); this.blocks.endAssistant(); this.blocks.endThinking();
+    this.flushStream(true); this.blocks.endAssistant(); this.blocks.endThinking(); this.blocks.closeRunning(ok ? "ended without a result" : "interrupted");
     const secs = Date.now() - this.runStart;
     if (ok && (secs > 4000 || this.runTokens > 2000)) this.inlineOnly([dim(`  ✻ Worked for ${fmtDuration(secs)} · ${fmtTokens(this.runTokens)} tokens`)]);
     if (this.todos.length && this.todos.some((t) => t.status !== "done")) this.inlineOnly(todoList(this.todos, this.width));

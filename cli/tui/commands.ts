@@ -210,6 +210,21 @@ export function buildCommands(): Cmd[] {
       a.commit(["", bold("  Permission rules"), ...(["deny", "ask", "allow"] as const).flatMap((k) => r[k].map((x) => `  ${(k === "deny" ? red : k === "ask" ? yellow : green)(k.padEnd(6))} ${x}`)), ...(!r.deny.length && !r.ask.length && !r.allow.length ? [dim("  no rules yet")] : []),
         "", dim("  always on, in every mode including yolo: no recursive delete of / or ~, no force-push to main, no editing .git or these rule files; curl|sh and force-pushes always ask"), dim("  precedence: that floor > deny > ask > allow > permission mode")]);
     } },
+    { name: "budget", help: "show or set the token cap per turn (cached input counts a tenth)", args: "[tokens, e.g. 500k]", run: (a, arg) => {
+      const b = a.budget, used = Math.round(b.effective);
+      if (!arg) return void a.say(`cap per turn: ${a.cfg.maxTokens.toLocaleString()} tokens (cached input counts a tenth). Last/current turn used ${used.toLocaleString()}. Set it with /budget 500k. At 50%, 75% and 90% the model is told to wrap up, and just before the cap it writes a final report.`, dim);
+      const m = /^(\d+(?:\.\d+)?)\s*([km]?)$/i.exec(arg.trim()); if (!m) return void a.say("give a number such as 400000, 400k or 1m", dim);
+      const n = Math.round(Number(m[1]) * (m[2].toLowerCase() === "m" ? 1e6 : m[2].toLowerCase() === "k" ? 1e3 : 1)); if (n < 10_000) return void a.say("the cap must be at least 10000 tokens", dim);
+      a.cfg.maxTokens = n; b.maxTokens = n; a.saveConfig(); a.say(`cap per turn is now ${n.toLocaleString()} tokens`, dim);
+    } },
+    { name: "lsp", help: "append language-server errors to edit results (needs typescript-language-server, pyright, gopls or rust-analyzer)", args: "[on|off]", run: (a, arg) => {
+      if (arg !== "on" && arg !== "off") return void a.say(`language-server diagnostics are ${a.cfg.lsp ? "on" : "off"}. /lsp on: each edit result also lists the errors an installed language server reports for that file.`, dim);
+      a.cfg.lsp = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`language-server diagnostics ${arg}`, dim);
+    } },
+    { name: "approver", help: "a second model pre-approves clearly safe risky calls (never the safety floor)", args: "[on|off]", run: (a, arg) => {
+      if (arg !== "on" && arg !== "off") return void a.say(`approval reviewer is ${a.cfg.approvalReviewer ? "on" : "off"}. /approver on: a model reads each risky call before you are asked and may approve it with a stated reason; floor and untrusted-text calls always ask you. One short model call per risky action.`, dim);
+      a.cfg.approvalReviewer = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`approval reviewer ${arg}`, dim);
+    } },
     { name: "reviewer", help: "independent skeptical reviewer: criteria before the work, a check before it is accepted (costs extra model calls)", args: "[on|off]", run: (a, arg) => {
       if (!arg) return void a.say(`reviewer is ${a.cfg.review ? "on" : "off"}. /reviewer on: a fresh, read-only reviewer writes acceptance criteria before a task and checks the work against them before it can finish (at most two rounds). Roughly +2 to +4 model calls per task.`, dim);
       a.cfg.review = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`reviewer ${arg === "on" ? "on" : "off"}`, dim);

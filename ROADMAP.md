@@ -100,9 +100,9 @@ Everything in the Status table above is built and pushed; most Track B items are
 | Id | Item | Priority | Effort | Done |
 |---|---|---|---|---|
 | G24 | OpenAI server-side compaction (`context_management` + `compact_threshold`) as an option in the OpenAI adapter; make sure our own history trimming does not fight it (`previous_response_id` forbids manual pruning). | P1 | M | [ ] |
-| G25 | Budget visibility in the UI: show % of budget used in the sidebar and status line, mark estimated usage, show each subagent's slice and spend, and a `/budget` command to raise or lower the cap mid-session. | P1 | S–M | [ ] |
-| G26 | **Explore block UI is still suspect**: confirm that the "Explore" group closes (✓/✗) for every outcome including subagent budget stops, aborts and unknown-agent fallback; add a VTerm test for each. | P1 | S | [ ] |
-| G27 | Config surface for the new options: `lsp`, `approvalReviewer`, `taskBudget`, `review` in `/settings` and `docs/usage.md` (today they are only in `config.json` and headless flags). | P1 | S | [ ] |
+| G25 | Budget visibility in the UI: show % of budget used in the sidebar and status line, mark estimated usage, show each subagent's slice and spend, and a `/budget` command to raise or lower the cap mid-session. | P1 | S–M | [~] |
+| G26 | **Explore block UI is still suspect**: confirm that the "Explore" group closes (✓/✗) for every outcome including subagent budget stops, aborts and unknown-agent fallback; add a VTerm test for each. | P1 | S | [x] |
+| G27 | Config surface for the new options: `lsp`, `approvalReviewer`, `taskBudget`, `review` in `/settings` and `docs/usage.md` (today they are only in `config.json` and headless flags). | P1 | S | [~] |
 | G28 | Exploration subagent that returns only file paths and line ranges (the "FastContext" idea from a blog; **unverified, find the paper first**), measured against the current prose summary. | P2 | M | [ ] |
 | G29 | Read-count cap in the tool layer (after N reads the read tool asks for a plan). Only if E9 shows the nudge is not enough. | P3 | S | [ ] |
 | G30 | `/branches` should swap file state too (store a tree snapshot per branch tip using the existing snapshot machinery). | P2 | M | [ ] |
@@ -354,6 +354,9 @@ Several of these sources are blogs and disagree on details; verify against each 
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
 
+- **G27** (partly): /lsp, /approver, /budget commands; taskBudget still config.json only; docs/usage.md not updated yet
+- **G26**: running cards are closed when a turn ends; interrupted subagent results show as failed; tested with an interrupted Explore
+- **G25** (partly): budget % in the sidebar, /budget to show/set the cap; per-subagent slices and estimated-usage markers not shown yet
 - **G21** (partly): Docker image built and run in CI (passes); Windows job added but many tests fail there (POSIX shell, paths): not supported yet
 - **G22** (partly): npm build to dist, pack/install/run smoke test in CI, tag-triggered publish workflow; NOT published (needs your npm token and a v* tag)
 - **G19** (partly): amness schedule (cron block, safe quoting) + action.yml composite action; action install/start checked in CI without a key; no real-model run

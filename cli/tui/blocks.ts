@@ -14,7 +14,7 @@ export type Block =
   | { id: number; kind: "raw"; lines: string[] };
 export type BlockKind = Block["kind"];
 
-const failed = (r: string) => /^(ERROR|DENIED|REJECTED)/.test(r) || /^exit=(?!0\b)/.test(r);
+const failed = (r: string) => /^(ERROR|DENIED|REJECTED)/.test(r) || /^stopped: (interrupted|no progress|no measurable)/.test(r) || /^exit=(?!0\b)/.test(r);
 
 export class BlockStore {
   blocks: Block[] = [];
@@ -49,6 +49,11 @@ export class BlockStore {
   toolEnd(callId: string, result: string, edit?: Edit) {
     const b = this.tool(callId);
     if (!b) return; b.result = result; b.status = failed(result) ? "fail" : "ok"; b.ms = Date.now() - b.t0; if (edit) b.edit = edit; this.version++;
+  }
+  /** A turn has ended (finished, interrupted or failed): any tool card still "running" can never complete, so close it instead of leaving a spinner on screen. */
+  closeRunning(note = "interrupted") {
+    let n = 0; for (const b of this.blocks) if (b.kind === "tool" && b.status === "running") { b.status = "fail"; b.result = b.result ?? `(${note})`; b.ms = Date.now() - b.t0; n++; }
+    if (n) this.version++; return n;
   }
   notice(level: "info" | "warn" | "error" | "ok", text: string) { this.endAssistant(); return this.add<Extract<Block, { kind: "notice" }>>({ kind: "notice", level, text }); }
   summary(text: string) { this.endAssistant(); return this.add<Extract<Block, { kind: "summary" }>>({ kind: "summary", text }); }

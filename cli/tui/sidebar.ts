@@ -13,6 +13,7 @@ export type SidebarData = {
   todos: { content: string; status: string }[]; changes: { path: string; added: number; removed: number; created: boolean; blockId: number }[];
   run?: { phase: string; step: number; max: number; elapsedMs: number; frame: number; live: { label: string; ms: number; agent?: string }[]; done: { label: string; ok: boolean; ms: number }[] };
   sandbox?: string;
+  /** the token cap for the current/last turn: tokens counted (cached input at a tenth), the cap, and whether usage was estimated */ budget?: { used: number; max: number };
   procs?: { id: string; name: string; status: string; secs: number }[];
   tools: number; mcp: number; memory: number; running: boolean; elapsedMs: number; tip?: string;
 };
@@ -51,6 +52,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
 
   head("USAGE");
   push(F(t.dim, "in ") + F(t.text, fmtTokens(d.usage.prompt)) + F(t.dim, "  out ") + F(t.text, fmtTokens(d.usage.completion)) + F(t.dim, "  ") + F(t.faint, `${d.usage.calls} req`));
+  if (d.budget && Number.isFinite(d.budget.max) && d.budget.used > 0) { const pct = Math.min(100, Math.round((d.budget.used / d.budget.max) * 100)); push(F(t.dim, "budget ") + F(pct >= 90 ? t.err : pct >= 75 ? t.warn : t.text, `${pct}%`) + F(t.faint, ` of ${fmtTokens(d.budget.max)} this turn`)); }
   if (d.usage.cached) push(F(t.dim, "cache ") + F(t.ok, `${Math.round((d.usage.cached / Math.max(1, d.usage.prompt)) * 100)}%`) + (d.usage.reasoning ? F(t.dim, "  reasoning ") + F(t.text, fmtTokens(d.usage.reasoning)) : ""));
   push(F(t.dim, "cost ") + (d.cost === null ? F(t.faint, "n/a") : BOLD(F(t.text, "≈ " + fmtCost(d.cost)))));
 

@@ -415,3 +415,32 @@ test("/branch N forks the conversation after turn N, restores the files to that 
   assert.equal(t.app.session.turns.length, 1); assert.notEqual(t.app.session.id, parentId); assert.equal(t.app.session.parent?.id, parentId); assert.ok(t.app.session.messages.length < parentMsgs);
   await t.key(KEY.ctrlD);
 });
+
+test("/budget shows and sets the cap; /lsp and /approver toggle their options", async () => {
+  const t = rig([]); await t.start();
+  await t.submit("/budget"); assert.ok(await t.until(() => t.has("cap per turn: 100,000 tokens")));
+  await t.submit("/budget 450k"); assert.ok(await t.until(() => t.has("now 450,000 tokens"))); assert.equal(t.app.budget.maxTokens, 450000); assert.equal(t.app.cfg.maxTokens, 450000);
+  await t.submit("/budget 5"); assert.ok(await t.until(() => t.has("at least 10000")));
+  await t.submit("/lsp on"); assert.ok(await t.until(() => t.has("diagnostics on"))); assert.equal(t.app.cfg.lsp, true);
+  await t.submit("/approver on"); assert.ok(await t.until(() => t.has("approval reviewer on"))); assert.equal(t.app.cfg.approvalReviewer, true);
+  await t.submit("/approver off"); assert.ok(await t.until(() => t.has("approval reviewer off"))); assert.equal(t.app.cfg.approvalReviewer, false);
+  await t.key(KEY.ctrlD);
+});
+
+test("full-screen sidebar shows the turn's budget use once a turn has spent tokens", async () => {
+  const t = rig([call("list_files", {}), say("done")], { ui: "full", cols: 132, rows: 40, cfg: { maxTokens: 1000 } }); await t.start();
+  await t.submit("look"); assert.ok(await t.until(() => t.idle()));
+  assert.ok(await t.until(() => /budget \d+% of/.test(plain(t.screen()))), plain(t.screen()).slice(0, 1500));
+  await t.key(KEY.ctrlD);
+});
+
+test("interrupting while an Explore subagent runs leaves no card spinning, and a wrong agent name still gets an answer", async () => {
+  const hang = async (_m: any, _t: any, o: any) => { await new Promise((_, rej) => o.signal?.addEventListener("abort", () => rej(new DOMException("a", "AbortError")))); return say("never"); };
+  const t = rig([call("task", { description: "survey the repo", agent: "explorer" }), hang]); await t.start();
+  await t.submit("explore it"); assert.ok(await t.until(() => t.seen.length >= 2));
+  assert.ok(t.app.blocks.blocks.some((b: any) => b.kind === "tool" && b.status === "running"));
+  await t.key(KEY.esc, 120); assert.ok(await t.until(() => t.idle()));
+  assert.equal(t.app.blocks.blocks.filter((b: any) => b.kind === "tool" && b.status === "running").length, 0);
+  const task = t.app.blocks.blocks.find((b: any) => b.kind === "tool" && b.name === "task") as any; assert.equal(task.status, "fail");
+  await t.key(KEY.ctrlD);
+});
