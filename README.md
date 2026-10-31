@@ -16,11 +16,12 @@
 You need **Node 22.18+**, git, and an API key (OpenAI or Anthropic) or a local model server.
 
 ```bash
-git clone https://github.com/amirsdream/Amness.git && cd Amness && npm install
-export OPENAI_API_KEY=sk-...          # or ANTHROPIC_API_KEY=sk-ant-...
-npm link                              # gives you the `amness` command
+npm install -g amness                 # gives you the `amness` command
+export OPENAI_API_KEY=sk-...          # or ANTHROPIC_API_KEY=sk-ant-... (Claude also needs: npm install -g @anthropic-ai/sdk)
 cd ~/your-project && amness           # start a conversation in your project
 ```
+
+Or try it without installing: `npx amness`. To run the latest `main` from source (or to work on Amness), see [Run from source](#run-from-source).
 
 More ways to start:
 
@@ -32,6 +33,17 @@ amness demo                                                    # a scripted tour
 ```
 
 New to it? Follow the [step-by-step guide](docs/getting-started.md). Inside the chat: `/help` lists everything · `Shift+Tab` changes how much it may do without asking · `Ctrl+P` opens the command palette · `@file` attaches a file or image · `!cmd` runs a shell command · `#note` saves a memory.
+
+## Run from source
+
+Use this for the latest `main` (changes not yet released to npm) or to work on Amness itself.
+
+```bash
+git clone https://github.com/amirsdream/Amness.git && cd Amness && npm install
+npm link                              # `amness` now runs your clone; `git pull` updates it
+```
+
+Update the npm version with `npm install -g amness@latest`. Contributors: see [Development](docs/development.md).
 
 ## What it looks like
 
@@ -184,7 +196,7 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 
 - **Tested:** about 375 automated tests (scripted models, mock servers, real git repositories, a pseudo-terminal), CI on Linux and Windows, and a Docker and npm-package smoke test.
 - **Measured on real models (small):** the guards and the reviewer showed no detectable pass-rate effect on [these tasks and models](docs/evaluation.md#measured-results-so-far); the guards and reviewer cost extra tokens, most visibly on strong models. Every newer feature (routing, `tune`, best-of-n, parallel parts, language-server diagnostics, the approval reviewer) is implemented and unit-tested but **not yet shown to help on real work**. The [roadmap](ROADMAP.md) lists the measurements still to run.
-- **Platforms:** developed on macOS and Linux. Windows runs the test suite but has no OS sandbox. Not on npm yet.
+- **Platforms:** developed on macOS and Linux. Windows runs the test suite but has no OS sandbox. Installed from npm; the Claude backend needs `@anthropic-ai/sdk` installed next to it.
 - Cost figures are estimates. Small local models vary widely in tool-calling quality.
 
 ## Documentation

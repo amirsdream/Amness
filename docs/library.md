@@ -17,32 +17,23 @@ Everything is exported from `src/index.ts`. The code samples on this page were t
 
 **Why you would use it.** You get the same guards as the chat (argument checks, verify gate, loop guard, budgets) inside a script, a server or a test.
 
-**How to use it.** The README says Amness is not on npm yet, and this page could not confirm a release. Use a clone.
+**How to use it.**
 
-1. Clone and build:
-
-```bash
-git clone https://github.com/amirsdream/Amness.git
-cd Amness
-npm install
-npm run build
-npm pack
-```
-
-2. Install the tarball in your own project:
+1. Install the package in your own project:
 
 ```bash
-cd ../my-project
-npm install ../Amness/amness-0.1.0.tgz
+npm install amness
 ```
 
-3. Or skip the build and import the source from the clone. Node.js can run `.ts` files:
+2. Import what you need:
 
 ```ts
-import { createCodeAgent, openai } from "../Amness/src/index.ts";
+import { createCodeAgent, openai } from "amness";
 ```
 
-The CI job `package` does steps 1 and 2 and checks that `import("amness")` works.
+To use the latest `main` before it is released, clone the repository, run `npm install && npm run build && npm pack`, and install the tarball it makes with `npm install ../Amness/amness-<version>.tgz`. You can also import the source directly, because Node.js can run `.ts` files: `import { createCodeAgent, openai } from "../Amness/src/index.ts";`.
+
+The CI job `package` packs the tarball, installs it in a new folder, and checks that `import("amness")` works.
 
 **Limits.** The Claude adapter needs the optional package `@anthropic-ai/sdk` (`npm install @anthropic-ai/sdk`). The OpenAI adapter uses plain `fetch` and has no dependency.
 

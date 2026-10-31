@@ -13,27 +13,40 @@ You need Node.js 22.18 or newer, git, and a terminal. A *diff* is a view of the 
 
 ## 1. Install Amness
 
-Amness is **not on npm yet**. You install it from the source code.
+Amness is a package on npm. You install it with one command.
 
-1. Download the code and install its packages.
-
-   ```bash
-   git clone https://github.com/amirsdream/Amness.git && cd Amness && npm install
-   ```
-
-2. Create the `amness` command.
+1. Install it. The `-g` flag makes the `amness` command available in every folder.
 
    ```bash
-   npm link
+   npm install -g amness
    ```
 
-3. Check that the command works.
+   If you want to use Claude models, install the Anthropic package next to it. OpenAI and local models do not need it.
+
+   ```bash
+   npm install -g @anthropic-ai/sdk
+   ```
+
+   You can also run Amness once without installing it: `npx amness`.
+
+2. Check that the command works.
 
    ```bash
    amness --version
    ```
 
    You see a version number, for example `0.1.0`.
+
+To update later, run `npm install -g amness@latest`.
+
+**Run the latest `main` from source.** Use this if you want a change that is not released yet, or if you want to work on Amness itself:
+
+```bash
+git clone https://github.com/amirsdream/Amness.git && cd Amness && npm install
+npm link
+```
+
+`npm link` makes the `amness` command point at your clone, so `git pull` updates it.
 
 Amness is developed on macOS and Linux. The tests also run on Windows, but Windows has **no OS sandbox** for shell commands.
 

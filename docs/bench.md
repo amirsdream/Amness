@@ -44,15 +44,14 @@ Do these steps in PowerShell.
 
 2. Install [Git for Windows](https://git-scm.com/download/win). The bench needs `git` on your PATH. The hidden checks of the built-in tasks use bash tools such as `test`. Amness looks for the `bash.exe` that comes with Git (in `Program Files\Git\bin`) and for any `bash.exe` on PATH. It skips `C:\Windows\System32\bash.exe`, because that is the WSL launcher and it sees other files (see `src/shell.ts`).
 
-3. Download Amness and install its packages:
+3. Install Amness from npm:
 
    ```powershell
-   git clone https://github.com/amirsdream/Amness.git
-   cd Amness
-   npm install
-   npm link
+   npm install -g amness
    amness --version
    ```
+
+   To bench the latest `main` instead of the release, install from a clone: `git clone https://github.com/amirsdream/Amness.git`, then `cd Amness`, `npm install` and `npm link`.
 
 4. Install and log in to the other tools yourself. Follow their own documentation. This page does not repeat install commands, because they change.
    - Claude Code: <https://docs.claude.com/en/docs/claude-code>
