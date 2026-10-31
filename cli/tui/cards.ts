@@ -15,6 +15,8 @@ export type RenderCtx = {
   brand: { icon: string; color: number }; diffMode: "auto" | "stacked" | "split";
   /** The block above is also a tool call: draw no blank line between them, so a run of tool calls reads as one unit. */
   tight?: boolean;
+  /** this is the most recent tool call of the lead agent: its output stays open (a short preview) until the next one starts */
+  last?: boolean;
 };
 export type Hit = { row: number; x0: number; x1: number; kind: "toggle" | "more" | "copy"; id: number; /** for "copy": what lands on the clipboard */ text?: string };
 export type Rendered = { rows: Cell[][]; hits: Hit[]; text: string[] };
@@ -127,7 +129,8 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
   // ---------------------------------------------------------------- tool card
   const sub = !!b.agent && b.agent !== "lead", failed = b.status === "fail", edit = b.edit;
   const hue = failed ? t.err : (({ read_file: t.tool.read, list_files: t.tool.read, grep: t.tool.read, write_file: t.tool.edit, edit_file: t.tool.edit, apply_patch: t.tool.edit, sh: t.tool.shell, web_search: t.tool.web, fetch_url: t.tool.web, memory_save: t.tool.memory, memory_forget: t.tool.memory, memory_search: t.tool.read, todo_write: t.tool.plan, exit_plan_mode: t.tool.plan, task: t.tool.explore }) as Record<string, number>)[b.name] ?? (b.name.includes("__") ? t.tool.web : t.tool.generic);
-  const expanded = c.expandAll ? true : b.expanded ?? (!!edit || failed);
+  const expanded = c.expandAll ? true : b.expanded ?? (!!edit || failed || (!!c.last && !sub && b.name !== "read_file" && b.name !== "task"));
+  const preview = !c.expandAll && b.expanded === undefined && !edit && !failed && !!c.last && b.name !== "read_file" && b.name !== "task";   // opened automatically, not by the user: show a short preview only
   const bg = failed ? mix(t.surface, t.err, 0.14) : t.surface, spinner = SPIN[c.frame % SPIN.length];
   const label = BOLD(F(failed ? t.err : t.text, toolLabel(b.name))), args = F(t.dim, argSummary(b.name, b.args));
   const status = b.status === "running"
@@ -158,7 +161,7 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
       if (d.hidden > 0) { rows.push(fit(`${bar}  ${F(t.accent2, `▾ show ${d.hidden} more line${d.hidden === 1 ? "" : "s"}`)}`, bw, t.surface2)); hits.push({ row: rows.length - 1, x0: MARGIN, x1: c.width - MARGIN, kind: "more", id: b.id }); }
     } else {
       const res = b.result ?? "", hl = (k: HlKind, s: string) => F(k === "plain" ? t.syn.plain : t.syn[k], s);
-      let lines = res.split("\n"), cap = c.expandAll ? 200 : 60;
+      let lines = res.split("\n"), cap = c.expandAll ? 200 : preview ? 20 : 60;
       if (b.name === "sh") {
         let cmd = ""; try { cmd = JSON.parse(b.args).cmd; } catch { /* leave empty */ }
         body(F(t.accent, "$ ") + F(t.text, clipWidth(cmd, bw - 8)));
@@ -170,7 +173,7 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
         if (b.name === "read_file") { const m = l.match(/^(\d+)\t(.*)$/); body(m ? F(t.faint, m[1].padStart(4) + "  ") + highlightWith(clipWidth(m[2], bw - 10), lang, hl) : F(t.dim, l)); }
         else for (const w of wrapAnsi(l.includes("\x1b") ? l : F(failed && /error|✖|fail|exception|assert|panic|traceback|denied/i.test(l) ? t.err : t.dim, l), bw - 4, 0)) body(w);   // only the lines that look like errors are red
       }
-      if (lines.length > cap) body(F(t.faint, `… ${lines.length - cap} more lines (ctrl+o expands everything)`));
+      if (lines.length > cap) body(F(t.faint, `… ${lines.length - cap} more line${lines.length - cap === 1 ? "" : "s"} · /output shows all of it${preview ? "" : " · ctrl+o expands everything"}`));
     }
   }
   return done();

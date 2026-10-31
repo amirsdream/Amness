@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, keyFor, storeKey, type Connection, type ProviderId } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
+import { fetchModels } from "../models.ts";
+import { argOptions } from "./argcomplete.ts";
 import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
 import { estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
@@ -40,7 +42,10 @@ export function buildCommands(): Cmd[] {
       let id: string | undefined = arg;
       if (!id) {
         const list = a.cfg.provider === "anthropic" ? CLAUDE_MODELS : a.cfg.provider === "openai" ? OPENAI_MODELS : [{ id: a.cfg.model, hint: "current" }];
-        const known = list.map((m) => ({ label: m.id, value: m.id, hint: m.hint }));
+        const have = new Set(list.map((m) => m.id));
+        a.note("asking your provider for its models…", 7000);
+        const extra = (await fetchModels({ provider: a.cfg.provider, baseUrl: a.cfg.baseUrl, apiKey: a.cfg.apiKey })).filter((m) => !have.has(m)).map((m) => ({ id: m, hint: "from your provider" }));
+        const known = [...list, ...extra].map((m) => ({ label: m.id, value: m.id, hint: m.hint }));
         id = await a.pick("Model", [...known, { label: "Other…", value: "" }], Math.max(0, known.findIndex((m) => m.value === a.cfg.model)));
         if (id === undefined) return;
         if (id === "") { id = await a.askText("Model id", { initial: a.cfg.model }); if (!id) return; }
@@ -104,6 +109,15 @@ export function buildCommands(): Cmd[] {
       if (!m) return;
       if (!["default", "acceptEdits", "plan", "yolo"].includes(m)) return void a.say(`unknown mode "${m}"`, red);
       a.setMode(m as never);
+    } },
+    { name: "output", alias: "last", help: "the full output of the last tool call in a pager (/output 2 for the one before)", args: "[n]", live: true, run: (a, arg) => {
+      const calls = a.blocks.blocks.filter((b): b is Extract<typeof b, { kind: "tool" }> => b.kind === "tool" && (!b.agent || b.agent === "lead") && !!b.result && b.name !== "todo_write");
+      if (!calls.length) return void a.say("no tool output yet", dim);
+      const n = Math.max(1, Math.floor(Number(arg) || 1)), b = calls[calls.length - n];
+      if (!b) return void a.say(`only ${calls.length} tool call${calls.length === 1 ? "" : "s"} so far`, dim);
+      const body = b.result!.split("\n"); let head = toolCall(b.name, b.args);
+      if (b.name === "sh") { try { head = `$ ${JSON.parse(b.args).cmd}`; } catch { /* keep the generic header */ } }
+      a.openPager([head, "", ...body], "output");
     } },
     { name: "plan", help: "enter plan mode (read-only)", run: (a) => a.setMode("plan") },
     { name: "clear", help: "start a fresh conversation", alias: "new", run: (a) => {

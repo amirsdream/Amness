@@ -15,7 +15,8 @@ import { BlockStore } from "./blocks.ts";
 import { buildCommands, type Cmd } from "./commands.ts";
 import { FullView } from "./full.ts";
 import { loadCustomCommands } from "./custom.ts";
-import { FileIndex, applySuggestion, menuRows, rankCommands, rankFiles, tokenAtCursor, type Suggestion, type Token } from "./complete.ts";
+import { argOptions } from "./argcomplete.ts";
+import { FileIndex, fuzzyScore, applySuggestion, menuRows, rankCommands, rankFiles, tokenAtCursor, type Suggestion, type Token } from "./complete.ts";
 import { Editor } from "./editor.ts";
 import { KeyParser, PASTE_OFF, PASTE_ON, type Key } from "./keys.ts";
 import { renderMarkdown, takeCompleteBlocks } from "./markdown.ts";
@@ -68,7 +69,8 @@ export class App {
   todos: { content: string; status: string }[] = [];
   queued: { text: string; full: string }[] = [];
   overlay: Overlay | null = null; pager: Pager | null = null;
-  sugg: { items: Suggestion[]; sel: number; token: Token; kind: Token["kind"] } | null = null; suggOff = "";
+  sugg: { items: Suggestion[]; sel: number; token: Token; kind: Token["kind"]; /** the user moved into the list with the arrow keys */ nav?: boolean } | null = null; suggOff = "";
+  private argPending = new Set<string>();
   private builtin: Cmd[]; private customAt = 0; private customCmds: Cmd[] = [];
   mcp: { cmd: string; tools: Tool[]; close: () => void }[] = [];
   notice = ""; noticeUntil = 0;
@@ -291,13 +293,13 @@ export class App {
     if (k.name === "escape") return this.escape();
     if (k.name === "tab" && this.sugg) return this.acceptSugg(false);
     if (k.name === "enter" && !k.alt && !k.shift) {
-      if (this.sugg && this.sugg.items.length) { const it = this.sugg.items[this.sugg.sel]; if (!(this.sugg.kind === "slash" && ed.text.trim() === it.label)) return this.acceptSugg(true); }
+      if (this.sugg && this.sugg.items.length) { const it = this.sugg.items[this.sugg.sel]; if (!(this.sugg.kind === "slash" && ed.text.trim() === it.label) && !(this.sugg.kind === "arg" && (this.sugg.items.some((x) => x.label === this.sugg!.token.query) || (it.open && !this.sugg.nav)))) return this.acceptSugg(true); }
       if (ed.text.slice(0, ed.cursorIndex).endsWith("\\")) { ed.backspace(); ed.newline(); return this.after(); }
       return void this.submit();
     }
     if (this.sugg && (k.name === "pageup" || k.name === "pagedown")) { const n = this.sugg.items.length; this.sugg.sel = Math.max(0, Math.min(n - 1, this.sugg.sel + (k.name === "pageup" ? -8 : 8))); return this.render(); }
     if (k.name === "up" || k.name === "down") {
-      if (this.sugg) { const n = this.sugg.items.length; this.sugg.sel = (this.sugg.sel + (k.name === "up" ? n - 1 : 1)) % n; return this.render(); }
+      if (this.sugg) { const n = this.sugg.items.length; this.sugg.sel = (this.sugg.sel + (k.name === "up" ? n - 1 : 1)) % n; this.sugg.nav = true; return this.render(); }
       if (!ed.vertical(k.name === "up" ? -1 : 1)) k.name === "up" ? ed.historyPrev() : ed.historyNext();
       return this.after(false);
     }
@@ -313,12 +315,20 @@ export class App {
     this.suggOff = "";
     let items: Suggestion[] = [];
     if (tok.kind === "slash") items = rankCommands(tok.query, this.cmds);
-    else {
+    else if (tok.kind === "arg") {
+      const cmd = this.cmds.find((c) => c.name === tok.cmd || c.alias === tok.cmd);
+      if (cmd) {
+        const r = argOptions(this, cmd.name, tok.words ?? []), pk = `${cmd.name}|${(tok.words ?? []).join(" ")}`;
+        if (r.pending && !this.argPending.has(pk)) { this.argPending.add(pk); void r.pending.catch(() => {}).then(() => { this.argPending.delete(pk); this.updateSugg(); this.render(); }); }
+        items = r.options.map((o) => ({ o, s: fuzzyScore(tok.query, o.value) })).filter((x): x is { o: typeof x.o; s: number } => x.s !== null)
+          .sort((x, y) => (tok.query ? y.s - x.s : 0)).map(({ o }) => ({ label: o.value, insert: o.value + (o.more ? " " : ""), detail: o.detail, more: o.more, open: r.open }));
+      }
+    } else {
       if (!this.files.fresh()) void this.files.ensure().then(() => this.updateSugg(), () => {});    // list still loading: fill the popup in once it arrives
       items = rankFiles(tok.query, this.files.files);
     }
-    const keep = this.sugg && this.sugg.kind === tok.kind && this.sugg.token.query === tok.query ? this.sugg.sel : 0;
-    this.sugg = items.length ? { items, sel: Math.min(keep, items.length - 1), token: tok, kind: tok.kind } : null;
+    const same = this.sugg && this.sugg.kind === tok.kind && this.sugg.token.query === tok.query, keep = same ? this.sugg!.sel : 0;
+    this.sugg = items.length ? { items, sel: Math.min(keep, items.length - 1), token: tok, kind: tok.kind, nav: same ? this.sugg!.nav : false } : null;
     if (!this.sugg) return;
     this.schedule();
   }
@@ -327,6 +337,7 @@ export class App {
     const s = this.sugg!, r = applySuggestion(this.editor.text, s.token, s.items[s.sel]);
     this.editor.setText(r.text, r.cursor); this.sugg = null; this.suggOff = "";
     if (fromEnter && s.kind === "slash" && !this.cmds.find((c) => "/" + c.name === s.items[s.sel].label)?.args) return void this.submit();
+    if (fromEnter && s.kind === "arg" && !s.items[s.sel].more) return void this.submit();     // a finished value: run the command
     this.updateSugg(); this.render();
   }
 

@@ -455,3 +455,35 @@ test("a subagent's steps are drawn inside its own card (not scattered), summaris
   s = plain(t.screen()); assert.match(s, /✓ Read\s+a\.txt/); assert.match(s, /✓ \w+\s+.*one/);
   await t.key(KEY.ctrlD);
 });
+
+test("/ menu: lists every command in groups and scrolls past the first screenful", async () => {
+  const t = rig([]); await t.start();
+  await t.type("/");
+  assert.ok(await t.until(() => t.has("Conversation")));
+  const first = t.screen();
+  assert.match(first, /── Conversation/); assert.match(first, /↓/);                          // grouped, with a scroll hint
+  for (let i = 0; i < 25; i++) await t.key(KEY.down);
+  const later = t.screen();
+  assert.doesNotMatch(later, /── Conversation/); assert.match(later, /↑/);                   // the window followed the selection
+  await t.key(KEY.ctrlC); await t.key(KEY.ctrlD);
+});
+
+test("/mode <space> lists the modes with what each does, Enter picks one and runs it", async () => {
+  const t = rig([]); await t.start();
+  await t.type("/mode ");
+  assert.ok(await t.until(() => t.has("acceptEdits")));
+  for (const m of ["default", "acceptEdits", "plan", "yolo"]) assert.match(t.screen(), new RegExp(m));
+  assert.match(t.screen(), /read-only/);
+  await t.type("pl");                                                                         // filter
+  assert.ok(await t.until(() => !t.has("yolo")));
+  await t.key(KEY.enter);
+  assert.ok(await t.until(() => /plan/i.test(t.screen()) && !t.has("acceptEdits")));
+  await t.key(KEY.ctrlD);
+});
+
+test("/model <space> lists the known models; typing an exact id and pressing Enter runs it as typed", async () => {
+  const t = rig([]); await t.start();
+  await t.type("/model ");
+  assert.ok(await t.until(() => t.has("test-model") || t.screen().includes("model")));
+  await t.key(KEY.ctrlC); await t.key(KEY.ctrlD);
+});

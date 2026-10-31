@@ -3,14 +3,16 @@ import { execFile } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-export type Suggestion = { label: string; insert: string; detail?: string; /** category header shown above the first item of each group (only when the list is not filtered) */ group?: string };
-export type Token = { kind: "slash" | "file"; query: string; start: number; end: number };
+export type Suggestion = { label: string; insert: string; detail?: string; /** arg suggestions: more words are expected, so do not submit on Enter */ more?: boolean; /** arg suggestions: any value is allowed, so Enter runs what was typed unless the user moved into the list */ open?: boolean; /** category header shown above the first item of each group (only when the list is not filtered) */ group?: string };
+export type Token = { kind: "slash" | "file" | "arg"; query: string; start: number; end: number; /** arg tokens: the command, and the words already typed after it */ cmd?: string; words?: string[] };
 
 /** What is the user completing right now? A slash command (first word of the input) or an @file mention. */
 export function tokenAtCursor(text: string, cursor: number): Token | null {
   const before = text.slice(0, cursor);
   const slash = before.match(/^\/(\S*)$/);
   if (slash) return { kind: "slash", query: slash[1], start: 0, end: cursor };
+  const arg = before.match(/^\/(\S+)((?:\s+\S+)*)\s+(\S*)$/);      // "/model gp": the command, the words before the last one, the word being typed
+  if (arg) return { kind: "arg", cmd: arg[1], words: arg[2].trim() ? arg[2].trim().split(/\s+/) : [], query: arg[3], start: cursor - arg[3].length, end: cursor };
   const file = before.match(/(?:^|\s)@([^\s@]*)$/);
   if (file) return { kind: "file", query: file[1], start: cursor - file[1].length - 1, end: cursor };
   return null;
@@ -20,7 +22,7 @@ export function tokenAtCursor(text: string, cursor: number): Token | null {
 export const GROUP_ORDER = ["Conversation", "Model & keys", "Safety", "Quality", "Project", "Extend", "Interface", "Custom"] as const;
 const GROUP_MEMBERS: Record<string, string> = {};
 for (const [g, names] of Object.entries({
-  Conversation: "clear compact resume branch branches export import undo rewind copy todos exit",
+  Conversation: "output clear compact resume branch branches export import undo rewind copy todos exit",
   "Model & keys": "model provider connect effort api models router keepwarm budget tokens",
   Safety: "mode plan permissions policy sandbox approver hooks",
   Quality: "verify check review reviewer lsp report loop diff",

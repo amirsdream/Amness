@@ -13,7 +13,7 @@ const plain = (lines: string[]) => lines.map(strip);
 
 test("complete: token detection for slash commands and @files", () => {
   assert.deepEqual(tokenAtCursor("/mo", 3), { kind: "slash", query: "mo", start: 0, end: 3 });
-  assert.equal(tokenAtCursor("/model gpt", 10), null);                          // already past the command word
+  assert.deepEqual(tokenAtCursor("/model gpt", 10), { kind: "arg", cmd: "model", words: [], query: "gpt", start: 7, end: 10 });   // past the command word: its arguments are completed
   assert.equal(tokenAtCursor("hello /x", 8), null);                             // slash only counts at the start
   assert.deepEqual(tokenAtCursor("look at @src/ma", 15), { kind: "file", query: "src/ma", start: 8, end: 15 });
   assert.deepEqual(tokenAtCursor("@", 1), { kind: "file", query: "", start: 0, end: 1 });

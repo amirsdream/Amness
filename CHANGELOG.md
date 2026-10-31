@@ -3,6 +3,8 @@
 ## Unreleased
 
 - **Several providers at once:** each provider keeps its own saved key. `/connect` (alias `/keys`) shows which providers are connected and lets you add, replace or remove a key; `/provider` marks connected ones and uses the saved key. `OPENROUTER_API_KEY` is read for OpenRouter. A key from an older version moves to the provider that was active.
+- **Argument completion:** after a command and a space, the popup lists what it accepts (`/mode`, `/model`, `/theme`, `/sandbox`, on/off switches, turns for `/branch` and more). `/model` also lists the models your provider offers, and the `/model` picker includes them.
+- **Tool output:** the most recent tool call stays open in the full-screen view (a 20-line preview), older ones fold, and the new `/output` shows a call's full output in a pager.
 - **Slash menu:** `/` now lists every command under category titles, scrolls with ↑ ↓ and PgUp/PgDn, and shows your position.
 
 ## 0.1.2 (2026-10-31)

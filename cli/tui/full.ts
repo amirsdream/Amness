@@ -143,10 +143,11 @@ export class FullView {
     const live = new Set<number>();
     const blocks = app.blocks.blocks.filter((b) => !(b.kind === "tool" && (b.name === "todo_write" || (b.parent && b.agent && b.agent !== "lead"))));   // todos live in the sidebar; a subagent's steps are drawn inside its card
     let prevTool: boolean = false;
+    const lastTool = [...blocks].reverse().find((b) => b.kind === "tool" && (!b.agent || b.agent === "lead"))?.id;   // its output stays open
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i]; live.add(b.id);
       let run = 1; if (isQuiet(b)) while (i + run < blocks.length && isQuiet(blocks[i + run])) run++;
-      const tctx = { ...ctx, tight: prevTool };
+      const tctx = { ...ctx, tight: prevTool, last: b.id === lastTool };
       if (run >= 2) {
         const members = blocks.slice(i, i + run) as Extract<Block, { kind: "tool" }>[], open = this.expandAll || this.groupOpen.has(b.id);
         const key: string = `g|${tctx.tight}|${open}|${ctx.theme.name}|${ctx.width}|` + members.map((m) => `${m.id}:${m.status}:${m.ms ?? 0}`).join(",") + (members.some((m) => m.status === "running") ? `|${ctx.frame}` : ""), hit = this.cache.get(b.id);
@@ -154,7 +155,7 @@ export class FullView {
         for (const m of members) live.add(m.id);
         this.items.push({ b, r, start: total, group: true }); total += r.rows.length; i += run - 1; prevTool = r.rows.length <= 2; continue;
       }
-      const key: string = this.sig(b, tctx) + (tctx.tight ? "|t" : ""), hit = this.cache.get(b.id);
+      const key: string = this.sig(b, tctx) + (tctx.tight ? "|t" : "") + (tctx.last ? "|last" : ""), hit = this.cache.get(b.id);
       const r: Rendered = hit && hit.key === key ? hit.r : (() => { const rr = renderBlock(b, tctx); this.cache.set(b.id, { key, r: rr }); return rr; })();
       this.items.push({ b, r, start: total }); total += r.rows.length; prevTool = b.kind === "tool" && (!b.agent || b.agent === "lead") && r.rows.length <= 2;
     }
@@ -313,7 +314,7 @@ export class FullView {
     if (room < 3) return;
     const { rows, above, below } = menuRows(s.items, s.sel, Math.min(14, room)), y = inputY - rows.length - 2;
     const pos = s.items.length > rows.filter((r) => "item" in r).length ? `  ${s.sel + 1}/${s.items.length}${above ? " ↑" : ""}${below ? " ↓" : ""}` : "";
-    c.box(x + 1, y, w, rows.length + 2, { border: t.border, bg: t.surface, style: "round", title: (s.kind === "slash" ? "commands" : "files") + pos, titleFg: t.dim });
+    c.box(x + 1, y, w, rows.length + 2, { border: t.border, bg: t.surface, style: "round", title: (s.kind === "slash" ? "commands" : s.kind === "arg" ? `/${s.token.cmd} options` : "files") + pos, titleFg: t.dim });
     rows.forEach((r, i) => {
       if ("head" in r) { c.ansi(x + 2, y + 1 + i, fit(" " + F(t.faint, "── ") + BOLD(F(t.dim, r.head)) + " " + F(t.faint, "─".repeat(Math.max(2, 24 - r.head.length))), w - 2, t.surface), {}, w - 2); return; }
       const idx = r.item, it = s.items[idx], on = idx === s.sel, bg = on ? t.selection : t.surface;

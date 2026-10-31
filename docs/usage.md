@@ -92,7 +92,9 @@ amness --inline
 - Set the environment variable `AMNESS_UI=inline`.
 - Type `/ui inline` in the chat. `/ui full` goes back.
 
-**What you see.** Each tool call is one line, for example `● Read(src/a.ts)`, with a short result. `Ctrl+O` shows everything. Each edit shows a diff with line numbers. A live todo list, a status line (elapsed time and tokens) and a footer (permission mode, git branch, model, context gauge, estimated cost) stay visible. Tool bullets have a colour for each kind and turn red when the tool fails. With `NO_COLOR=1`, or when the output is piped, Amness uses plain text.
+**What you see.** Each tool call is one line, for example `● Read(src/a.ts)`, with a short result. `Ctrl+O` shows everything. Each edit shows a diff with line numbers.
+
+In the full-screen view, the **most recent** tool call stays open. A shell command shows `$ the command` and its output, up to 20 lines. When the next tool call starts, the earlier one folds to one line again. Click a line to open or close it yourself. If the output is longer than 20 lines, the card says how many are hidden. Type `/output` to read all of it in a pager (`/output 2` for the call before). A lone file read does not open itself. A live todo list, a status line (elapsed time and tokens) and a footer (permission mode, git branch, model, context gauge, estimated cost) stay visible. Tool bullets have a colour for each kind and turn red when the tool fails. With `NO_COLOR=1`, or when the output is piped, Amness uses plain text.
 
 ## Type in the input box
 
@@ -210,6 +212,20 @@ Type `/` in the input box to see the popup. It lists **every** command, grouped 
 - Keep typing to filter. The titles disappear and the best match comes first.
 - `Tab` or `Enter` picks the command. `Esc` closes the popup.
 
+**Completion after the command.** Type a command and a space, and the popup lists the values it accepts, each with a short explanation:
+
+| You type | The popup shows |
+|---|---|
+| `/mode ` | `default`, `acceptEdits`, `plan`, `yolo` |
+| `/model ` | the known models with their hints, then every other model your provider reports (OpenAI, Claude, OpenRouter, Ollama and other OpenAI-compatible servers). Amness asks the provider once and remembers the answer for ten minutes. If the provider cannot be reached, you still see the known models. |
+| `/models ` | the roles (`explore`, `compact`, `review`, `cheap`, `fallback`), then the models |
+| `/effort `, `/api `, `/theme `, `/shell `, `/strategy `, `/prompt `, `/sandbox `, `/diffmode `, `/ui ` | their choices |
+| `/keepwarm `, `/lsp `, `/approver `, `/reviewer `, `/router `, `/mouse ` | `on`, `off` |
+| `/branch ` | your turns, numbered, with the first words of each |
+| `/memory `, `/permissions `, `/copy `, `/pr `, `/report `, `/mcp `, `/budget `, `/check `, `/verify ` | their sub-commands or common values |
+
+`Enter` picks the highlighted value and runs the command. For commands that take free text or a number (`/model`, `/budget`, `/check`, `/verify`), `Enter` runs exactly what you typed unless you moved into the list with the arrow keys, so a model id that is not in the list still works. `Tab` always completes. Commands that need more words (`/memory add`, `/permissions allow`) add a space and wait.
+
 `/help` lists the commands in the chat.
 
 ### Models and providers
@@ -217,6 +233,7 @@ Type `/` in the input box to see the popup. It lists **every** command, grouped 
 | Command | What it does |
 |---|---|
 | `/model [id]` | Switches the model. Without an id, it opens a picker. |
+| `/output [n]` (alias `/last`) | Shows the full output of the last tool call in a pager. `/output 2` shows the one before. |
 | `/provider` | Switches the provider (OpenAI, Claude, OpenRouter, Ollama, custom). The list shows `●` for providers that are connected and `○` for those that are not. Each provider uses its own saved key. |
 | `/connect` (alias `/keys`) | Opens the key manager. See which providers are connected, add a key for any of them, replace or remove one, or switch to it. Add as many as you want. |
 | `/effort [level]` | Sets the reasoning effort. Levels depend on the model. `default` lets the model decide. |
