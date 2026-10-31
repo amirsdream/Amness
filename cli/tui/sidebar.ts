@@ -5,20 +5,21 @@ import { cellWidth, clipWidth } from "./text.ts";
 import type { Theme } from "./themes.ts";
 import { brandOfModel } from "./brand.ts";
 import { fmtCost, fmtTokens } from "./pricing.ts";
+import { renderLoop, type LoopData } from "./looppanel.ts";
 
 export type SidebarData = {
   title: string; model: string; provider: string; api?: string; branch?: string; cwd: string; mode: string; effort?: string;
   ctxPct: number | null; ctxUsed: number; ctxMax: number; series: number[]; map: { label: string; pct: number; color: number }[];
   usage: { prompt: number; completion: number; calls: number; cached: number; reasoning: number }; cost: number | null;
   todos: { content: string; status: string }[]; changes: { path: string; added: number; removed: number; created: boolean; blockId: number }[];
-  run?: { phase: string; step: number; max: number; elapsedMs: number; frame: number; live: { label: string; ms: number; agent?: string }[]; done: { label: string; ok: boolean; ms: number }[] };
+  /** the agent loop of the current (or last) run, step by step */ loop?: LoopData;
   sandbox?: string;
   /** one line per plugin status (see Plugin.status) */ pluginStatus?: string[];
   /** the token cap for the current/last turn: tokens counted (cached input at a tenth), the cap, and whether usage was estimated */ budget?: { used: number; max: number };
   procs?: { id: string; name: string; status: string; secs: number }[];
   tools: number; mcp: number; memory: number; running: boolean; elapsedMs: number; tip?: string;
 };
-export type SideHit = { row: number; kind: "change" | "todos"; blockId?: number };
+export type SideHit = { row: number; kind: "change" | "todos" | "step"; blockId?: number; step?: number };
 const BARS = "▁▂▃▄▅▆▇█";
 
 export function renderSidebar(d: SidebarData, t: Theme, width: number, height: number): { rows: Cell[][]; hits: SideHit[] } {
@@ -28,14 +29,11 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
   const brand = brandOfModel(d.model, d.provider, t);
 
   push();
-  if (d.run) {
-    const r = d.run, SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", stages = [["model", "think"], ["tools", "act"], ["verify", "verify"]] as const;
-    head("RUN", F(t.dim, `${(r.elapsedMs / 1000).toFixed(0)}s`));
-    push(stages.map(([k, label], i) => (k === r.phase || (r.phase === "compact" && k === "model") ? BOLD(F(t.accent, "● " + label)) : F(t.faint, "○ " + label)) + (i < 2 ? F(t.border, " ─ ") : "")).join(""));
-    const lbl = `step ${r.step + 1}/${r.max}`, bw = Math.max(6, Math.min(24, inner - cellWidth(lbl) - 2)), f = Math.max(1, Math.round(((r.step + 1) / Math.max(1, r.max)) * bw));
-    push(F(r.step + 1 >= r.max - 2 ? t.warn : t.accent2, "▰".repeat(f)) + F(t.border, "▱".repeat(bw - f)) + F(t.dim, "  " + lbl));
-    for (const x of r.live.slice(0, 5)) push(F(t.accent2, SPIN[r.frame % SPIN.length]) + " " + F(t.text, clipWidth(x.label, inner - 9)) + F(t.faint, ` ${fmtMs(x.ms)}`));
-    for (const x of r.done.slice(-4).reverse()) push(F(x.ok ? t.ok : t.err, x.ok ? "✓" : "✗") + " " + F(t.dim, clipWidth(x.label, inner - 9)) + F(t.faint, x.ms >= 50 ? ` ${fmtMs(x.ms)}` : ""));
+  if (d.loop && d.loop.steps.length) {
+    const room = Math.max(4, Math.min(14, height - 26)), lp = renderLoop(d.loop, t, inner, room);
+    head(lp.title, lp.right);
+    for (const h of lp.hits) hits.push({ row: out.length + h.line, kind: "step", step: h.step });
+    for (const l of lp.lines) push(l);
   }
   head("SESSION");
   for (const l of wrap(d.title || "New conversation", inner, 2)) push(BOLD(F(t.text, l)));

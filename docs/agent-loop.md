@@ -64,7 +64,7 @@ You type `Fix the failing test in src/math.ts` in the chat and press Enter. The 
 **Limits and common problems.**
 
 - The exact step numbers differ from run to run. A plain-text answer without `finish` also ends a run, and then `finished` is `false` in the result.
-- The loop stops after `maxSteps` (the code agent uses 60 in chat and 40 otherwise, unless you set it).
+- The loop stops after `maxSteps` (the code agent uses 60 in chat and 40 otherwise, unless you set it; the eval runner and the plain library harness default to 30). The number is a safety stop against a runaway loop, not a target, and no measurement chose it. In our built-in test suites most tasks finish in about 6 steps and about 1 run in 100 reaches 30. The token budget and the loop and stuck guards are what normally end a run.
 - Not every event appears in every run. Guards only speak when they fire.
 
 **Related pages.** [Architecture](architecture.md), [Library](library.md), [Why: what Amness checks](why.md).

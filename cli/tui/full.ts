@@ -1,6 +1,7 @@
 // The full-screen UI: header, scrollable transcript, sidebar, input panel, modals, toasts and mouse handling, drawn on a cell canvas.
 import { copyToClipboard } from "./clipboard.ts";
 import { menuRows } from "./complete.ts";
+import { capNote } from "./looppanel.ts";
 import { basename } from "node:path";
 import type { App } from "./app.ts";
 import { A, mix, type Cell } from "./ansi.ts";
@@ -245,6 +246,16 @@ export class FullView {
   }
 
   // ------------------------------------------------------------------ sidebar
+  /** Steps the user opened in the LOOP section by clicking. */
+  private openSteps = new Set<number>(); private openFor = 0;
+  private loopData(now: number): import("./looppanel.ts").LoopData | undefined {
+    const app = this.app, steps = app.trace.filter((s) => s.t0 >= app.runStart - 50);   // this run's steps (the trace spans the whole session)
+    if (!steps.length) return undefined;
+    if (this.openFor !== app.runStart) { this.openFor = app.runStart; this.openSteps.clear(); }   // step numbers start again in a new run
+    return { live: app.running, phase: app.phase?.phase ?? "model", cap: app.phase?.max ?? 30, now, frame: app.frame, steps,
+      elapsedMs: app.running ? now - app.runStart : Math.max(...steps.map((s) => s.t0 + s.ms)) - app.runStart,
+      inflight: [...app.inflight.values()].map((x) => ({ label: toolVerb(x.name, x.args), ms: now - x.t0, agent: x.agent })), open: [...this.openSteps] };
+  }
   private drawSidebar(c: Canvas, t: Theme, x0: number, y0: number, w: number, h: number) {
     const app = this.app, u = app.session.usage, win = contextWindow(app.cfg.model), now = Date.now();
     const mkey = `${app.session.messages.length}|${app.lastPrompt}`;
@@ -264,12 +275,11 @@ export class FullView {
       sandbox: app.cfg.sandbox,
       procs: app.agent.procs?.list().map((p) => ({ id: p.id, name: p.name, status: p.status, secs: Math.round((now - p.startedAt) / 1000) })),
       running: app.running, elapsedMs: now - this.startedAt, tip: TIPS[this.tipIdx],
-      run: app.running ? { phase: app.phase?.phase ?? "model", step: app.phase?.step ?? 0, max: app.phase?.max ?? 30, elapsedMs: now - app.runStart, frame: app.frame,
-        live: [...app.inflight.values()].map((x) => ({ label: toolVerb(x.name, x.args), ms: now - x.t0, agent: x.agent })), done: app.activity.map((x) => ({ label: toolVerb(x.name, x.args, true), ok: x.ok, ms: x.ms })) } : undefined,
+      loop: this.loopData(now),
     }, t, w, h);
     rows.forEach((r, i) => c.put(x0 + 1, y0 + i, r, w - 1));
     for (let i = 0; i < h; i++) c.text(x0, y0 + i, "│", { fg: t.border, bg: t.surface });
-    for (const hh of hits) if (hh.row < h) this.regions.push({ x: x0, y: y0 + hh.row, w, h: 1, kind: "change", click: () => hh.blockId !== undefined && this.scrollToBlock(hh.blockId) });
+    for (const hh of hits) if (hh.row < h) this.regions.push({ x: x0, y: y0 + hh.row, w, h: 1, kind: "change", click: () => { if (hh.kind === "step" && hh.step !== undefined) { this.openSteps.has(hh.step) ? this.openSteps.delete(hh.step) : this.openSteps.add(hh.step); this.invalidate(); } else if (hh.blockId !== undefined) this.scrollToBlock(hh.blockId); } });
   }
 
   // ------------------------------------------------------------------ status line, input, footer
@@ -281,7 +291,7 @@ export class FullView {
         : app.mode === "plan" ? "Planning" : app.thinkBuf.trim() ? "Thinking" : app.streamBuf ? "Writing" : "Working", chars = [...clipWidth(verb, Math.max(8, w - 44)) + "…"];
       const shim = chars.map((ch, i) => F(mix(t.accent, 0xffffff, Math.max(0, 1 - Math.abs(i - ((f * 0.9) % (chars.length + 8) - 4)) / 3)), ch)).join("");
       const spark = app.runSeries.length > 1 ? " " + F(t.accent2, app.runSeries.slice(-10).map((v) => BARS[Math.min(7, Math.round((v / Math.max(1, ...app.runSeries)) * 7))]).join("")) : "";
-      c.ansi(x + 1, y, F(mix(t.accent, t.accent2, (f % 20) / 20), glyph) + " " + BOLD(shim) + F(t.dim, ` ${fmtDuration(now - app.runStart)} · ↓ ${fmtTokens(app.runTokens)}`) + (app.phase ? F(t.faint, ` · step ${app.phase.step + 1}/${app.phase.max}`) : "") + spark + F(t.faint, "   esc to interrupt"), {}, w - 2);
+      c.ansi(x + 1, y, F(mix(t.accent, t.accent2, (f % 20) / 20), glyph) + " " + BOLD(shim) + F(t.dim, ` ${fmtDuration(now - app.runStart)} · ↓ ${fmtTokens(app.runTokens)}`) + (app.phase ? (() => { const n = app.phase.step + 1, cap = capNote(n, app.phase.max); return F(cap.level === "warn" ? t.warn : t.faint, ` · step ${n}${cap.level === "none" ? "" : cap.level === "dim" ? ` of ${app.phase.max}` : ` of ${app.phase.max}, near the limit`}`); })() : "") + spark + F(t.faint, "   esc to interrupt"), {}, w - 2);
       if (app.thinkBuf.trim() && app.queued.length === 0) { /* reasoning summary lives in the transcript's thinking block */ }
     }
     app.queued.slice(0, 2).forEach((q, i) => c.ansi(x + 1, y + (app.running ? 1 : 0) + i, F(t.warn, "▸ queued ") + F(t.dim, clipWidth(q.text.replace(/\s+/g, " "), w - 14)), {}, w - 2));

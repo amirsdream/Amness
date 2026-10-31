@@ -60,7 +60,22 @@ If you have no key yet, the first start asks you to pick a provider and paste a 
 
 - **Collapsed reads.** A run of reads and searches becomes one row, for example "Explored · 3 files read · 2 searches". Click it to open it. Edits, commands and failures always get their own card. Long diffs show the first 16 rows, and you click to see the rest.
 - **Cards.** Your prompts, the assistant replies (with code blocks that have a copy button), tool cards with a status chip, and diffs with line numbers and word-level marks. Wide terminals show a split view.
-- **Live run view.** The status line says what the agent does now, for example "Reading src/app.ts" or "Waiting for you". It also shows elapsed time, tokens and the step counter. The sidebar has a RUN panel with the think, act and verify steps, running tools and the last finished actions.
+- **Live run view.** The status line says what the agent does now, for example "Reading src/app.ts" or "Waiting for you". It also shows elapsed time, tokens and the step number. The sidebar has a **LOOP** panel: one line per step of the current run, newest at the bottom.
+
+  ```text
+  LOOP                           41s
+  ⠋ step 7 · thinking 1.8s
+   5 ✓ Search → Read ×2        3.1s
+     ⚑ nudged: no edits after
+       5 reads
+   6 ✓ Update                  0.8s
+   7 ▸ thinking…
+  7 steps · 12 tools
+  ```
+
+  A step is one model call and the tools it started. Calls of one kind in a row merge (`Read ×2`). A `✗` means a tool failed. A line with `⚑` means the harness stepped in (a nudge, a loop or stagnation warning, a rejected finish, a denied call, a reviewer finding). Quieter notes (cache breaks, trimming) show only for the latest steps. **Click a step** to open it and see every tool call with its time. When there is not enough room, older steps fold into one line ("… 12 earlier steps · 31 tools · 2 failed"). When the run ends, the panel stays as **LAST RUN** with a one-line summary.
+
+  The step limit is a safety stop, not a goal, so it stays hidden at first. It appears as "of 60" after half the steps and as a yellow bar with a warning at 80%.
 - **Sidebar** (`Ctrl+B`). It shows the session, a context gauge, token use, todos, changed files and the workspace. The *context* is the text the model can read at one time.
 - **Modals.** Windows for approvals (with the diff, command or plan), the command palette (`Ctrl+P`), pickers and help.
 

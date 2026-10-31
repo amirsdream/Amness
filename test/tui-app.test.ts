@@ -487,3 +487,15 @@ test("/model <space> lists the known models; typing an exact id and pressing Ent
   assert.ok(await t.until(() => t.has("test-model") || t.screen().includes("model")));
   await t.key(KEY.ctrlC); await t.key(KEY.ctrlD);
 });
+
+test("full-screen sidebar: LOOP shows the steps of the run, then LAST RUN after it finishes; no 'step 3/60' bar early on", async () => {
+  const t = rig([call("list_files", {}), call("list_files", {}), say("done")], { ui: "full", cols: 132, rows: 40 }); await t.start();
+  await t.submit("look around"); assert.ok(await t.until(() => t.idle()));
+  assert.ok(await t.until(() => /LAST RUN/.test(plain(t.screen()))), plain(t.screen()).slice(0, 1800));
+  const s = plain(t.screen());
+  assert.match(s, /3 steps · 2 tools/);                      // the run, summarised
+  assert.match(s, /1 ✓ List/); assert.match(s, /2 ✓ List/); assert.match(s, /3 · replied/);   // one line per step; the last step only answered
+  assert.doesNotMatch(s, /step \d+\/\d+/);                   // the old "step 3/30" progress bar is gone
+  assert.doesNotMatch(s, /○ think|● think/);                 // and so are the three fixed stages
+  await t.key(KEY.ctrlD);
+});

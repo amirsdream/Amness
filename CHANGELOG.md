@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Sidebar:** the RUN panel is now a **LOOP** panel: one line per step with the tools it ran, interventions of the harness (nudges, rejections, loop warnings) next to their step, click a step to open it, older steps fold when there is little room, and it stays as LAST RUN after the run. The step limit is shown only when it matters ("of 60" past half, a warning at 80%), instead of a progress bar toward it.
+
 - **Evals:** `--max-cost <dollars>` (optional, off by default) stops starting sessions at an estimated spend; every run prints its estimated cost. `--calibrate` lists each task's baseline pass rate and which to keep. A task's `check` can read the agent's final message (`run.text`), with `solutionSummary` for the selftest.
 
 ## 0.1.3 (2026-10-31)
