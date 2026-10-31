@@ -42,9 +42,19 @@ export async function detectWindow(p: ModelProbe & { model: string }, fetchImpl:
   if (fromList) return fromList;
   const props = await get(`${root}/props`);                                                // llama.cpp
   const fromProps = num(props?.default_generation_settings?.n_ctx) ?? num(props?.n_ctx); if (fromProps) return fromProps;
+  if (p.provider !== "ollama" && !/:11434$/.test(root)) return undefined;                  // the last probe is a POST: only send it to Ollama
   const show = await get(`${root}/api/show`, { method: "POST", body: JSON.stringify({ model: p.model }), headers: { ...headers, "content-type": "application/json" } });   // Ollama
   const info = show?.model_info ?? {}, key = Object.keys(info).find((k) => k.endsWith(".context_length")); return num(key && info[key]);
 }
 
 /** For tests. */
 export const clearModelCache = () => cache.clear();
+
+/** Share of prompt tokens a vLLM server served from its prefix cache (its /metrics page), or undefined when the server does not say. */
+export async function prefixCacheRate(baseUrl: string, fetchImpl: typeof fetch = fetch): Promise<number | undefined> {
+  try {
+    const r = await fetchImpl(baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "") + "/metrics", { signal: AbortSignal.timeout(2000) }); if (!r.ok) return undefined;
+    const t = await r.text(), val = (name: string) => [...t.matchAll(new RegExp(`^${name}(?:\\{[^}]*\\})?\\s+([0-9.e+]+)`, "gm"))].reduce((n, m) => n + Number(m[1]), 0);
+    const q = val("vllm:prefix_cache_queries_total"), h = val("vllm:prefix_cache_hits_total"); return q > 0 ? h / q : undefined;
+  } catch { return undefined; }
+}

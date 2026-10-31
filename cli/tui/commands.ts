@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, keyFor, storeKey, type Connection, type ProviderId } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
-import { fetchModels } from "../models.ts";
+import { fetchModels, prefixCacheRate } from "../models.ts";
 import { argOptions } from "./argcomplete.ts";
 import { STAGE_GLYPH, roundOf, stagesOf } from "./looppanel.ts";
 import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
@@ -297,6 +297,17 @@ export function buildCommands(): Cmd[] {
     { name: "plugins", help: "plugins loaded (code in .amness/plugins that extends the loop, tools, guards and evals)", run: (a) => {
       if (!a.plugins.length) return void a.say("no plugins loaded. Put a file in .amness/plugins/ (or ~/.amness/plugins/) that exports definePlugin({ name, ... }); see docs/plugins.md. Project plugins ask for your approval first.", dim);
       a.commit(["", bold("  Plugins"), ...a.plugins.map((p) => `  ${cyan(p.name.padEnd(22))} ${dim([p.tools?.length ? `${p.tools.length} tool(s)` : "", p.hooks ? `hooks: ${Object.keys(p.hooks).join(", ")}` : "", p.system ? "system prompt" : "", p.cases?.length ? `${p.cases.length} eval case(s)` : "", p.variants ? `variants: ${Object.keys(p.variants).join(", ")}` : ""].filter(Boolean).join(" · "))} ${p.description ?? ""}`)]);
+    } },
+    { name: "plans", help: "offer the plan of a similar finished task as a starting point (off until measured)", args: "[on|off]", run: (a, arg) => {
+      if (arg !== "on" && arg !== "off") { const s = a.agent.plans?.stats(); return void a.say(`plan cache is ${a.cfg.plans ? "on" : "off"}${s ? `: ${s.plans} stored, offered ${s.offered}×, led to a finished task ${s.helped}×` : ""}. /plans on: a finished task leaves a short plan (files changed, checks run, result); a similar new task is offered it as a starting point.`, dim); }
+      a.cfg.plans = arg === "on"; a.saveConfig(); a.buildAgent(); a.say(`plan cache ${arg}`, dim);
+    } },
+    { name: "cache", help: "what the harness reused instead of repeating: reads, plans, and the server's prefix cache", run: async (a) => {
+      const t = a.agent.toolCache.stats(), s = a.agent.plans?.stats(), lines = [`tool results: ${t.hits} reused of ${t.hits + t.misses} pure reads; ${t.pointers} answered with a one-line pointer, about ${Math.round(t.saved / 3.5).toLocaleString()} tokens not sent again`];
+      lines.push(s ? `plans: ${s.plans} stored, offered ${s.offered}×, led to a finished task ${s.helped}×` : "plans: off (/plans on)");
+      const px = await prefixCacheRate(a.cfg.baseUrl); if (px !== undefined) lines.push(`server prefix cache: ${Math.round(px * 100)}% of prompt tokens were served from the server's cache`);
+      lines.push("replies on disk: amness eval --cache / amness run --cache (reruns cost nothing)");
+      a.commit(["", bold("  Cache"), ...lines.map((l) => "  " + dim(l))]);
     } },
     { name: "lsp", help: "append language-server errors to edit results (needs typescript-language-server, pyright, gopls or rust-analyzer)", args: "[on|off]", run: (a, arg) => {
       if (arg !== "on" && arg !== "off") return void a.say(`language-server diagnostics are ${a.cfg.lsp ? "on" : "off"}. /lsp on: each edit result also lists the errors an installed language server reports for that file.`, dim);

@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { BUILTIN_METRICS, gateCompare, importPlugins, tune, writeProfile, adversarialCases, hardCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, calibrate, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
 import { bold, dim, green, red } from "./ui.ts";
 import { estimateCost, priceOf } from "./tui/pricing.ts";
+import { cachedModel } from "../src/respcache.ts";
 import type { Plugin } from "../src/index.ts";
 import { pathToFileURL } from "node:url";
 
@@ -43,6 +44,7 @@ export const EVAL_HELP = `usage: amness eval [flags]
   --out <file>         where to save raw results (default .amness/evals/<time>.json)
   --report <file>      re-analyse saved results; runs nothing
   --selftest           check that every task is solvable and its held-out check is sound; runs no model
+  --cache              answer identical model requests from .amness/cache/responses (a rerun of the same experiment costs nothing). Trials stay independent. Use with a fixed temperature or seed; otherwise a rerun no longer measures the model.
   --max-cost <dollars> stop starting new sessions once the estimated spend reaches this amount (sessions already running finish). Off by default. Needs a model with a known price.
   --calibrate          how hard is each task? runs only \`baseline\` (5 trials unless you set --trials) and lists each task's pass rate: keep 30% to 70%, drop tasks that are too easy or too hard
   --yes                skip the cost confirmation`;
@@ -94,7 +96,8 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelN
     }
     const calib = has("--calibrate"), names = variantNames(val("--variants") ?? (calib ? "baseline" : "ab")), trials = Math.max(1, Number(val("--trials") ?? (calib ? 5 : 3))), jobs = Math.max(1, Number(val("--jobs") ?? 1));
     const maxTokens = Number(val("--max-tokens") ?? deps.maxTokens), maxSteps = Number(val("--max-steps") ?? 30);
-    const model = deps.model(), cheap = val("--cheap-model") && deps.modelFor ? deps.modelFor(val("--cheap-model")!) : undefined, variants = names.map((n) => harnessVariant(model, n, { maxTokens, maxSteps, cheap, plugins, modelFor: deps.modelFor }));
+    const cacheDir = join(".amness", "cache", "responses"), wrap = (m: Model, id: string) => (has("--cache") ? cachedModel(m, { dir: cacheDir, salt: id }) : m);   // identical requests are answered from disk
+    const model = wrap(deps.model(), deps.modelName ?? ""), cheap = val("--cheap-model") && deps.modelFor ? deps.modelFor(val("--cheap-model")!) : undefined, variants = names.map((n) => harnessVariant(model, n, { maxTokens, maxSteps, cheap, plugins, modelFor: deps.modelFor }));
     const runs = cases.length * variants.length * trials;
     console.log(`${bold("plan")}  ${cases.length} tasks × ${variants.length} variants (${names.join(", ")}) × ${trials} trials = ${bold(String(runs))} agent sessions, up to ${maxTokens.toLocaleString()} tokens each`);
     const mname = deps.modelName ?? "", maxCost = val("--max-cost") === undefined ? undefined : Number(val("--max-cost"));
@@ -108,6 +111,7 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelN
       metrics: Object.keys(useMetrics).length ? useMetrics : undefined, trials, jobs, baseline: val("--baseline"), k: Math.min(3, trials), seed: val("--seed") ? Number(val("--seed")) : undefined,
       onRow: (r) => console.error(`  ${r.pass ? green("PASS") : red("FAIL")} ${r.case.padEnd(22)} ${r.variant.padEnd(18)} ${dim(`${r.steps} steps · ${r.tokens} tok · ${(r.ms / 1000).toFixed(1)}s${r.note ? " · " + r.note : ""}`)}`),
     });
+    if (has("--cache")) { const st = (model as { stats?: { hits: number; fresh: number } }).stats; if (st) console.log(dim(`response cache: ${st.hits} of ${st.hits + st.fresh} model calls came from ${cacheDir} (they cost nothing; token counts are those of the original calls)`)); }
     const out = resolve(val("--out") ?? join(".amness", "evals", new Date().toISOString().replace(/[:.]/g, "-") + ".json"));
     mkdirSync(join(out, ".."), { recursive: true });
     const spent = rowsCost(mname, rows);

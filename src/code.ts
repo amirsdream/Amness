@@ -6,6 +6,8 @@ import { basename, dirname, relative, resolve, sep } from "node:path";
 import { applyBundle, collectFiles, readBundle, writeBundle, type Bundle } from "./bundle.ts";
 import { unifiedDiff } from "./diff.ts";
 import { createToolTool, loadSavedTools } from "./dynamic.ts";
+import { ToolCache } from "./cache.ts";
+import { PlanCache, planBlock, planFrom } from "./plancache.ts";
 import { createHarness, defineTool, clip, makeHandoff, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, isMemoryBackend, memoryTools, type MemoryBackend } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
@@ -94,17 +96,18 @@ export function codeTools(cwd: string, o: { /** called before a command that may
 
   return [
     defineTool<{ path?: string }>({ name: "list_files", description: "List files in the workspace (skips node_modules, .git, dist). Max 300.",
-      schema: { type: "object", properties: { path: { type: "string" } } }, readOnly: true,
+      schema: { type: "object", properties: { path: { type: "string" } } }, readOnly: true, cacheable: true,
       run: ({ path }) => path && !existsSync(abs(path)) ? `ERROR: ${path} does not exist.${suggest(path)}` : walk(abs(path ?? "."), []).join("\n") || "(empty)" }),
     defineTool<{ path: string; start?: number; end?: number }>({ name: "read_file", description: "Read a file with line numbers (optionally lines start..end).",
-      schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, start: { type: "integer" }, end: { type: "integer" } } }, readOnly: true,
+      schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, start: { type: "integer" }, end: { type: "integer" } } }, readOnly: true, cacheable: true,
+      stamp: ({ path }) => { try { const s = statSync(abs(path)); return `${s.size}:${s.mtimeMs}`; } catch { return "missing"; } },
       run: ({ path, start, end }) => {
         const a = abs(path); if (!existsSync(a)) throw new Error(`no such file: ${path}.${suggest(path)}`); readSet.add(a);
         const all = readFileSync(a, "utf8").split("\n"); if (all.at(-1) === "") all.pop();            // a trailing newline is not an extra empty line
         return all.slice((start ?? 1) - 1, end).map((l, i) => `${(start ?? 1) + i}\t${l}`).join("\n") + (o.guidance?.nested(path) ?? "");
       } }),
     defineTool<{ pattern: string; path?: string }>({ name: "grep", description: "Recursive regex search (file:line:text). Counts as having read matching files.",
-      schema: { type: "object", required: ["pattern"], properties: { pattern: { type: "string" }, path: { type: "string" } } }, readOnly: true,
+      schema: { type: "object", required: ["pattern"], properties: { pattern: { type: "string" }, path: { type: "string" } } }, readOnly: true, cacheable: true,
       run: ({ pattern, path }) => path && !existsSync(abs(path)) ? `ERROR: ${path} does not exist, so nothing was searched.${suggest(path)}` : new Promise<string>((res) => execFile("grep", ["-rnIE", "-m", "20", ...[...IGNORE].map((d) => `--exclude-dir=${d}`), "-e", pattern, path ?? "."],
         { cwd: root, maxBuffer: 10 << 20 }, (_e, out) => {
           for (const l of out.split("\n")) { const f = l.split(":")[0]; if (f) { try { readSet.add(abs(f)); } catch { /* outside */ } } }
@@ -282,6 +285,8 @@ export type CodeAgentOptions = {
   rollover?: { afterTokens?: number; afterChars?: number } | false;
   /** The model's context window in tokens. Set for small or local models (8192): the loop then keeps every request inside it and recovers from "context too long" errors. See `Options.contextWindow` in harness.ts. */
   contextWindow?: number | (() => number | undefined);
+  /** Offer the plan of a similar finished task, and keep the plan of this one when it finishes (see plancache.ts). Off by default: not measured yet. */
+  plans?: boolean;
   /** Called when the window size was learned from a provider error, so it can be remembered. */
   onWindow?: (tokens: number) => void;
   /** Interrupt a running agent (e.g. Ctrl-C). It stops at a safe point with the checkpoint written, so it can be resumed. */
@@ -301,6 +306,8 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
+  const toolCache = new ToolCache();     // results of pure reads, shared by every run of this agent
+  const plans = o.plans ? new PlanCache(resolve(o.cwd, ".amness/plans")) : undefined;
   const sbx = o.sandbox, sandboxMode: () => SandboxMode = typeof sbx === "function" ? sbx : () => sbx ?? "off";
   let agentList: AgentDef[] = []; const agentWarnings: string[] = []; let patchCount = 0;
   const agentOf = (name?: string) => (name && name !== "explore" ? agentList.find((a) => a.name === name) : undefined);
@@ -416,7 +423,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const sessionFile = resolve(o.cwd, ".amness/handoff.md");
   let task = "";
   const h = createHarness({
-    model: o.model, compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
+    model: o.model, toolCache, compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
     budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
@@ -433,7 +440,7 @@ ${note}
   });
   return {
     /** The live toolbox: add/remove tools between or during runs. */
-    registry, memory, guidance, procs, lsp, codeIndex, get agents() { return agentList; }, get agentWarnings() { return agentWarnings; }, get skills() { return skillList; }, get skillWarnings() { return skillWarnings; },
+    registry, memory, guidance, procs, lsp, codeIndex, toolCache, plans, get agents() { return agentList; }, get agentWarnings() { return agentWarnings; }, get skills() { return skillList; }, get skillWarnings() { return skillWarnings; },
     /** Keep the provider's prompt cache alive across an idle gap (see createHarness().warm). */
     warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },
@@ -476,9 +483,12 @@ ${note}
       if (guidance && !resume) { const g = guidance.start(); if (g) prompt += "\n\n" + g; }
       if (!resume) { rescanIndex(); rescan(); const sb = skillsBlock(skillList); if (sb) prompt += "\n\n" + sb; }
       if (backend && !resume) { const ctx = backend.context(prompt); if (ctx) prompt += "\n\n" + ctx; }
+      const offered = plans && !resume && t.trim() ? plans.find(t) : undefined;
+      if (offered) { prompt += "\n\n" + planBlock(offered.plan, offered.similarity); o.onEvent?.({ kind: "plan", detail: `offered a plan from a similar task (${Math.round(offered.similarity * 100)}% similar)` }); }
       if (opts.images?.length && !resume) resume = [{ role: "system", content: SYS(o.chat) }, { role: "user", content: prompt, images: opts.images }];
       const res = await h.run(prompt, { resume });
       backend?.endTurn(res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined);
+      if (plans && !resume && t.trim()) { if (offered) plans.outcome(offered.plan.id, res.finished); if (res.finished) plans.record(t, planFrom(res.messages, res.text)); }
       return res;
     },
     /** Keep talking to the agent after it finished (or stopped): same conversation, full context. */

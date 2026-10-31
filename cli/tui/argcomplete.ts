@@ -40,7 +40,7 @@ export function argOptions(a: App, cmd: string, words: string[]): ArgResult {
     case "sandbox": return first ? ok(SANDBOX_MODES.map((m) => ({ value: m, detail: m === "off" ? "no isolation" : m === "workspace" ? "writes only in the project" : "no network, caches read-only" }))) : ok([]);
     case "diffmode": return first ? ok(opts(["auto"], ["stacked"], ["split"])) : ok([]);
     case "ui": return first ? ok(opts(["full", "full-screen"], ["inline", "scrolls with the terminal"])) : ok([]);
-    case "mouse": case "keepwarm": case "lsp": case "approver": case "reviewer": case "router": return first ? ok(onOff) : ok([]);
+    case "mouse": case "keepwarm": case "plans": case "lsp": case "approver": case "reviewer": case "router": return first ? ok(onOff) : ok([]);
     case "copy": return first ? ok(opts(["code", "the last code block"], ["all", "the whole conversation"])) : ok([]);
     case "memory": return first ? ok([...["forget", "add"].map((v) => ({ value: v, more: true })), ...["stale", "prune", "consolidate", "graph", "embeddings"].map((v) => ({ value: v }))]) : ok([]);
     case "permissions": return first ? ok([{ value: "list" }, ...["allow", "ask", "deny"].map((v) => ({ value: v, detail: `e.g. /permissions ${v} sh(npm test*)`, more: true }))]) : ok([]);

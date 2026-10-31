@@ -2,6 +2,7 @@ import { type Schema, validate, parseLooseJson } from "./schema.ts";
 
 import { ProgressTracker, type TurnFacts } from "./progress.ts";
 import { redact } from "./secrets.ts";
+import { ToolCache, isPointer, pointerText, repairPointers, stillAbove } from "./cache.ts";
 import { calibration, estimateTokens, fit, isOverflow, mechanicalNote, requestedFromError, windowFromError } from "./context.ts";
 export type ToolCall = { id: string; type?: "function"; function: { name: string; arguments: string } };
 export type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** set when the provider reported nothing and the harness estimated (about 4 characters per token) */ estimated?: boolean; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
@@ -21,6 +22,10 @@ export type Model = ((messages: Message[], tools: ToolSpec[], opts?: ModelOpts) 
 export type ToolCtx = { registry: Registry; step: number; /** id of this tool call (subagent events carry it as `parent` so a UI can nest them under their card) */ callId?: string; /** Aborted when the run is interrupted; long-running tools should honour it. */ signal?: AbortSignal; /** Publish a custom event (e.g. a live file diff) to `onEvent`. */ emit?: (e: Event) => void };
 export type Tool<A = any> = {
   name: string; description: string; schema: Schema; run: (args: A, ctx: ToolCtx) => unknown | Promise<unknown>;
+  /** Safe to reuse a stored result while nothing has changed (a pure read: file contents, search, listing). Not for tools whose answer moves on its own (process output, the web). */
+  cacheable?: boolean;
+  /** A fingerprint of whatever this call reads (a file: size and mtime). The stored result is dropped when it changes. */
+  stamp?: (args: A) => string;
   /** Hidden from the model until it finds it via `tool_search` (keeps prompts small when you have many tools). */
   deferred?: boolean;
   /** Availability per turn; the tool is only shown (and callable) while this returns true. */
@@ -72,6 +77,7 @@ export type Event =
   | { kind: "edit"; path: string; created: boolean; added: number; removed: number; diff: string; /** File content before the edit (null = it did not exist); lets a UI offer undo. */ before?: string | null }
   | { kind: "turn"; step: number; tokens: number; prompt: number; completion: number; cached: number; reasoning: number }
   | { kind: "rollover"; detail: string }
+  | { kind: "plan"; detail: string }
   /** Context that was shrunk without losing anything current (chars; roughly 4 per token). */
   | { kind: "trim"; saved: number; what: string }
   /** The request prefix changed since the last call, so the provider's prompt cache will miss from `at` onward (message index; -1 = tool definitions). */
@@ -122,7 +128,7 @@ export class Budget {
 
 export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string; /** from the built-in safety floor: "don't ask again" shortcuts must not skip this prompt */ floor?: boolean }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
-export type Guard = "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation" | "review" | "redact";
+export type Guard = "toolcache" | "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation" | "review" | "redact";
 
 export type Options = {
   model: Model;
@@ -134,6 +140,8 @@ export type Options = {
   maxSteps?: number;
   /** Chars of transcript before old tool output is elided. Ignored when `contextWindow` is set. */
   contextBudget?: number;
+  /** Reuse results of pure read tools (`cacheable`) while nothing has changed, and answer a repeat with a one-line pointer when the first result is still in the conversation. Default on; `false` switches it off. A `ToolCache` can be shared across runs. */
+  toolCache?: ToolCache | false;
   /** The model's context window in tokens (8192 for a small local model, 1_000_000 for a large one). When set, the loop keeps every request inside it: it shrinks old output as the window fills,
    *  writes a handoff note before it overflows, and recovers from a "context too long" error instead of failing. A window stated in such an error replaces this value. */
   contextWindow?: number | (() => number | undefined);
@@ -243,9 +251,10 @@ export function condense(s: string, max = 6000): string {
 /** Same call repeated later in the transcript: the older output is stale, so drop it first (cheapest compaction, loses nothing current). */
 export function supersede(msgs: Message[], keep = 6, isRead?: (tool: string) => boolean): number {
   const calls = new Map<string, { key: string; name: string; path?: string }>(), latest = new Map<string, string>();
+  const pointers = new Set(msgs.filter(isPointer).map((m) => m.tool_call_id));            // a "same as before" reply is not a newer result: it points at the older one, which must stay
   for (const m of msgs) for (const c of m.tool_calls ?? []) {
     let path: string | undefined; try { const p = JSON.parse(c.function.arguments || "{}").path; if (typeof p === "string") path = p; } catch { /* not JSON: no path */ }
-    const key = c.function.name + c.function.arguments; calls.set(c.id, { key, name: c.function.name, path }); latest.set(key, c.id);
+    const key = c.function.name + c.function.arguments; calls.set(c.id, { key, name: c.function.name, path }); if (!pointers.has(c.id)) latest.set(key, c.id);
   }
   // "Expired" reads (AgentDiet): a read of a file that was edited afterwards no longer describes the file.
   const editedAt = new Map<string, number>();
@@ -348,6 +357,8 @@ export function createHarness(o: Options) {
     return r;
   };
   const off = new Set(o.off ?? []);
+  const tcache = o.toolCache === false || off.has("toolcache") ? undefined : o.toolCache ?? new ToolCache();
+  let world = 0;      // bumped by anything that may change state: every stored read from before is then invalid
   const sig = () => (typeof o.signal === "function" ? o.signal() : o.signal);
   let approvals: Promise<unknown> = Promise.resolve(); // serialise prompts so parallel calls don't interleave questions
 
@@ -377,6 +388,7 @@ export function createHarness(o: Options) {
     if (o.record) emit({ kind: "run", messages: msgs.map((m) => ({ ...m, raw: undefined })) });
     const seen = new Map<string, number>(), history: string[] = [];
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
+    world++;            // files may have changed since the last run
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
     let allowNow: Set<string> | undefined, thenNext: string | undefined, budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false, win = typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow, recoveries = 0, calib = 1;
@@ -453,6 +465,7 @@ export function createHarness(o: Options) {
         const s = veto ? 0 : supersede(msgs, 6, (n) => reg.get(n)?.readOnly === true) + compact(msgs, o.contextBudget);
         if (s > 0) emit({ kind: "trim", saved: s, what: "stale tool output" });
       }
+      repairPointers(msgs);                                                                                      // a "same as before" pointer must not outlive the output it points to
       const key = [...names].sort().join(",");
       if (step > 0 && key !== shown) emit({ kind: "tools", detail: key });
       shown = key;
@@ -570,8 +583,14 @@ export function createHarness(o: Options) {
         }
         let result: string;
         emit({ kind: "toolstart", id: c.id, name, args: raw });
-        try { const r = await t!.run(args, { registry: reg, step, callId: c.id, emit: (ev) => { if (ev.kind === "edit") { epoch++; turnEdits.push({ path: ev.path, diff: ev.diff }); if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw, entryCap()) : condense(raw, entryCap()); ingress += raw.length - result.length; }
+        // A pure read that was done before and has not been invalidated since: no need to run it again, and no need to send it again while the first copy is still above.
+        const ckey = tcache && t!.cacheable && !t!.untrusted ? canonicalCall(name, args) : undefined, stamp = ckey ? (() => { try { return t!.stamp?.(args) ?? ""; } catch { return "?"; } })() : "", hit = ckey ? tcache!.get(ckey, world, stamp) : undefined;
+        if (ckey) { if (hit) { tcache!.hits++; if (stillAbove(msgs, hit.callId)) { tcache!.pointers++; tcache!.saved += hit.result.length; } } else tcache!.misses++; }
+        const reuse = hit ? (stillAbove(msgs, hit.callId) ? pointerText(hit.callId) : hit.result) : undefined;
+        try { const r = reuse ?? await t!.run(args, { registry: reg, step, callId: c.id, emit: (ev) => { if (ev.kind === "edit") { epoch++; turnEdits.push({ path: ev.path, diff: ev.diff }); if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw, entryCap()) : condense(raw, entryCap()); ingress += raw.length - result.length; }
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
+        if (ckey && !hit && !/^ERROR/.test(result)) tcache!.set(ckey, { world, stamp, result, callId: c.id });
+        if (!t!.readOnly) world++;                                                                                                            // anything that may change state invalidates every stored read
         if (name === "sh" && !off.has("ledger")) o.ledger?.onCommand(String(args.cmd ?? ""), result);
         if (o.redact && !off.has("redact")) { const rr = redact(result); if (rr.count) { result = rr.text; emit({ kind: "hook", event: "Redact", detail: `masked ${rr.count} secret(s) (${rr.kinds.join(", ")}) in the output of ${name}`, blocked: false }); } }
         if (t!.untrusted) {

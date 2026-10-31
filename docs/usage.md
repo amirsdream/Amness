@@ -245,7 +245,7 @@ Type `/` in the input box to see the popup. It lists **every** command, grouped 
 | `/model ` | the known models with their hints, then every other model your provider reports (OpenAI, Claude, OpenRouter, Ollama and other OpenAI-compatible servers). Amness asks the provider once and remembers the answer for ten minutes. If the provider cannot be reached, you still see the known models. |
 | `/models ` | the roles (`explore`, `compact`, `review`, `cheap`, `fallback`), then the models |
 | `/effort `, `/api `, `/theme `, `/shell `, `/strategy `, `/prompt `, `/sandbox `, `/diffmode `, `/ui ` | their choices |
-| `/keepwarm `, `/lsp `, `/approver `, `/reviewer `, `/router `, `/mouse ` | `on`, `off` |
+| `/keepwarm `, `/plans `, `/lsp `, `/approver `, `/reviewer `, `/router `, `/mouse ` | `on`, `off` |
 | `/branch ` | your turns, numbered, with the first words of each |
 | `/memory `, `/permissions `, `/copy `, `/pr `, `/report `, `/mcp `, `/budget `, `/check `, `/verify ` | their sub-commands or common values |
 
@@ -308,6 +308,8 @@ When you start the chat, Amness picks a first `/verify` command for you if it ca
 | Command | What it does |
 |---|---|
 | `/help` (alias `/?`), `/status`, `/tools`, `/todos` | Help, session facts, tools the agent can use, the agent's checklist. |
+| `/cache` | What the harness reused instead of repeating: reads answered from the store, plans, and (on a vLLM server) the share of prompt tokens the server served from its prefix cache. |
+| `/plans [on\|off]` | Offers the plan of a similar finished task as a starting point (off until measured). With no argument it shows how many plans are stored and how often they helped. |
 | `/tokens` (alias `/cost`) | The context gauge, what fills it, tokens, cache hits and estimated cost. |
 | `/loop` (alias `/trace`) | A step-by-step trace of the agent loop: each model turn, its tools and times, and any guard that fired. |
 | `/budget [tokens]` | Shows or sets the token cap for each turn (default 300,000). Cached input counts as a tenth. You can write `500k` or `1m`. The minimum is 10,000. |

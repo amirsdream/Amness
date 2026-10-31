@@ -100,6 +100,17 @@ You type `Fix the failing test in src/math.ts` in the chat and press Enter. The 
 
 **Limits.** Not measured on a real model yet: the tests use a fake server with an 8k window (`test/context.test.ts`). The tool list and system prompt take about 2,200 tokens, which is a lot in an 8k window. Claude models are append-only and skip stage 2, but still hand off and recover.
 
+### Caches the harness keeps
+
+**What it is.** Four caches, each with a different job. None needs a particular provider.
+
+1. **Tool-result cache** (`ToolCache` in `src/cache.ts`, on by default). Tools marked `cacheable` (`read_file`, `grep`, `list_files`) are not run again for an identical call while nothing has changed. A stored result is dropped when a state-changing tool has run, when the tool's own stamp changes (for a file: its size and modification time), or after 20 seconds. If the first output is still word for word in the conversation, the repeat gets a one-line pointer (`[unchanged since call …]`) instead of the text again. When the first output is shortened later, `repairPointers()` shortens the pointer too, and `supersede()` never treats a pointer as a newer result, so a pointer never points at nothing. Measured on 50 saved sessions: 15% of `read_file` calls were repeats whose first copy was still in context.
+2. **Response cache on disk** (`cachedModel` in `src/respcache.ts`, off; `--cache` on `amness eval` and `amness run`). An identical model request is answered from `.amness/cache/responses`. Trials stay independent because the key includes how many times that exact request was already sent in this process.
+3. **Plan cache** (`PlanCache` in `src/plancache.ts`, off; `/plans on` or `--plans`). A finished task leaves a short plan: files changed, commands that checked the work, the result. A new task with similar words is offered it as a starting point, with the instruction to verify each step. A plan that does not lead to a finished task twice in a row is removed. After "Agentic Plan Caching" (arXiv 2506.14852, read as a summary only).
+4. **The provider's prompt cache** (see the section on cache breaks). Amness does not control it. It keeps the start of the conversation stable so the cache keeps hitting. Type `/cache` to see the hit rate of a vLLM server.
+
+**Limits.** The plan cache and the response cache are **not measured yet**, which is why they are off. The tool cache saves time and context room more than money, because cached input is cheap.
+
 **Why.** Every change to old messages breaks the provider's cache from that point on. One large cut every few turns costs less than a small cut every turn.
 
 **Example.** Type `/loop` in the chat. It lists each model turn, the guards that fired, and how much was trimmed.

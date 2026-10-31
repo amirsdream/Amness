@@ -19,6 +19,8 @@ class Mock:
                 except (BrokenPipeError, ConnectionResetError): pass       # the client (a test hitting Esc/Ctrl-C) hung up mid-stream
             def _post(self):
                 body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+                if not (self.path.endswith("/chat/completions") or self.path.endswith("/responses")):     # not a model call (for example the context-window probe)
+                    self.send_response(404); self.send_header("content-length", "2"); self.end_headers(); self.wfile.write(b"{}"); return
                 outer.paths.append(self.path)
                 if outer.luna and self.path.endswith("/chat/completions") and body.get("tools"):     # what OpenAI really answers for GPT-5.4+ reasoning models
                     data = json.dumps({"error": {"message": "Function tools with reasoning_effort are not supported for gpt-5.6-luna in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to none.", "type": "invalid_request_error", "param": "reasoning_effort", "code": "unsupported_parameter"}}).encode()

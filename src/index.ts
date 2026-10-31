@@ -1,4 +1,7 @@
 export * from "./harness.ts";
+export * from "./cache.ts";
+export * from "./respcache.ts";
+export * from "./context.ts";
 export * from "./schema.ts";
 export * from "./openai.ts";
 export * from "./web.ts";

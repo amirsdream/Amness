@@ -79,7 +79,7 @@ test("detectWindow reads the context window a local server reports (vLLM, LM Stu
   assert.equal(await detectWindow(p, server({ "/v1/models": { data: [{ id: "other", max_model_len: 1000 }, { id: "qwen", max_model_len: 8192 }] } })), 8192);           // vLLM
   assert.equal(await detectWindow(p, server({ "/v1/models": { data: [{ id: "qwen", loaded_context_length: 16384 }] } })), 16384);                                          // LM Studio
   assert.equal(await detectWindow(p, server({ "/v1/models": { data: [{ id: "qwen" }] }, "/props": { default_generation_settings: { n_ctx: 4096 } } })), 4096);              // llama.cpp
-  assert.equal(await detectWindow(p, server({ "/api/show": { model_info: { "qwen2.context_length": 32768 } } })), 32768);                                                   // Ollama
+  assert.equal(await detectWindow({ ...p, provider: "ollama" }, server({ "/api/show": { model_info: { "qwen2.context_length": 32768 } } })), 32768);                                                   // Ollama
   assert.equal(await detectWindow(p, server({})), undefined);
   assert.equal(await detectWindow({ ...p, provider: "openai" }, server({ "/v1/models": { data: [{ id: "qwen", max_model_len: 8192 }] } })), undefined);
 });

@@ -1,6 +1,7 @@
 // Non-interactive mode for CI, scripts and containers:  amness run [flags] "task"
 import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { cachedModel } from "../src/respcache.ts";
 import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, loadConfig, ready, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
@@ -26,6 +27,8 @@ export const HELP = `usage: amness run [flags] "task"
   --parts <file.json>  run independent parts ([{"name","task"}]) concurrently in worktrees, merged one at a time through --verify; conflicts are reported, not applied
   --image <file>       show the model a picture (png, jpg, gif, webp; up to 5 MB, repeat the flag for more, max 4); needs a vision-capable model
   --max-tokens <n>     hard token cap (default 300000)      --no-memory   disable memory
+  --plans              offer the plan of a similar finished task, and keep plans of finished tasks (.amness/plans)
+  --cache              answer identical model requests from .amness/cache/responses (reruns and replays cost nothing; use a fixed temperature)
   --max-steps <n>      most model turns (default 40)        --context-window <tokens>   the model's window (8192 for a small local model); default: learned from the provider
   -                    as the task: read it from standard input (useful on Windows, where quoting a long task is painful)
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
@@ -64,7 +67,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   if (live) console.error(`live view: ${live.url}`);
   const approve: Approve = yes ? () => true : () => "non-interactive run: risky commands are denied unless --yes is passed";
   const budget = new Budget({ maxTokens });
-  const model = createModel(cfg);
+  const model = argv.includes("--cache") ? cachedModel(createModel(cfg), { dir: join(cwd, ".amness", "cache", "responses"), salt: `${cfg.provider}|${cfg.baseUrl}|${cfg.model}|${cfg.effort ?? ""}` }) : createModel(cfg);
   const bestOf = Number(val("--best-of") ?? 0), partsFile = val("--parts");
   if (bestOf || partsFile) {
     if (!verify) { console.error("--best-of and --parts need --verify <cmd>: that command is what decides which result is kept"); return 2; }
@@ -87,6 +90,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   for (const w of loadedPlugins.warnings) console.error("plugin: " + w);
   if (loadedPlugins.untrusted) console.error(`note: ${loadedPlugins.untrusted.count} project plugin file(s) in .amness/plugins were not loaded; pass --trust-project to run them`);
   const agent = createCodeAgent({
+    plans: argv.includes("--plans") || cfg.plans || undefined,
     contextWindow: Number(val("--context-window")) || windowFor(cfg) || await detectWindow({ provider: cfg.provider, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model }),
     maxSteps: Number(val("--max-steps")) || undefined,
     model, modelById: (id) => createModel({ ...cfg, model: id }), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox: (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },

@@ -23,7 +23,7 @@ export const GROUP_ORDER = ["Conversation", "Model & keys", "Safety", "Quality",
 const GROUP_MEMBERS: Record<string, string> = {};
 for (const [g, names] of Object.entries({
   Conversation: "output clear compact resume branch branches export import undo rewind copy todos exit",
-  "Model & keys": "model provider connect effort api models router keepwarm budget tokens",
+  "Model & keys": "model provider connect effort api models router keepwarm budget tokens cache plans",
   Safety: "mode plan permissions policy sandbox approver hooks",
   Quality: "verify check review reviewer lsp report loop diff",
   Project: "init pr tools procs shell status live",
