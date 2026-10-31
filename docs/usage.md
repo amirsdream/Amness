@@ -204,14 +204,21 @@ The file is attached to your message. In the transcript you see a note such as "
 
 ## Slash commands
 
-Type `/` in the input box to see the popup. `/help` lists the commands in the chat.
+Type `/` in the input box to see the popup. It lists **every** command, grouped under titles: Conversation, Model & keys, Safety, Quality, Project, Extend and Interface. Your own and plugin commands go under Custom.
+
+- Move with `↑` and `↓`. `PgUp` and `PgDn` jump eight at a time. The top of the box shows where you are, for example `12/60 ↓`.
+- Keep typing to filter. The titles disappear and the best match comes first.
+- `Tab` or `Enter` picks the command. `Esc` closes the popup.
+
+`/help` lists the commands in the chat.
 
 ### Models and providers
 
 | Command | What it does |
 |---|---|
 | `/model [id]` | Switches the model. Without an id, it opens a picker. |
-| `/provider` | Switches the provider (OpenAI, Claude, OpenRouter, Ollama, custom). The choice is saved. |
+| `/provider` | Switches the provider (OpenAI, Claude, OpenRouter, Ollama, custom). The list shows `●` for providers that are connected and `○` for those that are not. Each provider uses its own saved key. |
+| `/connect` (alias `/keys`) | Opens the key manager. See which providers are connected, add a key for any of them, replace or remove one, or switch to it. Add as many as you want. |
 | `/effort [level]` | Sets the reasoning effort. Levels depend on the model. `default` lets the model decide. |
 | `/api [auto\|responses\|chat]` | Chooses the OpenAI wire API. It does not apply to Claude. |
 | `/models [role model]` | Uses another model for `explore`, `compact`, `review` or `cheap`. `/models fallback <model>` sets a model for when the main one is overloaded or not reachable. Use `off` to clear a role. |

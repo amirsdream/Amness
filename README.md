@@ -28,13 +28,13 @@ Give Amness the key once, in whichever way suits you:
 
 | How | Command or step | Saved? |
 |---|---|---|
-| **Paste it on first start** | run `amness`, choose a provider, paste the key (hidden). Change it later in the settings or with `/provider`. | Yes, in your system's secure store: the macOS Keychain, the Linux keyring, or Windows DPAPI. The prompt tells you which. |
+| **Paste it on first start** | run `amness`, choose a provider, paste the key (hidden). Add more providers any time with `/connect`, and switch with `/provider`. | Yes, in your system's secure store: the macOS Keychain, the Linux keyring, or Windows DPAPI. The prompt tells you which. |
 | **Environment variable** | `export ANTHROPIC_API_KEY=sk-ant-...` or `export OPENAI_API_KEY=sk-...` (PowerShell: `$env:OPENAI_API_KEY="sk-..."`) | No. Used for that shell only, and never written to disk. It wins over a saved key. |
 | **Secret file** (Docker, Kubernetes) | `ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic` (also `OPENAI_API_KEY_FILE`, `TAVILY_API_KEY_FILE`) | No. Read from the file each run. |
 | **Docker** | `docker run -it --rm -v "$PWD":/work -e ANTHROPIC_API_KEY amness` | No. Inside a container nothing is saved. |
 | **Library or CI** | pass `apiKey` in code, or set the variable as a CI secret | No. |
 
-`OPENAI_API_KEY` is used for every provider except Anthropic, including OpenRouter. To remove a saved key, clear "API key" in the settings. A Linux server with no keyring falls back to `~/.amness/config.json` (mode 600, **not encrypted**), so use an environment variable or your platform's secret manager there. Details: [Safety](docs/safety.md).
+Each provider keeps its own saved key, so you can connect several and switch with `/provider`; `/connect` shows which are connected. `OPENAI_API_KEY` is used for every provider except Anthropic (OpenRouter prefers `OPENROUTER_API_KEY`). To remove a saved key, clear "API key" in the settings. A Linux server with no keyring falls back to `~/.amness/config.json` (mode 600, **not encrypted**), so use an environment variable or your platform's secret manager there. Details: [Safety](docs/safety.md).
 
 More ways to start:
 

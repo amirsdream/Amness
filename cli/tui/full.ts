@@ -1,5 +1,6 @@
 // The full-screen UI: header, scrollable transcript, sidebar, input panel, modals, toasts and mouse handling, drawn on a cell canvas.
 import { copyToClipboard } from "./clipboard.ts";
+import { menuRows } from "./complete.ts";
 import { basename } from "node:path";
 import type { App } from "./app.ts";
 import { A, mix, type Cell } from "./ansi.ts";
@@ -308,12 +309,15 @@ export class FullView {
   }
   private drawSuggestions(c: Canvas, t: Theme, x: number, inputY: number, mainW: number) {
     const s = this.app.sugg; if (!s || !s.items.length || this.app.overlay) return;
-    const rows = Math.min(8, s.items.length), w = Math.min(70, mainW), top = Math.max(0, Math.min(s.sel - 3, s.items.length - rows)), y = inputY - rows - 2;
-    if (y < 1) return;
-    c.box(x + 1, y, w, rows + 2, { border: t.border, bg: t.surface, style: "round", title: s.kind === "slash" ? "commands" : "files", titleFg: t.dim });
-    s.items.slice(top, top + rows).forEach((it, i) => {
-      const idx = top + i, on = idx === s.sel, bg = on ? t.selection : t.surface;
-      const label = s.kind === "file" ? (() => { const n = it.label.split("/").pop()!, d = it.label.slice(0, it.label.length - n.length); return F(t.faint, d) + BOLD(F(t.text, n)); })() : BOLD(F(t.accent2, it.label));
+    const w = Math.min(86, mainW), room = inputY - 4;                       // rows between the top of the screen and the box
+    if (room < 3) return;
+    const { rows, above, below } = menuRows(s.items, s.sel, Math.min(14, room)), y = inputY - rows.length - 2;
+    const pos = s.items.length > rows.filter((r) => "item" in r).length ? `  ${s.sel + 1}/${s.items.length}${above ? " ↑" : ""}${below ? " ↓" : ""}` : "";
+    c.box(x + 1, y, w, rows.length + 2, { border: t.border, bg: t.surface, style: "round", title: (s.kind === "slash" ? "commands" : "files") + pos, titleFg: t.dim });
+    rows.forEach((r, i) => {
+      if ("head" in r) { c.ansi(x + 2, y + 1 + i, fit(" " + F(t.faint, "── ") + BOLD(F(t.dim, r.head)) + " " + F(t.faint, "─".repeat(Math.max(2, 24 - r.head.length))), w - 2, t.surface), {}, w - 2); return; }
+      const idx = r.item, it = s.items[idx], on = idx === s.sel, bg = on ? t.selection : t.surface;
+      const label = s.kind === "file" ? (() => { const n = it.label.split("/").pop()!, d = it.label.slice(0, it.label.length - n.length); return F(t.faint, d) + BOLD(F(t.text, n)); })() : BOLD(F(t.accent2, it.label.padEnd(16)));
       c.ansi(x + 2, y + 1 + i, fit((on ? F(t.accent, "▌") : " ") + " " + label + (it.detail ? "  " + F(t.faint, it.detail) : ""), w - 2, bg), {}, w - 2);
       this.regions.push({ x: x + 2, y: y + 1 + i, w: w - 2, h: 1, kind: "sugg", click: () => { s.sel = idx; this.app.acceptSuggPublic(true); } });
     });
@@ -412,6 +416,7 @@ export class FullView {
   clearSelection() { if (this.sel) { this.sel = undefined; return true; } return false; }
   /** Scroll keys; returns whether the key was used. */
   key(name: string, ctrl?: boolean): boolean {
+    if (this.app.sugg && (name === "pageup" || name === "pagedown")) return false; // the open menu pages through its list instead
     const page = Math.max(3, Math.floor(this.viewH / 2));
     if (name === "pageup") { this.scrollBy(page); return true; } if (name === "pagedown") { this.scrollBy(-page); return true; }
     if (ctrl && name === "home") { this.scrollTo(Math.max(0, this.total)); return true; } if (ctrl && name === "end") { this.scrollTo(0); return true; }

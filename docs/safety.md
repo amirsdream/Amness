@@ -40,15 +40,15 @@ Notes about the provider:
 
   | System | Where the key is saved | Protection |
   |---|---|---|
-  | macOS | the login Keychain (service `amness`) | encrypted by macOS |
+  | macOS | the login Keychain (service `amness`, one entry per provider, for example `apiKey-anthropic`) | encrypted by macOS |
   | Linux with a desktop keyring | the secret service, through `secret-tool` | encrypted by the keyring |
-  | Windows | `~/.amness/secrets/apiKey.dpapi` | encrypted with DPAPI: only your Windows user on this machine can decrypt it |
+  | Windows | `~/.amness/secrets/apiKey-<provider>.dpapi` | encrypted with DPAPI: only your Windows user on this machine can decrypt it |
   | Docker or Kubernetes | nowhere: kept in memory for that run | nothing is written to the image or a volume. Pass the key as an environment variable or a secret file (`ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic`). |
   | Linux server with no keyring | `~/.amness/config.json` with mode 600 | **not encrypted**, only your user can read it. Prefer an environment variable or your platform's secret manager. |
 
 - Amness passes the key to the system tool on standard input, never on the command line, where other users could see it in the process list.
 - A key that an older version saved in `config.json` is moved to the key store the next time you start Amness, and removed from the file once the move is checked.
-- To remove a saved key, open the settings and clear "API key", or on macOS run `security delete-generic-password -s amness -a apiKey`.
+- To remove a saved key, open the settings and clear "API key", or on macOS run `security delete-generic-password -s amness -a apiKey-anthropic` (use `apiKey-openai` and so on for the others).
 - The environment variable wins over the saved key.
 - Amness does not write keys into a project folder.
 - Commands the agent runs do not get your Amness keys. The variables `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `TAVILY_API_KEY`, `OPENROUTER_API_KEY` and `AMNESS_OTLP` are removed from their environment (`childEnv` in `src/secrets.ts`).

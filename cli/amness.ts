@@ -15,7 +15,7 @@ import { runPlugin } from "./plugincli.ts";
 import { runSchedule } from "./schedulecli.ts";
 import { ACP_HELP, runAcp } from "./acpcli.ts";
 import { runEval, runTune } from "./evalcli.ts";
-import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, home, loadConfig, mask, ready, saveConfig, type Config, type ProviderId } from "./config.ts";
+import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, home, keyFor, loadConfig, mask, ready, saveConfig, type Config, type ProviderId } from "./config.ts";
 import { where } from "./keystore.ts";
 import { DEMO_TASK, explain, runDemo } from "./demo.ts";
 import { formatEvent } from "./format.ts";
@@ -71,7 +71,7 @@ async function ensureReady(): Promise<boolean> {
   if (!id) return false;
   Object.assign(cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model });
   if (id === "custom" || id === "ollama") { cfg.baseUrl = (await ask("Base URL", cfg.baseUrl)) || cfg.baseUrl; cfg.model = (await ask("Model", cfg.model)) || cfg.model; }
-  if (PROVIDERS[id].needsKey) cfg.apiKey = (await ask(`API key (hidden; ${where()})`, "", { secret: true })) || undefined;
+  if (PROVIDERS[id].needsKey) cfg.apiKey = keyFor(id).key ?? ((await ask(`API key (hidden; ${where()})`, "", { secret: true })) || undefined);
   saveConfig(cfg);
   if (!ready(cfg)) return false;
   return (await testConnection(true)) || (await confirm("The test failed. Keep going anyway?", false));
@@ -339,7 +339,7 @@ async function settings() {
     try {
     if (what === "provider") {
       const id = await select("Provider", (Object.keys(PROVIDERS) as ProviderId[]).map((k) => ({ label: PROVIDERS[k].label, value: k, hint: PROVIDERS[k].baseUrl })));
-      if (id) Object.assign(cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model });
+      if (id) Object.assign(cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model, apiKey: keyFor(id).key });
     }
     else if (what === "model") {
       if (cfg.provider === "anthropic" || cfg.provider === "openai") {

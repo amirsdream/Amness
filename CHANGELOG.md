@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Several providers at once:** each provider keeps its own saved key. `/connect` (alias `/keys`) shows which providers are connected and lets you add, replace or remove a key; `/provider` marks connected ones and uses the saved key. `OPENROUTER_API_KEY` is read for OpenRouter. A key from an older version moves to the provider that was active.
+- **Slash menu:** `/` now lists every command under category titles, scrolls with ↑ ↓ and PgUp/PgDn, and shows your position.
+
 ## 0.1.2 (2026-10-31)
 
 First public version. (0.1.0 and 0.1.1 were staged on npm but never released; they lacked parts of the key store and the bundled Claude SDK below.) A terminal coding agent for OpenAI, Claude and local models, with a full-screen and an inline interface, headless mode, evals, memory, MCP and a library API.

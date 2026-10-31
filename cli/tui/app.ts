@@ -15,7 +15,7 @@ import { BlockStore } from "./blocks.ts";
 import { buildCommands, type Cmd } from "./commands.ts";
 import { FullView } from "./full.ts";
 import { loadCustomCommands } from "./custom.ts";
-import { FileIndex, applySuggestion, rankCommands, rankFiles, tokenAtCursor, type Suggestion, type Token } from "./complete.ts";
+import { FileIndex, applySuggestion, menuRows, rankCommands, rankFiles, tokenAtCursor, type Suggestion, type Token } from "./complete.ts";
 import { Editor } from "./editor.ts";
 import { KeyParser, PASTE_OFF, PASTE_ON, type Key } from "./keys.ts";
 import { renderMarkdown, takeCompleteBlocks } from "./markdown.ts";
@@ -249,11 +249,14 @@ export class App {
   }
   setTitle(t: string) { if (this.io.output.isTTY !== false) this.io.output.write(`\x1b]0;${t}\x07`); }
   private suggLines(w: number): string[] {
-    const s = this.sugg!, win = 8, top = Math.max(0, Math.min(s.sel - 3, s.items.length - win));
-    return s.items.slice(top, top + win).map((it, i) => {
-      const on = top + i === s.sel, label = s.kind === "file" ? it.label : it.label.padEnd(12);
+    const s = this.sugg!, { rows, above, below } = menuRows(s.items, s.sel, Math.min(12, Math.max(4, this.screen.rows - 8)));
+    const lines = rows.map((r) => {
+      if ("head" in r) return dim(`  ── ${r.head} ${"─".repeat(Math.max(2, 20 - r.head.length))}`);
+      const it = s.items[r.item], on = r.item === s.sel, label = s.kind === "file" ? it.label : it.label.padEnd(16);
       return (on ? cyan("❯ ") + bold(cyan(label)) : "  " + label) + (it.detail ? "  " + (on ? gray(it.detail) : dim(it.detail)) : "");
     }).map((l) => (cellWidth(l) > w ? l.slice(0, w + 12) : l));
+    if (above || below) lines.push(dim(`  ${s.sel + 1}/${s.items.length}  ${above ? "↑" : " "}${below ? "↓" : " "}  ↑↓ move · PgUp/PgDn page`));
+    return lines;
   }
   private tick = () => { this.frame++; this.render(); };
   private ensureTimer() { if (!this.timer) this.timer = setInterval(this.tick, 100); }
@@ -292,6 +295,7 @@ export class App {
       if (ed.text.slice(0, ed.cursorIndex).endsWith("\\")) { ed.backspace(); ed.newline(); return this.after(); }
       return void this.submit();
     }
+    if (this.sugg && (k.name === "pageup" || k.name === "pagedown")) { const n = this.sugg.items.length; this.sugg.sel = Math.max(0, Math.min(n - 1, this.sugg.sel + (k.name === "pageup" ? -8 : 8))); return this.render(); }
     if (k.name === "up" || k.name === "down") {
       if (this.sugg) { const n = this.sugg.items.length; this.sugg.sel = (this.sugg.sel + (k.name === "up" ? n - 1 : 1)) % n; return this.render(); }
       if (!ed.vertical(k.name === "up" ? -1 : 1)) k.name === "up" ? ed.historyPrev() : ed.historyNext();

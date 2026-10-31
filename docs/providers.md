@@ -69,6 +69,17 @@ The model list in `/model` (with prices per million tokens as shown in the picke
 - If the chat says "check your key with /provider", the provider answered with an authentication error (401 or 403).
 - The test call checks that the model replies. It does not check that the model can call tools.
 
+## Connect several providers
+
+You can keep a key for every provider at the same time. Each key is saved on its own (in the Keychain, the Linux keyring or DPAPI), so switching provider never overwrites another key.
+
+1. In the chat, type `/connect`. You see every provider with `●` (connected) or `○` (not connected), and where the key comes from: a saved key, or an environment variable.
+2. Choose a provider. If it has no key, Amness asks for one (hidden). If it has one, you can use it now, replace the key, or remove the saved key.
+3. The menu stays open, so you can add the next provider. Press `Esc` when you are done.
+4. Switch between them with `/provider`. Amness uses the saved key of the provider you pick, and asks only if there is none.
+
+An environment variable wins over a saved key for its own provider: `ANTHROPIC_API_KEY` for Claude, `OPENROUTER_API_KEY` (or `OPENAI_API_KEY`) for OpenRouter, and `OPENAI_API_KEY` for the others. Environment keys are never saved. **Limit:** a key from an older version moves to the provider that was active when you first start the new version, so check `/connect` once.
+
 ## Switch provider, model or effort
 
 **How to switch in the chat.**
@@ -152,7 +163,8 @@ In `auto` mode Amness fixes these cases for you:
 
 | Variable | What it does |
 |---|---|
-| `OPENAI_API_KEY` | The key for every provider except `anthropic`. |
+| `OPENAI_API_KEY` | The key for every provider except `anthropic` (and for OpenRouter when `OPENROUTER_API_KEY` is not set). |
+| `OPENROUTER_API_KEY` | The key for `openrouter`. |
 | `ANTHROPIC_API_KEY` | The key for `anthropic`. |
 | `OPENAI_BASE_URL` | The base URL for non-Claude providers. |
 | `AMNESS_MODEL` | The model id. It wins over the saved config. |

@@ -3,8 +3,8 @@ import { relatives } from "./session.ts";
 import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
 import { join, resolve } from "node:path";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
-import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, type ProviderId } from "../config.ts";
-import { where } from "../keystore.ts";
+import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, keyFor, storeKey, type Connection, type ProviderId } from "../config.ts";
+import { noStore, where } from "../keystore.ts";
 import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
 import { estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
@@ -20,6 +20,18 @@ export type Cmd = { name: string; help: string; alias?: string; args?: string; /
 
 const INIT_PROMPT = "Explore this repository and write an AGENTS.md at the repo root for future coding sessions: what the project is, how to build/test/run it (exact commands), the code layout, conventions you can verify from the code, and gotchas. Keep it under 80 lines and do not invent anything you cannot confirm from the files.";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+const keyStatus = (c: Connection) => !c.needsKey ? "local, no key needed" : c.source === "env" ? `connected · from ${c.env}` : c.source === "saved" ? `connected · ${noStore() ? "this session only" : where()}` : "not connected";
+
+/** Make `id` the active provider, using its saved key (or asking for one). Returns false if the user gave up. */
+async function switchProvider(a: App, id: ProviderId): Promise<boolean> {
+  let apiKey = keyFor(id).key;
+  if (PROVIDERS[id].needsKey && !apiKey) { apiKey = await a.askText(`${PROVIDERS[id].label} API key (hidden; ${where()})`, { secret: true }); if (!apiKey) return false; }
+  Object.assign(a.cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model, apiKey });
+  if (id === "custom" || id === "ollama") { const m = await a.askText("Model id", { initial: a.cfg.model }); if (m) a.cfg.model = m; const u = await a.askText("Base URL", { initial: a.cfg.baseUrl }); if (u) a.cfg.baseUrl = u; }
+  a.saveConfig(); a.buildAgent(); a.say(`provider → ${cyan(PROVIDERS[id].label)}, model ${cyan(a.cfg.model)}`, dim);
+  return true;
+}
 
 export function buildCommands(): Cmd[] {
   return [
@@ -37,15 +49,37 @@ export function buildCommands(): Cmd[] {
       if (a.cfg.effort && a.cfg.provider !== "anthropic" && !effortsFor(id).includes(a.cfg.effort)) { a.say(`effort "${a.cfg.effort}" is not valid for ${id}; using the model default`, yellow); a.cfg.effort = undefined; }
       a.saveConfig(); a.buildAgent(); a.say(`model → ${cyan(id)}`, dim);
     } },
-    { name: "provider", help: "switch provider (OpenAI, Claude, Ollama…)", run: async (a) => {
-      const id = await a.pick<ProviderId>("Provider", (Object.keys(PROVIDERS) as ProviderId[]).map((k) => ({ label: PROVIDERS[k].label, value: k, hint: PROVIDERS[k].baseUrl })));
-      if (!id) return;
-      const key = id === "anthropic" ? process.env.ANTHROPIC_API_KEY : process.env.OPENAI_API_KEY;
-      let apiKey = key;
-      if (PROVIDERS[id].needsKey && !apiKey) { apiKey = await a.askText(`${PROVIDERS[id].label} API key (hidden; ${where()})`, { secret: true }); if (!apiKey) return; }
-      Object.assign(a.cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model, apiKey });
-      if (id === "custom" || id === "ollama") { const m = await a.askText("Model id", { initial: a.cfg.model }); if (m) a.cfg.model = m; const u = await a.askText("Base URL", { initial: a.cfg.baseUrl }); if (u) a.cfg.baseUrl = u; }
-      a.saveConfig(); a.buildAgent(); a.say(`provider → ${cyan(PROVIDERS[id].label)}, model ${cyan(a.cfg.model)}`, dim);
+    { name: "provider", help: "switch provider (OpenAI, Claude, Ollama…); each provider keeps its own saved key", run: async (a) => {
+      const list = connections();
+      const id = await a.pick<ProviderId>("Provider", list.map((c) => ({ label: `${!c.needsKey || c.source !== "none" ? "●" : "○"} ${c.label}${c.id === a.cfg.provider ? "  (in use)" : ""}`, value: c.id, hint: keyStatus(c) })));
+      if (id) await switchProvider(a, id);
+    } },
+    { name: "connect", alias: "keys", help: "add, replace or remove API keys for several providers and see which are connected", run: async (a) => {
+      for (;;) {
+        const list = connections();
+        const id = await a.pick<ProviderId>("Providers   ● connected   ○ not connected", list.map((c) => ({ label: `${!c.needsKey || c.source !== "none" ? "●" : "○"} ${c.label}${c.id === a.cfg.provider ? "  (in use)" : ""}`, value: c.id, hint: keyStatus(c) })));
+        if (!id) return;
+        const c = list.find((x) => x.id === id)!;
+        if (!c.needsKey) { a.say(`${c.label} needs no key. Use /provider to switch to it.`, dim); continue; }
+        const act = c.source === "none" ? "add" : await a.pick("What do you want to do?", [
+          ...(id === a.cfg.provider ? [] : [{ label: "Use this provider now", value: "use" }]),
+          { label: c.source === "env" ? `Also save a key (${c.env} still wins while it is set)` : "Replace the key", value: "add" },
+          ...(c.source === "saved" ? [{ label: "Remove the saved key", value: "remove" }] : []),
+        ]);
+        if (!act) continue;
+        if (act === "use") { await switchProvider(a, id); continue; }
+        if (act === "add") {
+          const key = await a.askText(`${c.label} API key (hidden; ${where()})`, { secret: true });
+          if (!key) continue;
+          storeKey(id, key);
+          if (id === a.cfg.provider) { a.cfg.apiKey = keyFor(id).key; a.buildAgent(); }
+          a.say(`${green("✓")} ${c.label} connected (${noStore() ? "this session only" : where()})`, dim);
+        } else {
+          storeKey(id, undefined);
+          if (id === a.cfg.provider) { a.cfg.apiKey = keyFor(id).key; a.buildAgent(); }
+          a.say(`${c.label}: saved key removed`, dim);
+        }
+      }
     } },
     { name: "effort", help: "reasoning effort for the current model", args: "[level]", run: async (a, arg) => {
       const levels = a.cfg.provider === "anthropic" ? [...EFFORTS] : effortsFor(a.cfg.model);
