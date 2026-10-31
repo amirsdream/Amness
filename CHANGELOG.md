@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.1 (2026-10-31)
+## 0.1.2 (2026-10-31)
 
-First public version. (0.1.0 was staged on npm but never released; it lacked the key store and the bundled Claude SDK below.) A terminal coding agent for OpenAI, Claude and local models, with a full-screen and an inline interface, headless mode, evals, memory, MCP and a library API.
+First public version. (0.1.0 and 0.1.1 were staged on npm but never released; they lacked parts of the key store and the bundled Claude SDK below.) A terminal coding agent for OpenAI, Claude and local models, with a full-screen and an inline interface, headless mode, evals, memory, MCP and a library API.
 
 - **Loop and guards:** claims ledger and audit of the finish summary, stagnation detection from test/build output, optional independent reviewer, loop and cycle detection, budget notes and a final report before the token cap, read-only streak check.
 - **Safety:** permission rules with a floor that holds in yolo, OS sandbox (macOS Seatbelt, Linux bubblewrap), taint check for commands copied from untrusted text, secrets redaction, shell undo through git snapshots, optional approval reviewer.
