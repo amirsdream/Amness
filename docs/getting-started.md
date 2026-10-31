@@ -21,11 +21,7 @@ Amness is a package on npm. You install it with one command.
    npm install -g amness
    ```
 
-   If you want to use Claude models, install the Anthropic package next to it. OpenAI and local models do not need it.
-
-   ```bash
-   npm install -g @anthropic-ai/sdk
-   ```
+   This also installs the Anthropic SDK, which the Claude models use. It is an optional dependency, so Amness still installs if the SDK cannot. If you see "Claude support needs the SDK", run `npm install -g @anthropic-ai/sdk`.
 
    You can also run Amness once without installing it: `npx amness`.
 

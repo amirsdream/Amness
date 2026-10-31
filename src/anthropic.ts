@@ -1,7 +1,7 @@
 import type { Message, Model, ToolCall, ToolSpec } from "./harness.ts";
 
 /**
- * Claude backend via the official Anthropic SDK (an optional peer dependency: `npm i @anthropic-ai/sdk`).
+ * Claude backend via the official Anthropic SDK (an optional dependency, installed with the package: `npm i @anthropic-ai/sdk` if it is missing).
  * Defaults follow Anthropic's guidance for agent loops: adaptive thinking, auto prompt caching, streaming,
  * server-side refusal fallbacks. Credentials: `apiKey`, ANTHROPIC_API_KEY, or an `ant auth login` profile.
  */

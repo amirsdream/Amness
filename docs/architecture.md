@@ -87,7 +87,7 @@ flowchart TB
 
 **Limits.** The diagrams show the main paths only. Many small files in `src/` (for example `permissions.ts`, `hooks.ts`, `sandbox.ts`) are called by the agent layer and are not drawn.
 
-The runtime has no required packages. The Claude adapter needs the optional package `@anthropic-ai/sdk`.
+The runtime has no required packages. The Claude adapter uses the optional dependency `@anthropic-ai/sdk`, which npm installs with Amness.
 
 ## Find which file does what
 

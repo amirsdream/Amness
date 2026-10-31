@@ -35,7 +35,7 @@ To use the latest `main` before it is released, clone the repository, run `npm i
 
 The CI job `package` packs the tarball, installs it in a new folder, and checks that `import("amness")` works.
 
-**Limits.** The Claude adapter needs the optional package `@anthropic-ai/sdk` (`npm install @anthropic-ai/sdk`). The OpenAI adapter uses plain `fetch` and has no dependency.
+**Limits.** The Claude adapter uses the optional dependency `@anthropic-ai/sdk`, which `npm install amness` adds for you (if it is missing, run `npm install @anthropic-ai/sdk`). The OpenAI adapter uses plain `fetch` and has no dependency.
 
 ## Run a coding agent
 

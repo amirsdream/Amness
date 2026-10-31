@@ -5,7 +5,7 @@
 [![CI](https://github.com/amirsdream/Amness/actions/workflows/ci.yml/badge.svg)](https://github.com/amirsdream/Amness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933)
-![Runtime dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)
+![Runtime dependencies](https://img.shields.io/badge/required%20dependencies-0-brightgreen)
 
 <p align="center"><img src="docs/images/chat.png" alt="Amness full-screen interface: cards, diff, sidebar, input panel" width="900"></p>
 
@@ -17,7 +17,7 @@ You need **Node 22.18+**, git, and an API key (OpenAI or Anthropic) or a local m
 
 ```bash
 npm install -g amness                 # gives you the `amness` command
-export OPENAI_API_KEY=sk-...          # or ANTHROPIC_API_KEY=sk-ant-... (Claude also needs: npm install -g @anthropic-ai/sdk)
+export OPENAI_API_KEY=sk-...          # or ANTHROPIC_API_KEY=sk-ant-...
 cd ~/your-project && amness           # start a conversation in your project
 ```
 
@@ -184,7 +184,7 @@ More plugin ideas (finish gates, policies, loop strategies, custom metrics) are 
 | **Evaluate and improve** | `amness eval` (ablations, SWE-bench-format suites, injection suite, leak audit), trace replay, failure mining, `amness tune` (changes kept only if they hold on unseen tasks). |
 | **Works where you work** | Full-screen and inline terminal UI, headless mode, git worktree sessions with `/review` and `/pr`, scheduled runs, a GitHub Action, an editor server (`amness acp`), image input, session branching. |
 
-Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local server. No runtime dependencies.
+Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local server. No required dependencies (the Claude SDK is an optional one that npm installs for you).
 
 ## Choose Amness if, choose something else if
 
@@ -196,7 +196,7 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 
 - **Tested:** about 375 automated tests (scripted models, mock servers, real git repositories, a pseudo-terminal), CI on Linux and Windows, and a Docker and npm-package smoke test.
 - **Measured on real models (small):** the guards and the reviewer showed no detectable pass-rate effect on [these tasks and models](docs/evaluation.md#measured-results-so-far); the guards and reviewer cost extra tokens, most visibly on strong models. Every newer feature (routing, `tune`, best-of-n, parallel parts, language-server diagnostics, the approval reviewer) is implemented and unit-tested but **not yet shown to help on real work**. The [roadmap](ROADMAP.md) lists the measurements still to run.
-- **Platforms:** developed on macOS and Linux. Windows runs the test suite but has no OS sandbox. Installed from npm; the Claude backend needs `@anthropic-ai/sdk` installed next to it.
+- **Platforms:** developed on macOS and Linux. Windows runs the test suite but has no OS sandbox. Installed from npm; the Claude SDK comes with it.
 - Cost figures are estimates. Small local models vary widely in tool-calling quality.
 
 ## Documentation
