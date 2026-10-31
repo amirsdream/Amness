@@ -52,7 +52,8 @@ test("fetchModels: OpenAI-style and Anthropic-style endpoints, failures give an 
     const n = seen.length; await fetchModels({ provider: "openai", baseUrl: base + "/v1", apiKey: "sk-x" }); assert.equal(seen.length, n, "second call is served from the cache");
     assert.deepEqual(await fetchModels({ provider: "openai", baseUrl: base + "/v1/models", apiKey: "k" }), []);                // a 500 gives []
   } finally { srv.close(); }
-  assert.deepEqual(await fetchModels({ provider: "openai", baseUrl: "http://127.0.0.1:1/v1" }), []);                          // nothing listening gives []
+  assert.deepEqual(await fetchModels({ provider: "custom", baseUrl: "http://127.0.0.1:1/v1" }), []);                          // nothing listening gives []
+  const n2 = seen.length; assert.deepEqual(await fetchModels({ provider: "openai", baseUrl: base + "/v1" }), []); assert.equal(seen.length, n2, "no key for a hosted provider: no request is made");
 });
 
 test("the most recent tool call keeps its output open (a short preview); older ones stay collapsed; the rest is behind /output", () => {

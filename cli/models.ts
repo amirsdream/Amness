@@ -7,6 +7,7 @@ const TTL = 10 * 60_000;
 const NOT_CHAT = /embed|whisper|tts|dall-e|moderation|davinci|babbage|transcribe|realtime|audio|image|rerank/i;
 
 export async function fetchModels(p: ModelProbe, fetchImpl: typeof fetch = fetch): Promise<string[]> {
+  if (!p.apiKey && p.provider !== "ollama" && p.provider !== "custom") return [];   // a hosted provider refuses a request with no key: do not even try
   const key = `${p.provider}|${p.baseUrl}|${(p.apiKey ?? "").slice(-6)}`, hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL) return hit.ids;
   const base = p.baseUrl.replace(/\/+$/, "");
