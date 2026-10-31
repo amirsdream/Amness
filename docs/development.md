@@ -70,7 +70,7 @@ The file `.github/workflows/ci.yml` has these jobs:
 | `windows` | `npm run typecheck` and `npm test` on Windows. It is informational (`continue-on-error`) |
 | `action` | runs the GitHub Action (`action.yml`) with no API key and checks that it reports instead of crashing |
 
-A second workflow, `.github/workflows/publish.yml`, runs type check and tests, then `npm publish`, when you push a tag that starts with `v`. It needs an `NPM_TOKEN` secret. Whether the package is published on npm is not verified here.
+A second workflow, `.github/workflows/publish.yml`, runs type check and tests, then `npm stage publish --provenance`, when you push a tag that starts with `v`. It needs an `NPM_TOKEN` secret (a stage-only token is enough). It only stages the version; you release it with `npm stage approve <id>` and your 2FA code.
 
 ## Find your way around the project
 
