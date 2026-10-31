@@ -62,7 +62,7 @@ test("Windows DPAPI: the key is encrypted on disk, round-trips, and is removed o
   const f = join(home, "config.json");
   writeFileSync(f, JSON.stringify({ provider: "openai", apiKey: KEY }));
   assert.equal(child(home, `console.log(c.loadConfig().apiKey)`, env), KEY);
-  const probe = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$p = [Console]::In.ReadToEnd().Trim(); ConvertTo-SecureString $p -AsPlainText -Force | ConvertFrom-SecureString"], { input: "abcd", encoding: "utf8", timeout: 60_000 });
+  const probe = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$p = [Console]::In.ReadToEnd().Trim(); ConvertTo-SecureString $p -AsPlainText -Force | ConvertFrom-SecureString"], { input: "abcd", encoding: "utf8", timeout: 60_000, env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toLowerCase() !== "psmodulepath")) });
   assert.ok(!readFileSync(f, "utf8").includes(KEY), `the key must be gone from the config file (powershell probe: status ${probe.status}, error ${probe.error}, stderr ${probe.stderr?.slice(0, 300)}, stdout length ${probe.stdout?.length})`);
   const blob = join(home, "secrets", "apiKey.dpapi");
   assert.ok(existsSync(blob) && !readFileSync(blob, "utf8").includes(KEY), "the stored string is encrypted");
