@@ -76,11 +76,24 @@ export const defaultSkin: Skin = {
 /** Back-compat: highlight with the default skin's colours. */
 export const highlight = (line: string, lang: string) => highlightWith(line, lang, defaultSkin.hl);
 
+/** Take the trailing characters that are not part of a link off a URL found in prose: sentence punctuation, markdown emphasis, and a closing bracket that has no opening one. */
+export function trimUrl(u: string): string {
+  for (;;) {
+    const t = u.replace(/[.,;:!?*_'"]+$/, "");
+    if (t.endsWith(")") && (t.match(/\(/g) ?? []).length < (t.match(/\)/g) ?? []).length) { u = t.slice(0, -1); continue; }
+    if (t === u) return u;
+    u = t;
+  }
+}
+/** Every web link in a piece of text, in order. */
+export const urlsIn = (source: string): string[] => [...source.matchAll(/https?:\/\/[^\s<>"'`\[\]\x00\x1b]+/g)].map((m) => trimUrl(m[0])).filter((u) => /^https?:\/\/[^/]+\.[^/]+/i.test(u) || /^https?:\/\/localhost/i.test(u));
+
 /** Inline spans: `code`, **bold**, *italic*, ~~strike~~, [text](url). Code is protected first so nothing inside it is reformatted. */
 export function inline(s: string, skin: Skin = defaultSkin): string {
   const codes: string[] = [];
   s = s.replace(/`([^`\n]+)`/g, (_m, c) => `\x00${codes.push(skin.code(c)) - 1}\x00`);
   s = s.replace(/\[([^\[\]\n]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => skin.link(t, u));
+  s = s.replace(/(?<![\w@])https?:\/\/[^\s<>"'`\[\]\x00\x1b]+/g, (m) => { const u = trimUrl(m); return `\x1b[4m${u}\x1b[24m${m.slice(u.length)}`; });   // links look like links
   s = s.replace(/\*\*([^*\n]+)\*\*|__([^_\n]+)__/g, (_m, a, b) => skin.bold(a ?? b));
   s = s.replace(/(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])|(?<![\w_])_([^_\s][^_\n]*?)_(?![\w_])/g, (_m, a, b) => skin.italic(a ?? b));
   s = s.replace(/~~([^~\n]+)~~/g, (_m, t) => skin.strike(t));

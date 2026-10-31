@@ -2,7 +2,7 @@
 import type { Block } from "./blocks.ts";
 import { type Cell, mix, parseAnsi } from "./ansi.ts";
 import { langOf, renderDiffRows } from "./diffview.ts";
-import { highlightWith, renderMarkdown, type HlKind } from "./markdown.ts";
+import { highlightWith, renderMarkdown, urlsIn, type HlKind } from "./markdown.ts";
 import { B, BOLD, F, ITAL, chip, fit, split, themeSkin } from "./rich.ts";
 import { cellWidth, clipWidth, strip, wrapAnsi } from "./text.ts";
 import type { Theme } from "./themes.ts";
@@ -18,7 +18,7 @@ export type RenderCtx = {
   /** this is the most recent tool call of the lead agent: its output stays open (a short preview) until the next one starts */
   last?: boolean;
 };
-export type Hit = { row: number; x0: number; x1: number; kind: "toggle" | "more" | "copy"; id: number; /** for "copy": what lands on the clipboard */ text?: string };
+export type Hit = { row: number; x0: number; x1: number; kind: "toggle" | "more" | "copy" | "link"; id: number; /** for "copy": what lands on the clipboard */ text?: string };
 export type Rendered = { rows: Cell[][]; hits: Hit[]; text: string[] };
 
 const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -74,8 +74,9 @@ export function renderGroup(bs: ToolBlock[], open: boolean, c: RenderCtx): Rende
 export function renderBlock(b: Block, c: RenderCtx): Rendered {
   const t = c.theme, bw = c.width - MARGIN * 2, rows: string[] = [], hits: Hit[] = [];
   const blank = () => rows.push("");
-  const done = (): Rendered => {
+  const done = (linkSource?: string): Rendered => {
     const cells = rows.map((r) => padLeft(parseAnsi(" ".repeat(MARGIN) + r), c.width));
+    if (linkSource) hits.push(...linkHits(linkSource, cells, b.id));
     return { rows: cells, hits, text: cells.map((r) => r.map((x) => x.ch).join("").replace(/\s+$/, "")) };
   };
 
@@ -97,7 +98,7 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
     // each code block's "copy" label is a button: find its header rows (in order) and pair them with the fenced blocks of the source
     const codes = codeBlocks(b.text); let k = 0;
     md.forEach((l, i) => { if (k < codes.length && /^ ?[\w+#.-]+\s+copy\s*$/.test(strip(l))) hits.push({ row: rows.length - md.length + i, x0: MARGIN + 3 + bw - 3 - 6, x1: MARGIN + bw, kind: "copy", id: b.id, text: codes[k++] }); });
-    return done();
+    return done(b.text);
   }
 
   if (b.kind === "summary") {
@@ -106,7 +107,7 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
     rows.push(fit(F(t.ok, "▎") + " " + chip("✓ done", t.onAccent, t.ok, true), bw, t.surface));
     md.forEach((l) => rows.push(fit(F(t.ok, "▎") + "  " + l, bw, t.surface)));
     rows.push(fit(F(t.ok, "▎"), bw, t.surface));
-    return done();
+    return done(b.text);
   }
 
   if (b.kind === "notice") {
@@ -187,3 +188,37 @@ function padLeft(cells: Cell[], width: number): Cell[] {
   return out;
 }
 void cellWidth;
+
+/**
+ * Where each link of a message landed in the drawn rows, as click targets. The links come from the message's own text, so their exact address is known even when a long one was
+ * hard-wrapped over several rows (each piece becomes a target for the same address). Links inside code blocks and tool output are not included: only assistant text and summaries.
+ */
+export function linkHits(source: string, cells: Cell[][], id: number): Hit[] {
+  const urls = urlsIn(source); if (!urls.length) return [];
+  const text = cells.map((r) => r.map((x) => x.ch).join("")), xs = cells.map((r) => { const m: number[] = []; let x = 0; for (const cell of r) { for (let k = 0; k < Math.max(1, cell.ch.length); k++) m.push(x); x += cell.w; } m.push(x); return m; });
+  const out: Hit[] = []; let row0 = 0, col0 = 0;
+  for (const u of urls) {
+    let found: { row: number; a: number; b: number }[] | undefined;
+    for (let r = row0; r < text.length && !found; r++) {
+      for (let j = text[r].indexOf("http", r === row0 ? col0 : 0); j >= 0 && !found; j = text[r].indexOf("http", j + 1)) found = matchAcross(u, text, r, j);
+    }
+    if (!found) continue;
+    for (const seg of found) out.push({ row: seg.row, x0: xs[seg.row][seg.a], x1: xs[seg.row][seg.b], kind: "link", id, text: u });
+    const last = found[found.length - 1]; row0 = last.row; col0 = last.b;
+  }
+  return out;
+}
+/** Does the URL start at text[row][col] and continue over the following rows (their indentation skipped)? Returns the piece on each row. */
+function matchAcross(u: string, text: string[], row: number, col: number): { row: number; a: number; b: number }[] | undefined {
+  const segs: { row: number; a: number; b: number }[] = [];
+  let rem = u, r = row, a = col;
+  for (;;) {
+    const s = text[r].slice(a).replace(/\s+$/, "");
+    if (!s) return undefined;
+    if (s.startsWith(rem)) { segs.push({ row: r, a, b: a + rem.length }); return segs; }          // the URL ends on this row (maybe with text after it)
+    if (!rem.startsWith(s)) return undefined;
+    segs.push({ row: r, a, b: a + s.length }); rem = rem.slice(s.length);                          // this row is all URL: the rest is on the next row
+    if (++r >= text.length) return undefined;
+    a = text[r].length - text[r].trimStart().length;
+  }
+}

@@ -2,6 +2,7 @@
 import { copyToClipboard } from "./clipboard.ts";
 import { menuRows } from "./complete.ts";
 import { capNote } from "./looppanel.ts";
+import { openUrl, openableUrl } from "./openurl.ts";
 import { basename } from "node:path";
 import type { App } from "./app.ts";
 import { A, mix, type Cell } from "./ansi.ts";
@@ -194,7 +195,21 @@ export class FullView {
       this.regions.push({ x: px, y: y0 + h - 1, w: lw, h: 1, kind: "jump", click: () => this.scrollTo(0) });
     }
   }
+  /** Opens a link; a test can replace it. */
+  opener: (url: string) => Promise<boolean> = openUrl;
+  private linkTimer?: ReturnType<typeof setTimeout>;
+  /** A click on a link opens it in the browser. A double click copies the address instead, so it waits a moment to see which one this is. */
+  private openLink(url: string) {
+    if (this.linkTimer) { clearTimeout(this.linkTimer); this.linkTimer = undefined; }
+    if (this.lastClick.n >= 2) { this.copy(url); this.toast("copied the link", "ok"); return; }
+    const u = openableUrl(url); if (!u) { this.copy(url); this.toast("not a web link: copied instead", "warn"); return; }
+    this.linkTimer = setTimeout(() => {
+      this.linkTimer = undefined; this.toast(`opening ${u.host}`, "info"); this.app.render();
+      void this.opener(u.href).then((ok) => { if (!ok) { this.copy(u.href); this.toast("could not open a browser here: link copied", "warn"); this.app.render(); } });
+    }, 300);
+  }
   private hitClick(h: Hit, b: Block, group = false) {
+    if (h.kind === "link" && h.text) return this.openLink(h.text);
     const before = this.total;
     if (h.kind === "copy" && h.text !== undefined) { this.copy(h.text); this.toast(`copied code block (${h.text.length} characters)`, "ok"); return; }
     if (group) { if (this.groupOpen.has(b.id)) this.groupOpen.delete(b.id); else this.groupOpen.add(b.id); }

@@ -126,3 +126,39 @@ test("keep-warm: while idle on Claude, a tiny ping keeps the cache (at most 3 pe
   assert.equal(pings.length, 3);                                           // exactly three, then it stops
   assert.ok(on.has("cache kept warm"));
 });
+
+test("links: a click opens the address in the browser, a double click copies it, a bad scheme is never opened", async () => {
+  const url = "https://example.com/docs/start?x=1";
+  const t = rig([say(`Read the guide: ${url} and then continue.`)], { cols: 132, rows: 40, files, ui: "full" });
+  const clip: string[] = [], opened: string[] = [];
+  (t.app.full as any).copy = (s: string) => void clip.push(s);
+  (t.app.full as any).opener = async (u: string) => { opened.push(u); return true; };
+  await t.start(); await t.submit("go"); await t.until(() => t.idle());
+  const lines = () => t.screen().split("\n"), where = () => { const y = lines().findIndex((r) => r.includes(url)); return { y, x: lines()[y].indexOf(url) }; };
+  const p = where(); assert.ok(p.y >= 0, t.screen());
+  // one click: opens after a short wait (to see whether a second click follows)
+  await t.type(mouse(0, p.x + 8, p.y + 1)); await t.type(mouse(0, p.x + 8, p.y + 1, true));
+  assert.ok(await t.until(() => opened.length === 1, 2000), "the link was opened"); assert.deepEqual(opened, [url]);
+  assert.ok(await t.until(() => t.has("opening example.com"), 1500), "a notice says where it is going");
+  assert.deepEqual(clip, [], "a single click does not copy anything");
+  // a double click copies the address and does not open it again
+  await t.settle(500);
+  for (let i = 0; i < 2; i++) { await t.type(mouse(0, p.x + 8, p.y + 1)); await t.type(mouse(0, p.x + 8, p.y + 1, true)); }
+  await t.settle(600);
+  assert.deepEqual(clip.at(-1), url); assert.equal(opened.length, 1, "no second open");
+  await t.key(KEY.ctrlD);
+});
+
+test("links: when no browser can be started the address is copied instead, and the user is told", async () => {
+  const url = "https://example.com/a";
+  const t = rig([say(`See ${url} please.`)], { cols: 132, rows: 40, files, ui: "full" });
+  const clip: string[] = [];
+  (t.app.full as any).copy = (s: string) => void clip.push(s);
+  (t.app.full as any).opener = async () => false;
+  await t.start(); await t.submit("go"); await t.until(() => t.idle());
+  const y = t.screen().split("\n").findIndex((r) => r.includes(url)), x = t.screen().split("\n")[y].indexOf(url);
+  await t.type(mouse(0, x + 5, y + 1)); await t.type(mouse(0, x + 5, y + 1, true));
+  assert.ok(await t.until(() => clip.length === 1, 2000), "copied"); assert.equal(clip[0], url);
+  assert.ok(await t.until(() => t.has("could not open a browser"), 1500), t.screen());
+  await t.key(KEY.ctrlD);
+});
