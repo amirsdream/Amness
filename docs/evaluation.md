@@ -262,6 +262,38 @@ Most public benchmarks need a separate environment for each instance, often a Do
 ## Limits and common problems
 
 - A real run costs real tokens. The command prints the worst case and asks first. Use `--max-tokens` and `--max-steps` (default 30) to limit each session.
+- **A spending cap, when you want one.** Nothing is capped by default. Add `--max-cost 0.50` and Amness stops starting new sessions once the estimated spend reaches 50 cents. Sessions that are already running finish, so with `--jobs 4` you can overshoot by up to four sessions. The result file and the report cover only the runs that finished, and say how many were skipped. The estimate prices prompt, cached and completion tokens from the rate card in `cli/tui/pricing.ts`. It is an estimate, not an invoice, and it needs a model with a known price. After every run Amness prints the estimated spend and the cost per session.
+
+## Check how hard your tasks are
+
+A task that every run passes, or that none passes, cannot tell two variants apart. Before you compare variants, run:
+
+```bash
+amness eval --calibrate --yes
+```
+
+This runs only `baseline`, 5 trials per task (change it with `--trials`), and lists each task's pass rate:
+
+```text
+how hard is each task?  (baseline, 5 trials; keep 30% to 70%)
+  keep       explore-answer             3/5 passed  60%
+  too easy   fix-off-by-one             5/5 passed  100%
+  too hard   cross-module-rename        0/5 passed  0%
+```
+
+Keep the tasks marked `keep`. With only 5 trials the pass rate is rough, so treat a task near the edge of the band (30% or 70%) as undecided and run more trials. A few easy tasks are still worth keeping as a "must not get worse" check.
+
+## Checks that read the agent's final message
+
+A task's `check` can be a function that receives the workspace and, as a second argument, what the agent said when it finished:
+
+```ts
+{ name: "say-where", files: {}, task: "create notes.txt and tell me where it is",
+  check: (dir, run) => existsSync(join(dir, "notes.txt")) && /notes\.txt/.test(run?.text ?? ""),
+  solution: { "notes.txt": "x" }, solutionSummary: "Created ./notes.txt" }
+```
+
+`run` also has `steps` and `tokens`. `solutionSummary` is what the reference solution would say. `--selftest` uses it, so a check that depends on the message is still proven sound (it must fail on silence and pass with the reference message). This works for checks written as functions in a `.ts` or `.js` module, not for JSON tasks with a shell command.
 - The built-in suites are small and made by us. They are a regression test for the guards, not proof of quality.
 - `full+route` needs `--cheap-model`. A variant name that Amness does not know stops with an error that lists the known names.
 - `--variants` and `--baseline`: if the baseline name is not among the variants, Amness uses the first variant.

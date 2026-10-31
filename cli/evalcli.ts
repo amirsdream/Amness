@@ -1,8 +1,11 @@
 // `amness eval`: compare harness variants on a task suite, with statistics you can act on.
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { BUILTIN_METRICS, gateCompare, importPlugins, tune, writeProfile, adversarialCases, hardCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
+import { BUILTIN_METRICS, gateCompare, importPlugins, tune, writeProfile, adversarialCases, hardCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, calibrate, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
 import { bold, dim, green, red } from "./ui.ts";
+import { estimateCost, priceOf } from "./tui/pricing.ts";
 import type { Plugin } from "../src/index.ts";
 import { pathToFileURL } from "node:url";
 
@@ -40,9 +43,26 @@ export const EVAL_HELP = `usage: amness eval [flags]
   --out <file>         where to save raw results (default .amness/evals/<time>.json)
   --report <file>      re-analyse saved results; runs nothing
   --selftest           check that every task is solvable and its held-out check is sound; runs no model
+  --max-cost <dollars> stop starting new sessions once the estimated spend reaches this amount (sessions already running finish). Off by default. Needs a model with a known price.
+  --calibrate          how hard is each task? runs only \`baseline\` (5 trials unless you set --trials) and lists each task's pass rate: keep 30% to 70%, drop tasks that are too easy or too hard
   --yes                skip the cost confirmation`;
 
-export async function runEval(argv: string[], deps: { model: () => Model; modelFor?: (id: string) => Model; maxTokens: number; confirm: (q: string) => Promise<boolean> }): Promise<number> {
+/** Estimated dollars for some rows (prompt, cached and completion tokens priced separately; the rate card is in pricing.ts). Null when the model's price is unknown. */
+export function rowsCost(model: string, rows: Row[]): number | null {
+  if (!priceOf(model)) return null;
+  return rows.reduce((n, r) => n + (estimateCost(model, r.prompt ?? r.tokens, Math.max(0, r.tokens - (r.prompt ?? r.tokens)), r.cached ?? 0) ?? 0), 0);
+}
+
+/** What makes a result repeatable: the Amness version and git commit (when run from a clone), and a hash of the tasks (their files, text and checks). */
+export function provenance(cases: { name: string; files: Record<string, string>; task: string; verify?: string; check: unknown; solution?: Record<string, string> }[]) {
+  let commit: string | undefined; try { commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: new URL("..", import.meta.url), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* not a git checkout (an installed package) */ }
+  let version: string | undefined; try { version = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version; } catch { /* no package.json next to us */ }
+  const h = createHash("sha256");
+  for (const x of [...cases].sort((a, b) => a.name.localeCompare(b.name))) h.update(JSON.stringify([x.name, x.files, x.task, x.verify ?? "", typeof x.check === "function" ? x.check.toString() : x.check, x.solution ?? {}]));
+  return { version, commit, suite: h.digest("hex").slice(0, 16), tasks: cases.length };
+}
+
+export async function runEval(argv: string[], deps: { model: () => Model; modelName?: string; modelFor?: (id: string) => Model; maxTokens: number; confirm: (q: string) => Promise<boolean> }): Promise<number> {
   const val = (f: string) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; }, has = (f: string) => argv.includes(f);
   if (has("--help") || has("-h")) { console.log(EVAL_HELP); return 0; }
   try {
@@ -72,19 +92,33 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelF
       for (const r of res) console.log(`${r.ok ? green("ok ") : red("bad")} ${r.case}${r.why ? dim("  " + r.why) : ""}`);
       return res.every((r) => r.ok) ? 0 : 1;
     }
-    const names = variantNames(val("--variants") ?? "ab"), trials = Math.max(1, Number(val("--trials") ?? 3)), jobs = Math.max(1, Number(val("--jobs") ?? 1));
+    const calib = has("--calibrate"), names = variantNames(val("--variants") ?? (calib ? "baseline" : "ab")), trials = Math.max(1, Number(val("--trials") ?? (calib ? 5 : 3))), jobs = Math.max(1, Number(val("--jobs") ?? 1));
     const maxTokens = Number(val("--max-tokens") ?? deps.maxTokens), maxSteps = Number(val("--max-steps") ?? 30);
     const model = deps.model(), cheap = val("--cheap-model") && deps.modelFor ? deps.modelFor(val("--cheap-model")!) : undefined, variants = names.map((n) => harnessVariant(model, n, { maxTokens, maxSteps, cheap, plugins, modelFor: deps.modelFor }));
     const runs = cases.length * variants.length * trials;
     console.log(`${bold("plan")}  ${cases.length} tasks × ${variants.length} variants (${names.join(", ")}) × ${trials} trials = ${bold(String(runs))} agent sessions, up to ${maxTokens.toLocaleString()} tokens each`);
+    const mname = deps.modelName ?? "", maxCost = val("--max-cost") === undefined ? undefined : Number(val("--max-cost"));
+    if (maxCost !== undefined && !(maxCost > 0)) throw new Error("--max-cost needs a positive number of dollars, for example --max-cost 0.50");
+    if (maxCost !== undefined && !priceOf(mname)) throw new Error(`--max-cost needs a known price for the model "${mname}" (see cli/tui/pricing.ts); without one Amness cannot estimate the spend`);
+    const p = priceOf(mname);
+    if (p) console.log(dim(`worst case about $${(runs * maxTokens * p[2] / 1e6).toFixed(2)} (every token priced as output; real runs are far cheaper: most of a session is cached input)${maxCost !== undefined ? ` · stops at about $${maxCost.toFixed(2)}` : " · no spending cap (--max-cost sets one)"}`));
     if (!has("--yes") && !(await deps.confirm(`This calls your model up to ${(runs * maxTokens).toLocaleString()} tokens in the worst case. Continue?`))) return 1;
-    const { rows, analysis } = await evaluate(cases, variants, {
+    const { rows, analysis, stopped, skipped } = await evaluate(cases, variants, {
+      stop: maxCost === undefined ? undefined : (rs) => { const spent = rowsCost(mname, rs) ?? 0; return spent >= maxCost ? `reached the cost cap: about $${spent.toFixed(3)} spent of $${maxCost.toFixed(2)}` : undefined; },
       metrics: Object.keys(useMetrics).length ? useMetrics : undefined, trials, jobs, baseline: val("--baseline"), k: Math.min(3, trials), seed: val("--seed") ? Number(val("--seed")) : undefined,
       onRow: (r) => console.error(`  ${r.pass ? green("PASS") : red("FAIL")} ${r.case.padEnd(22)} ${r.variant.padEnd(18)} ${dim(`${r.steps} steps · ${r.tokens} tok · ${(r.ms / 1000).toFixed(1)}s${r.note ? " · " + r.note : ""}`)}`),
     });
     const out = resolve(val("--out") ?? join(".amness", "evals", new Date().toISOString().replace(/[:.]/g, "-") + ".json"));
     mkdirSync(join(out, ".."), { recursive: true });
-    writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), baseline: analysis.baseline, k: Math.min(3, trials), variants: names, trials, rows }, null, 1));
+    const spent = rowsCost(mname, rows);
+    writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), model: mname || undefined, ...provenance(cases), cliArgs: argv.filter((a, i) => !/key|token/i.test(a) && !/key|token/i.test(argv[i - 1] ?? "")), baseline: analysis.baseline, k: Math.min(3, trials), variants: names, trials, estimatedCost: spent ?? undefined, stopped, rows }, null, 1));
+    if (stopped) console.log(`\n${red("stopped early")}: ${stopped}. ${skipped} planned session${skipped === 1 ? "" : "s"} did not run, so the results below cover only the runs that finished.`);
+    if (spent !== null) console.log(dim(`estimated spend: about $${spent.toFixed(3)} for ${rows.length} session${rows.length === 1 ? "" : "s"}${rows.length ? ` ($${(spent / rows.length).toFixed(4)} each)` : ""}  (an estimate from token counts, not an invoice)`));
+    if (calib) {
+      console.log("\n" + bold("how hard is each task?") + dim(`  (baseline, ${trials} trials; keep 30% to 70%)`));
+      for (const x of calibrate(rows, names[0])) console.log(`  ${x.verdict === "keep" ? green("keep      ") : red(x.verdict.padEnd(10))} ${x.case.padEnd(26)} ${x.passes}/${x.runs} passed  ${dim((x.rate * 100).toFixed(0) + "%")}`);
+      console.log(dim(`raw results: ${out}`)); return 0;
+    }
     if (val("--profile-out")) {
       const rec = recommend(analysis, names.includes("full") ? "full" : analysis.baseline), pm = val("--profile-model") ?? "*";
       console.log("\nguard verdicts:"); for (const v of rec.verdicts) console.log(`  ${v.action === "remove" ? "remove" : v.action === "keep" ? "KEEP  " : "keep? "} ${v.guard.padEnd(11)} ${v.why}`); console.log(`  ${rec.strength}`);

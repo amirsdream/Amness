@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Evals:** `--max-cost <dollars>` (optional, off by default) stops starting sessions at an estimated spend; every run prints its estimated cost. `--calibrate` lists each task's baseline pass rate and which to keep. A task's `check` can read the agent's final message (`run.text`), with `solutionSummary` for the selftest.
+
 ## 0.1.3 (2026-10-31)
 
 - **Several providers at once:** each provider keeps its own saved key. `/connect` (alias `/keys`) shows which providers are connected and lets you add, replace or remove a key; `/provider` marks connected ones and uses the saved key. `OPENROUTER_API_KEY` is read for OpenRouter. A key from an older version moves to the provider that was active.

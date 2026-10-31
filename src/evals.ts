@@ -20,7 +20,9 @@ export type Case = {
   /** Shown to the agent: a command it may run to check its work (and the `finish` gate in the full variant). */
   verify?: string;
   /** Held-out judge: shell command (exit 0 = pass) or function. The agent never sees this. */
-  check: string | ((dir: string) => boolean | string | Promise<boolean | string>);
+  check: string | ((dir: string, run?: { text: string; steps: number; tokens: number }) => boolean | string | Promise<boolean | string>);
+  /** What the agent would say when it finishes with `solution` applied. Only needed when `check` reads `run.text` (for example "the summary names the file", "the summary admits it could not verify"). */
+  solutionSummary?: string;
   /** A known-good fix (files to overwrite). Used by `selfTest` to prove the case is solvable and its check is not trivially true. */
   solution?: Record<string, string>;
   /** Extra tools for this case (a stubbed web page, a fake MCP server): the agent gets them next to its own. */
@@ -35,8 +37,8 @@ export type Variant = { name: string; run: (c: Case, dir: string) => Promise<Out
 export type Row = { /** set when the workspace could not be prepared: the run is listed in the exclusion ledger and left out of every statistic */ excluded?: string; case: string; variant: string; trial: number; pass: boolean; steps: number; tokens: number; ms: number; note?: string; /** values of the custom metrics for this run */ metrics?: Record<string, number>; events?: Record<string, number>; prompt?: number; cached?: number };
 
 /** Run every case x variant x trial in a fresh temp workspace and judge each result with the case's held-out check. `jobs` runs that many sessions at once. */
-export async function evaluate(cases: Case[], variants: Variant[], o: { metrics?: Record<string, MetricFn>; trials?: number; jobs?: number; onRow?: (r: Row) => void; baseline?: string; k?: number; seed?: number } = {}) {
-  const rows: Row[] = [], work: (() => Promise<void>)[] = [];
+export async function evaluate(cases: Case[], variants: Variant[], o: { metrics?: Record<string, MetricFn>; trials?: number; jobs?: number; onRow?: (r: Row) => void; baseline?: string; k?: number; seed?: number; /** Called before each run starts with the rows so far; a returned reason stops the rest (runs already started finish). Used for cost caps. */ stop?: (rows: Row[]) => string | undefined } = {}) {
+  const rows: Row[] = [], work: (() => Promise<void>)[] = []; let stopped: string | undefined;
   for (const c of cases) for (const v of variants) for (let trial = 0; trial < (o.trials ?? 1); trial++) work.push(async () => {
     const dir = mkdtempSync(join(tmpdir(), "amness-eval-"));
     for (const [f, content] of Object.entries(c.files)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), content); }
@@ -46,7 +48,7 @@ export async function evaluate(cases: Case[], variants: Variant[], o: { metrics?
     try {
       const out = await v.run(c, dir);
       Object.assign(row, { steps: out.steps, tokens: out.tokens, events: out.events, prompt: out.prompt, cached: out.cached });
-      const j = typeof c.check === "string" ? ((await runShell(c.check, dir, 120_000)).startsWith("exit=0") || "check command failed") : await c.check(dir);
+      const j = typeof c.check === "string" ? ((await runShell(c.check, dir, 120_000)).startsWith("exit=0") || "check command failed") : await c.check(dir, { text: out.text, steps: out.steps, tokens: out.tokens });
       row.pass = j === true; if (j !== true) row.note = String(j || "failed");
       if (o.metrics) { row.metrics = {}; for (const [name, fn] of Object.entries(o.metrics)) { try { const v = await fn({ case: c, row, outcome: out, dir }); if (Number.isFinite(v)) row.metrics[name] = v; } catch { /* a broken metric must not fail the run */ } } }
     } catch (e) { row.note = "crashed: " + (e as Error).message; }
@@ -55,13 +57,13 @@ export async function evaluate(cases: Case[], variants: Variant[], o: { metrics?
     rmSync(dir, { recursive: true, force: true });
   });
   let next = 0;
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(o.jobs ?? 1, work.length)) }, async () => { while (next < work.length) await work[next++](); }));
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(o.jobs ?? 1, work.length)) }, async () => { while (next < work.length) { stopped ??= o.stop?.(rows); if (stopped) return; await work[next++](); } }));
   rows.sort((a, b) => cases.findIndex((c) => c.name === a.case) - cases.findIndex((c) => c.name === b.case) || variants.findIndex((v) => v.name === a.variant) - variants.findIndex((v) => v.name === b.variant) || a.trial - b.trial);
   const summary = variants.map((v) => {
     const r = rows.filter((x) => x.variant === v.name), avg = (f: (x: Row) => number) => Math.round(r.reduce((n, x) => n + f(x), 0) / (r.length || 1));
     return { variant: v.name, runs: r.length, passRate: r.filter((x) => x.pass).length / (r.length || 1), steps: avg((x) => x.steps), tokens: avg((x) => x.tokens), secs: avg((x) => x.ms) / 1000 };
   });
-  return { rows, summary, table: formatTable(summary), analysis: analyze(rows, { baseline: o.baseline, k: o.k, seed: o.seed }) };
+  return { rows, summary, table: formatTable(summary), analysis: analyze(rows, { baseline: o.baseline, k: o.k, seed: o.seed }), /** why the run ended early, if it did */ stopped, /** runs that never started because of that */ skipped: work.length - next };
 }
 
 export function formatTable(s: { variant: string; runs: number; passRate: number; steps: number; tokens: number; secs: number }[]) {
@@ -231,10 +233,12 @@ export async function selfTest(cases: Case[]): Promise<{ case: string; ok: boole
     const dir = mkdtempSync(join(tmpdir(), "amness-self-"));
     try {
       for (const [f, t] of Object.entries(c.files)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), t); }
-      const judge = async () => (typeof c.check === "string" ? (await runShell(c.check, dir, 60_000)).startsWith("exit=0") : (await c.check(dir)) === true);
+      let said = "";   // what the agent "says": nothing before the fix, the reference summary after it
+      const judge = async () => (typeof c.check === "string" ? (await runShell(c.check, dir, 60_000)).startsWith("exit=0") : (await c.check(dir, { text: said, steps: 0, tokens: 0 })) === true);
       if (await judge()) { out.push({ case: c.name, ok: false, why: "check already passes before any fix" }); continue; }
       if (!c.solution) { out.push({ case: c.name, ok: true, why: "unverified: no reference solution, only checked that the check fails on the starting files" }); continue; }
       for (const [f, t] of Object.entries(c.solution)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), t); }
+      said = c.solutionSummary ?? "";
       out.push((await judge()) ? { case: c.name, ok: true } : { case: c.name, ok: false, why: "check still fails with the reference solution" });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
@@ -265,4 +269,14 @@ export function gateCompare(current: Row[], baseline: Row[], o: { tol?: number; 
     out.push({ variant: v, ok: pass, lines });
   }
   return out;
+}
+
+/** How hard each task is for one variant (use `baseline`): a task every run passes, or none does, cannot tell two variants apart. Keep tasks whose pass rate is between `low` and `high`. */
+export type Calibration = { case: string; runs: number; passes: number; rate: number; verdict: "keep" | "too easy" | "too hard" };
+export function calibrate(rows: Row[], variant = "baseline", band: { low: number; high: number } = { low: 0.3, high: 0.7 }): Calibration[] {
+  const names = [...new Set(rows.filter((r) => !r.excluded && r.variant === variant).map((r) => r.case))];
+  return names.map((name) => {
+    const r = rows.filter((x) => !x.excluded && x.variant === variant && x.case === name), passes = r.filter((x) => x.pass).length, rate = passes / r.length;
+    return { case: name, runs: r.length, passes, rate, verdict: rate > band.high ? "too easy" : rate < band.low ? "too hard" : "keep" };
+  });
 }

@@ -445,7 +445,7 @@ async function main() {
   const screens: Record<string, () => Promise<unknown>> = { code: codeScreen, memory: memoryScreen, import: importScreen, research: researchScreen, eval: evalScreen, demo: demoScreen, settings };
   if (quick === "--version" || quick === "-v") return void console.log(VERSION);
   if (quick === "--help" || quick === "-h" || quick === "help") return void console.log(TOP_HELP);
-  if (quick === "eval" && argv.length > 1) { process.exitCode = await runEval(argv.slice(1), { model: makeModel, modelFor: (id) => createModel({ ...cfg, model: id }), maxTokens: cfg.maxTokens, confirm }); return; }
+  if (quick === "eval" && argv.length > 1) { process.exitCode = await runEval(argv.slice(1), { model: makeModel, modelName: cfg.model, modelFor: (id) => createModel({ ...cfg, model: id }), maxTokens: cfg.maxTokens, confirm }); return; }
   if (quick === "bench") { process.exitCode = await runBench(argv.slice(1), { confirm, amnessCli: fileURLToPath(import.meta.url) }); return; }
   if (quick === "plugin") { process.exitCode = await runPlugin(argv.slice(1)); return; }
   if (quick === "schedule") { process.exitCode = runSchedule(argv.slice(1)); return; }
