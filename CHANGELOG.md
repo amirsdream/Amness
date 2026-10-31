@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-31)
 
 First public version. A terminal coding agent for OpenAI, Claude and local models, with a full-screen and an inline interface, headless mode, evals, memory, MCP and a library API.
 
@@ -9,6 +9,8 @@ First public version. A terminal coding agent for OpenAI, Claude and local model
 - **Tools and context:** apply_patch and multi-edit, background processes, code index (`repo_map`, `find_refs`, `impact`), skills, custom subagents with worktree isolation, hooks, MCP, AGENTS.md loading, image input, optional language-server diagnostics.
 - **Cost:** staged context trimming that keeps the provider cache valid, optional cache keep-alive, model routing, per-role models, subagent budget slices.
 - **Workflow:** git worktree sessions, `/review`, `/pr`, `/branch`, `amness schedule`, `amness acp`, a GitHub Action.
+- **Shell and platform:** the shell is detected per OS (bash, zsh, sh, Git bash, pwsh, Windows PowerShell, cmd), the model is told which one it has, PowerShell and cmd get a safety floor, `/shell` shows what was detected, and `!cmd` runs a command directly.
+- **Install:** `npm i -g amness` or `npx amness` gives the `amness` binary (built to `dist`, Node 22.18 or later). Releases are staged by CI and approved by hand.
 - **Measurement:** `amness eval` (paired statistics, ablations, SWE-bench-format suites, leak audit), `amness tune`, trace replay, failure mining.
 
 Known limits: newer features are tested with scripted models but not yet measured on real tasks; Windows has no OS sandbox. See ROADMAP.md.
