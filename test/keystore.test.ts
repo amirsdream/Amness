@@ -124,3 +124,17 @@ test("a key saved by an older version (one key for the active provider) moves to
   assert.equal(after.apiKey, undefined);
   assert.equal(after.apiKeys.anthropic, KEY);
 });
+
+test("macOS Keychain: the single entry an older version made moves to the active provider's own entry", { skip: process.platform !== "darwin" }, () => {
+  const home = fresh(), service = `amness-test-${process.pid}-${Date.now()}`;
+  const env = { AMNESS_KEYSTORE: "keychain", AMNESS_KEYSTORE_SERVICE: service };
+  const has = (account: string) => spawnSync("security", ["find-generic-password", "-s", service, "-a", account]).status === 0;
+  try {
+    spawnSync("security", ["-i"], { input: `add-generic-password -U -s ${service} -a apiKey -w ${Buffer.from(KEY).toString("hex")}\n` }); // what 0.1.2 stored
+    writeFileSync(join(home, "config.json"), JSON.stringify({ provider: "anthropic" }));
+    assert.equal(child(home, `console.log(c.loadConfig().apiKey)`, env), KEY);
+    assert.ok(has("apiKey-anthropic"), "now under the provider's own entry");
+    assert.ok(!has("apiKey"), "the old entry is gone");
+    assert.equal(child(home, `console.log(String(c.keyFor("openai").key))`, env), "undefined"); // and the other providers have nothing
+  } finally { for (const a of ["apiKey", "apiKey-anthropic", "apiKey-openai"]) spawnSync("security", ["delete-generic-password", "-s", service, "-a", a]); }
+});
