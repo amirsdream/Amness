@@ -66,7 +66,7 @@ ollama pull qwen2.5-coder:7b
 
 Start Amness, run `/provider`, and choose "Ollama (local)". You need no key. Small local models can be weak at tool calling. See [Providers and models](providers.md).
 
-You can also do nothing now. On the first start, Amness asks you to pick a provider and paste a key. It saves the key in `~/.amness/config.json`, where only you can read it.
+You can also do nothing now. On the first start, Amness asks you to pick a provider and paste a key. It saves the key in your system's secure store (the macOS Keychain, the Linux keyring, or Windows DPAPI) and tells you which one. See [Safety](safety.md) for the details and for servers that have no keyring.
 
 ## 3. Start in a project
 

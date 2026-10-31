@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.0 (2026-10-31)
+## 0.1.1 (2026-10-31)
 
-First public version. A terminal coding agent for OpenAI, Claude and local models, with a full-screen and an inline interface, headless mode, evals, memory, MCP and a library API.
+First public version. (0.1.0 was staged on npm but never released; it lacked the key store and the bundled Claude SDK below.) A terminal coding agent for OpenAI, Claude and local models, with a full-screen and an inline interface, headless mode, evals, memory, MCP and a library API.
 
 - **Loop and guards:** claims ledger and audit of the finish summary, stagnation detection from test/build output, optional independent reviewer, loop and cycle detection, budget notes and a final report before the token cap, read-only streak check.
 - **Safety:** permission rules with a floor that holds in yolo, OS sandbox (macOS Seatbelt, Linux bubblewrap), taint check for commands copied from untrusted text, secrets redaction, shell undo through git snapshots, optional approval reviewer.
@@ -10,7 +10,8 @@ First public version. A terminal coding agent for OpenAI, Claude and local model
 - **Cost:** staged context trimming that keeps the provider cache valid, optional cache keep-alive, model routing, per-role models, subagent budget slices.
 - **Workflow:** git worktree sessions, `/review`, `/pr`, `/branch`, `amness schedule`, `amness acp`, a GitHub Action.
 - **Shell and platform:** the shell is detected per OS (bash, zsh, sh, Git bash, pwsh, Windows PowerShell, cmd), the model is told which one it has, PowerShell and cmd get a safety floor, `/shell` shows what was detected, and `!cmd` runs a command directly.
-- **Install:** `npm i -g amness` or `npx amness` gives the `amness` binary (built to `dist`, Node 22.18 or later). Releases are staged by CI and approved by hand.
+- **Keys:** the API key is saved in the macOS Keychain, the Linux keyring or Windows DPAPI instead of a plain file (plain file with mode 600 only where there is no store). Keys from environment variables are never saved. An old plain-text key moves over on the next start.
+- **Install:** `npm i -g amness` or `npx amness` gives the `amness` binary and the Claude SDK (an optional dependency) (built to `dist`, Node 22.18 or later). Releases are staged by CI and approved by hand.
 - **Measurement:** `amness eval` (paired statistics, ablations, SWE-bench-format suites, leak audit), `amness tune`, trace replay, failure mining.
 
 Known limits: newer features are tested with scripted models but not yet measured on real tasks; Windows has no OS sandbox. See ROADMAP.md.

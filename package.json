@@ -1,6 +1,6 @@
 {
   "name": "amness",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "A terminal coding agent for any model: streaming chat TUI, permission modes, plan mode, undo, memory, MCP, with a small reliability harness underneath. OpenAI (Responses API), Claude, and local models.",
   "license": "MIT",

@@ -35,7 +35,19 @@ Notes about the provider:
 
 ## Know where your keys are stored
 
-- Keys come from the environment variables `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, or from `~/.amness/config.json`. Amness writes that file with mode 600. Only your user can read it.
+- Keys come from the environment variables `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, or from the key store. A key from an environment variable is used for that run and is never saved.
+- The key store depends on your system. The prompt tells you which one is in use.
+
+  | System | Where the key is saved | Protection |
+  |---|---|---|
+  | macOS | the login Keychain (service `amness`) | encrypted by macOS |
+  | Linux with a desktop keyring | the secret service, through `secret-tool` | encrypted by the keyring |
+  | Windows | `~/.amness/secrets/apiKey.dpapi` | encrypted with DPAPI: only your Windows user on this machine can decrypt it |
+  | Linux server or Docker (no keyring) | `~/.amness/config.json` with mode 600 | **not encrypted**, only your user can read it. On a server, prefer an environment variable or your platform's secret manager. |
+
+- Amness passes the key to the system tool on standard input, never on the command line, where other users could see it in the process list.
+- A key that an older version saved in `config.json` is moved to the key store the next time you start Amness, and removed from the file once the move is checked.
+- To remove a saved key, open the settings and clear "API key", or on macOS run `security delete-generic-password -s amness -a apiKey`.
 - The environment variable wins over the saved key.
 - Amness does not write keys into a project folder.
 - Commands the agent runs do not get your Amness keys. The variables `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `TAVILY_API_KEY`, `OPENROUTER_API_KEY` and `AMNESS_OTLP` are removed from their environment (`childEnv` in `src/secrets.ts`).

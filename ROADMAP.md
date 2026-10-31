@@ -393,7 +393,7 @@ Newest first. When an item is finished, tick it above and add one line here with
 - **G26**: running cards are closed when a turn ends; interrupted subagent results show as failed; tested with an interrupted Explore
 - **G25** (partly): budget % in the sidebar, /budget to show/set the cap; per-subagent slices and estimated-usage markers not shown yet
 - **G21** (partly): Docker image built and run in CI (passes); Windows job added but many tests fail there (POSIX shell, paths): not supported yet
-- **G22** (partly; left: approve the staged 0.1.0 with `npm stage approve`): npm build to dist, pack/install/run smoke test in CI, tag-triggered workflow that stages the release (`npm stage publish`); you approve it with `npm stage approve` and 2FA. README and docs now use `npm install -g amness`, with run-from-source kept for the latest `main`.
+- **G22** (partly; left: approve the staged release with `npm stage approve`; 0.1.1 is the one to approve): npm build to dist, pack/install/run smoke test in CI, tag-triggered workflow that stages the release (`npm stage publish`); you approve it with `npm stage approve` and 2FA. README and docs now use `npm install -g amness`, with run-from-source kept for the latest `main`.
 - **G19** (partly): amness schedule (cron block, safe quoting) + action.yml composite action; action install/start checked in CI without a key; no real-model run
 - **G16** (partly): amness acp: ACP over stdio (initialize, session/new, prompt with streamed updates, permission requests, cancel); scripted client only; no VS Code extension
 - **G17** (partly): @image.png and --image; native blocks for Claude, input_image/image_url for OpenAI; vision guessed for local models; wire format tested, no live model; no clipboard paste

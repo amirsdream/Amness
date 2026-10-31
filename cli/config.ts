@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { deleteSecret, getSecret, setSecret } from "./keystore.ts";
 
 export const PROVIDERS = {
   anthropic: { label: "Anthropic (Claude)", baseUrl: "https://api.anthropic.com", model: "claude-opus-5-5", needsKey: true },
@@ -17,22 +18,46 @@ const file = () => join(home(), "config.json");
 
 export const defaults = (): Config => ({ provider: "openai", baseUrl: PROVIDERS.openai.baseUrl, model: PROVIDERS.openai.model, maxTokens: 300_000 });
 
+const SECRETS = ["apiKey", "tavilyKey"] as const;
+let fromEnv: Partial<Record<(typeof SECRETS)[number], string>> = {};
+
 export function loadConfig(): Config {
-  let c = defaults();
-  try { if (existsSync(file())) c = { ...c, ...JSON.parse(readFileSync(file(), "utf8")) }; } catch { /* corrupt config: start fresh */ }
-  // environment wins, so CI and one-off runs work without touching the saved file
+  let c = defaults(), onDisk: Partial<Config> = {};
+  try { if (existsSync(file())) onDisk = JSON.parse(readFileSync(file(), "utf8")); c = { ...c, ...onDisk }; } catch { /* corrupt config: start fresh */ }
+  // keys live in the OS credential store when there is one; a key still in the file (an older version wrote it there) is moved over, and removed from the file only after it reads back
+  let migrated = false;
+  for (const k of SECRETS) {
+    const stored = getSecret(k);
+    if (stored) { c[k] = stored; if (onDisk[k]) { delete onDisk[k]; migrated = true; } }
+    else if (onDisk[k] && setSecret(k, onDisk[k]!)) { delete onDisk[k]; migrated = true; }
+  }
+  if (migrated) writeConfigFile({ ...defaults(), ...onDisk, ...Object.fromEntries(SECRETS.map((k) => [k, undefined])) } as Config);
+  // environment wins, so CI and one-off runs work without touching the saved key. It is never written back (see saveConfig).
   const claude = c.provider === "anthropic";
+  fromEnv = {};
   const key = claude ? process.env.ANTHROPIC_API_KEY : process.env.OPENAI_API_KEY;
-  if (key) c.apiKey = key;
-  if (process.env.TAVILY_API_KEY) c.tavilyKey = process.env.TAVILY_API_KEY;
+  if (key) c.apiKey = fromEnv.apiKey = key;
+  if (process.env.TAVILY_API_KEY) c.tavilyKey = fromEnv.tavilyKey = process.env.TAVILY_API_KEY;
   if (process.env.OPENAI_BASE_URL && !claude) c.baseUrl = process.env.OPENAI_BASE_URL;
   if (process.env.AMNESS_MODEL) c.model = process.env.AMNESS_MODEL;
   return c;
 }
 
-export function saveConfig(c: Config) {
+function writeConfigFile(c: Config) {
   mkdirSync(home(), { recursive: true });
-  writeFileSync(file(), JSON.stringify(c, null, 2)); chmodSync(file(), 0o600); // may hold API keys
+  writeFileSync(file(), JSON.stringify(c, null, 2), { mode: 0o600 }); // owner-only from the first byte
+  chmodSync(file(), 0o600); // and for a file that already existed
+}
+
+export function saveConfig(c: Config) {
+  const out: Config = { ...c };
+  for (const k of SECRETS) {
+    const v = c[k];
+    if (v && v === fromEnv[k]) { delete out[k]; continue; } // this value came from an environment variable: do not store it
+    if (!v) { deleteSecret(k); delete out[k]; continue; }
+    if (setSecret(k, v)) delete out[k]; // stored in the OS credential store; otherwise it stays in the file (mode 600)
+  }
+  writeConfigFile(out);
 }
 
 export const ready = (c: Config) => !PROVIDERS[c.provider].needsKey || !!c.apiKey;

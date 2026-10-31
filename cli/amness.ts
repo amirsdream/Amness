@@ -16,6 +16,7 @@ import { runSchedule } from "./schedulecli.ts";
 import { ACP_HELP, runAcp } from "./acpcli.ts";
 import { runEval, runTune } from "./evalcli.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, home, loadConfig, mask, ready, saveConfig, type Config, type ProviderId } from "./config.ts";
+import { where } from "./keystore.ts";
 import { DEMO_TASK, explain, runDemo } from "./demo.ts";
 import { formatEvent } from "./format.ts";
 import { Cancel, ask, bold, box, clearScreen, confirm, cyan, dim, gray, green, log, pause, red, select, spin, yellow } from "./ui.ts";
@@ -70,7 +71,7 @@ async function ensureReady(): Promise<boolean> {
   if (!id) return false;
   Object.assign(cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model });
   if (id === "custom" || id === "ollama") { cfg.baseUrl = (await ask("Base URL", cfg.baseUrl)) || cfg.baseUrl; cfg.model = (await ask("Model", cfg.model)) || cfg.model; }
-  if (PROVIDERS[id].needsKey) cfg.apiKey = (await ask("API key (hidden; saved to ~/.amness/config.json, mode 600)", "", { secret: true })) || undefined;
+  if (PROVIDERS[id].needsKey) cfg.apiKey = (await ask(`API key (hidden; saved to ${where()})`, "", { secret: true })) || undefined;
   saveConfig(cfg);
   if (!ready(cfg)) return false;
   return (await testConnection(true)) || (await confirm("The test failed. Keep going anyway?", false));
@@ -353,7 +354,7 @@ async function settings() {
       if (pick !== undefined) cfg.effort = (pick || undefined) as typeof cfg.effort;
     }
     else if (what === "url") cfg.baseUrl = (await ask("Base URL", cfg.baseUrl)) || cfg.baseUrl;
-    else if (what === "key") cfg.apiKey = (await ask("API key (hidden; stored in ~/.amness/config.json, mode 600)", cfg.apiKey ?? "", { secret: true })) || undefined;
+    else if (what === "key") cfg.apiKey = (await ask(`API key (hidden; stored in ${where()})`, cfg.apiKey ?? "", { secret: true })) || undefined;
     else if (what === "tavily") cfg.tavilyKey = (await ask("Tavily API key (blank to clear)", "", { secret: true })) || undefined;
     else if (what === "budget") cfg.maxTokens = Math.max(1000, Number(await ask("Max tokens per run", String(cfg.maxTokens))) || cfg.maxTokens);
     else if (what === "test") { saveConfig(cfg); await testConnection(); continue; }

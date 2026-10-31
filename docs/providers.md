@@ -64,7 +64,7 @@ The model list in `/model` (with prices per million tokens as shown in the picke
 
 **Limits and common problems.**
 
-- Amness saves a key you type in `~/.amness/config.json` with file mode 600 (only you can read it).
+- Amness saves a key you type in your system's secure store: the macOS Keychain, the Linux keyring (`secret-tool`) or Windows DPAPI. Where there is none (a Linux server or Docker), it uses `~/.amness/config.json` with file mode 600, which is not encrypted. See [Safety](safety.md).
 - The environment variable wins over the saved file. `ANTHROPIC_API_KEY` is used when the provider is `anthropic`. `OPENAI_API_KEY` is used for **every other provider**, including `openrouter`. `OPENROUTER_API_KEY` is not read as a key.
 - If the chat says "check your key with /provider", the provider answered with an authentication error (401 or 403).
 - The test call checks that the model replies. It does not check that the model can call tools.
