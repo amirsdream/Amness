@@ -1,12 +1,17 @@
 // Colour system for the chat UI: truecolor when the terminal has it, 256/16 colours otherwise, plain text under NO_COLOR or when piped.
+import { release } from "node:os";
 export type RGB = [number, number, number];
 
-export function detectLevel(env: Record<string, string | undefined> = process.env, tty = !!process.stdout.isTTY): 0 | 1 | 2 | 3 {
+export function detectLevel(env: Record<string, string | undefined> = process.env, tty = !!process.stdout.isTTY, platform: string = process.platform, osRelease: string = release()): 0 | 1 | 2 | 3 {
   if (env.NO_COLOR) return 0;
   const f = env.FORCE_COLOR;
   if (f !== undefined && f !== "") return f === "0" || f === "false" ? 0 : f === "2" ? 2 : f === "3" ? 3 : 1;
   if (!tty) return 0;
   if (/truecolor|24bit/i.test(env.COLORTERM ?? "") || /^(iTerm\.app|vscode|WezTerm|Hyper|ghostty)$/i.test(env.TERM_PROGRAM ?? "") || /kitty|alacritty/i.test(env.TERM ?? "")) return 3;   // Apple Terminal is 256-colour only
+  if (platform === "win32") {   // Windows sets no TERM or COLORTERM: Windows Terminal, VS Code and ConPTY (Windows 10 build 14931+) all do truecolor
+    if (env.WT_SESSION || env.ConEmuANSI === "ON" || env.ANSICON) return 3;
+    return Number(osRelease.split(".")[2] ?? 0) >= 14931 ? 3 : 1;
+  }
   if (/256/.test(env.TERM ?? "")) return 2;
   return 1;
 }

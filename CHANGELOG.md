@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 (2026-10-31)
 
+- **Windows colours:** Windows sets neither `TERM` nor `COLORTERM`, so Amness fell back to 16 colours there and the themes looked washed out. Windows Terminal, VS Code and any Windows 10 (build 14931 or newer) console now get full truecolor, like on macOS.
 - **Links:** a link in the agent's reply is now clickable in the full-screen view: a click opens it in the browser (http and https only, with a notice of where it goes), a double-click copies it, a wrapped link works as one, and links are underlined. Before, a click did nothing and a double-click copied the whole URL as a word, a triple-click the whole line.
 
 ## 0.1.4 (2026-10-31)

@@ -8,9 +8,13 @@ test("detectLevel: NO_COLOR wins, FORCE_COLOR levels, COLORTERM truecolor, 256-c
   assert.deepEqual(["0", "1", "2", "3"].map((f) => T.detectLevel({ FORCE_COLOR: f }, false)), [0, 1, 2, 3]);
   assert.equal(T.detectLevel({ COLORTERM: "truecolor" }, true), 3);
   assert.equal(T.detectLevel({ TERM_PROGRAM: "iTerm.app" }, true), 3);
-  assert.equal(T.detectLevel({ TERM_PROGRAM: "Apple_Terminal", TERM: "xterm-256color" }, true), 2);
-  assert.equal(T.detectLevel({ TERM: "xterm" }, true), 1);
-  assert.equal(T.detectLevel({ TERM: "xterm-256color" }, false), 0);
+  assert.equal(T.detectLevel({ TERM_PROGRAM: "Apple_Terminal", TERM: "xterm-256color" }, true, "darwin"), 2);
+  assert.equal(T.detectLevel({ TERM: "xterm" }, true, "linux"), 1);
+  assert.equal(T.detectLevel({}, true, "win32", "10.0.26200"), 3);            // Windows sets no TERM or COLORTERM but does truecolor
+  assert.equal(T.detectLevel({ WT_SESSION: "x" }, true, "win32", "6.1.7601"), 3);
+  assert.equal(T.detectLevel({}, true, "win32", "6.1.7601"), 1);              // Windows 7
+  assert.equal(T.detectLevel({}, false, "win32", "10.0.26200"), 0);
+  assert.equal(T.detectLevel({ TERM: "xterm-256color" }, false, "linux"), 0);
 });
 
 test("fg emits truecolor, 256-colour or 16-colour sequences by level, and nothing at level 0", () => {
