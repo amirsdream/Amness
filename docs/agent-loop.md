@@ -197,11 +197,24 @@ A mismatch is rejected with the reason. This happens at most twice, so it cannot
 
 **Related pages.** [Budgets and subagents](budgets.md), [Providers and models](providers.md).
 
+## See how other tools shape the loop
+
+The basic loop is the same almost everywhere. Anthropic describes it as *gather context, take action, verify work, repeat* ([Building agents with the Claude Agent SDK](https://claude.com/blog/building-agents-with-the-claude-agent-sdk), read in full). OpenAI describes a Codex turn the same way: the model and its tools go round many times until the model gives a final answer ([Unrolling the Codex agent loop](https://openai.com/index/unrolling-the-codex-agent-loop), seen only as a search summary). A survey of eleven coding agents says they run on hand-written loops, not on agent frameworks ([arXiv 2609.00006](https://arxiv.org/abs/2609.00006), abstract only).
+
+So there are no hidden extra stages. What differs between tools is where they put **gates** around the loop:
+
+- **Gather, act and verify are not separate phases in Amness.** The loop has four phases: `model`, `tools`, `compact` and `verify`. *Gathering* is the model using read-only tools, *acting* is edits and commands, and *verifying* is the model's own test runs, the optional `check` command after each edit, and the verify gate at the end. The strategies `explore-then-act` and `plan-first` are the only things that force an order.
+- **A plan at the first edit.** [PAUSE](https://arxiv.org/html/2610.29870v1) (read in full) holds back the first source edit and asks a separate, stronger planner with no tools for one plan. Then the same agent continues. In the paper, 80% of first edits came after the middle of a run, so the agent has already seen most of the evidence by then. The authors report gains of 6 to 17 points in three harnesses at about 4 cents per task. They also report that the plan helped much less when the planner was the same model as the agent, that most comparisons used one run per task, and that edits made through the shell escape the trigger. `plan-first` in Amness plans at step 0, before anything is read, which is a different design.
+- **Checks after every edit.** Anthropic calls rules-based feedback such as linting "the best form of feedback" and calls an LLM judge "not very robust". Amness has a post-edit `check` command and language-server diagnostics, both off by default.
+- **A fixed pipeline instead of a loop.** [Agentless](https://arxiv.org/abs/2407.01489) (search summary only) runs localise, repair, then validate with generated tests, and no model-chosen actions. Amness's `best-of-n` option belongs to the same "sample several, pick one" family.
+
+These are other people's results on their own benchmarks and models, not measurements of Amness.
+
 ## Learn where these choices come from
 
 Recent work on coding-agent loops points the same way. The loop follows it where this can be done without training a model.
 
-- [An Empirical Study of Harness Design for Coding Agents](https://arxiv.org/abs/2609.20804) (2026): cheap rule-based elision before any LLM summary gave the lowest cost. A recall tool for elided content was almost never used, so Amness has none. Stuck detection and light post-edit checks are cheap ways to stop wasted turns.
+- [An Empirical Study of Harness Design for Coding Agents](https://arxiv.org/abs/2609.20804) (2026): managing the context mattered a lot with a small window (a 35.7 point gap in success at 32k tokens) and little with a large one (2.7 points at 128k). The highest level of context management had the lowest mean cost. A recall tool for elided content was rarely used, so Amness has none. The paper held stuck detection and post-edit checks fixed, so it does not test them; Amness keeps them because they are cheap, not because this paper measured them.
 - [AgentDiet](https://arxiv.org/abs/2509.23586) (trajectory reduction): removing useless, redundant and *expired* information cut input tokens by 40-60% with unchanged results. This is the source of the expired-read and repeated-call rules.
 - [CoACT](https://arxiv.org/abs/2607.02911) and [SWE-Pruner](https://arxiv.org/abs/2601.16746): reads use most of the tokens. Compression must keep what the next action needs, and earlier messages stay untouched so the cache stays valid. Amness uses rules for this. The papers use trained compressors, which would add a dependency.
 - [Don't Break the Cache](https://arxiv.org/abs/2601.06007) (prompt caching for long-horizon agents): caching cut API cost by 41-80% across OpenAI, Anthropic and Google, but naive full-context caching can hurt. Put dynamic content at the end, avoid dynamic tool lists, and keep dynamic tool results out of the cached prefix. [Keeping the Cache Warm Pays](https://arxiv.org/abs/2607.19214) motivates the longer OpenAI retention and the opt-in Claude keep-alive.
