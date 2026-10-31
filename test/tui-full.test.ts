@@ -76,7 +76,7 @@ test("/loop shows a step-by-step trace of turns, tools and guards", async () => 
   const s = t.screen();
   assert.match(s, /Agent loop · 3 turns · 1 round/); assert.ok(s.includes("model") && s.includes("Read") && s.includes("replied without tools"), s);
   assert.match(s, /model ◉ gather/); assert.match(s, /model ✎ act/);                 // each turn is labelled with its stage (reading is gathering, `echo hi` is acting)
-  assert.match(s, /inferred from its tool calls/);                                    // and the page says the labels are a guess
+  assert.match(s, /guessed from the tool calls/);                                       // and the page says the labels are a guess
 });
 
 test("full: consecutive reads and searches collapse into one 'Explored' row that opens on click; edits and commands stay separate", async () => {
