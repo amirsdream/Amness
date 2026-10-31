@@ -281,7 +281,7 @@ export type CodeAgentOptions = {
   /** Start a fresh context with a handoff note when the transcript gets big. Default: at 120k prompt tokens / 500k chars. */
   rollover?: { afterTokens?: number; afterChars?: number } | false;
   /** The model's context window in tokens. Set for small or local models (8192): the loop then keeps every request inside it and recovers from "context too long" errors. See `Options.contextWindow` in harness.ts. */
-  contextWindow?: number;
+  contextWindow?: number | (() => number | undefined);
   /** Called when the window size was learned from a provider error, so it can be remembered. */
   onWindow?: (tokens: number) => void;
   /** Interrupt a running agent (e.g. Ctrl-C). It stops at a safe point with the checkpoint written, so it can be resumed. */

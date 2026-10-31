@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, loadConfig, ready, windowFor, type ProviderId } from "./config.ts";
+import { detectWindow } from "./models.ts";
 import { formatEvent } from "./format.ts";
 import { createModel } from "./model.ts";
 
@@ -86,7 +87,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   for (const w of loadedPlugins.warnings) console.error("plugin: " + w);
   if (loadedPlugins.untrusted) console.error(`note: ${loadedPlugins.untrusted.count} project plugin file(s) in .amness/plugins were not loaded; pass --trust-project to run them`);
   const agent = createCodeAgent({
-    contextWindow: Number(val("--context-window")) || windowFor(cfg),
+    contextWindow: Number(val("--context-window")) || windowFor(cfg) || await detectWindow({ provider: cfg.provider, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model }),
     maxSteps: Number(val("--max-steps")) || undefined,
     model, modelById: (id) => createModel({ ...cfg, model: id }), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox: (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e: Event) => { live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },

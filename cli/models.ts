@@ -27,5 +27,24 @@ export async function fetchModels(p: ModelProbe, fetchImpl: typeof fetch = fetch
   } catch { return []; }
 }
 
+/**
+ * The context window a local server reports for a model, so nobody has to type it. vLLM and LM Studio list it in /models (`max_model_len`, `loaded_context_length`, `context_length`);
+ * llama.cpp reports `n_ctx` at /props (server root); Ollama needs a POST to /api/show. Hosted providers are skipped (their sizes are known). Any failure gives undefined.
+ */
+export async function detectWindow(p: ModelProbe & { model: string }, fetchImpl: typeof fetch = fetch): Promise<number | undefined> {
+  if (p.provider === "openai" || p.provider === "anthropic" || p.provider === "openrouter") return undefined;
+  const base = p.baseUrl.replace(/\/+$/, ""), root = base.replace(/\/v1$/, ""), headers: Record<string, string> = p.apiKey ? { authorization: `Bearer ${p.apiKey}` } : {};
+  const get = async (url: string, init: RequestInit = {}) => { try { const r = await fetchImpl(url, { headers, signal: AbortSignal.timeout(2000), ...init }); return r.ok ? ((await r.json()) as any) : undefined; } catch { return undefined; } };
+  const num = (x: unknown) => { const n = Number(x); return Number.isFinite(n) && n >= 512 ? Math.floor(n) : undefined; };
+  const list = await get(`${base}/models`);
+  const entry = (list?.data ?? []).find((m: any) => m?.id === p.model);
+  const fromList = num(entry?.max_model_len) ?? num(entry?.loaded_context_length) ?? num(entry?.context_length) ?? num(entry?.max_context_length);
+  if (fromList) return fromList;
+  const props = await get(`${root}/props`);                                                // llama.cpp
+  const fromProps = num(props?.default_generation_settings?.n_ctx) ?? num(props?.n_ctx); if (fromProps) return fromProps;
+  const show = await get(`${root}/api/show`, { method: "POST", body: JSON.stringify({ model: p.model }), headers: { ...headers, "content-type": "application/json" } });   // Ollama
+  const info = show?.model_info ?? {}, key = Object.keys(info).find((k) => k.endsWith(".context_length")); return num(key && info[key]);
+}
+
 /** For tests. */
 export const clearModelCache = () => cache.clear();

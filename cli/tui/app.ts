@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { onRateLimitWait } from "../model.ts";
 import { STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { detectWindow } from "../models.ts";
 import { PROVIDERS, home, rememberWindow, saveConfig, windowFor, type Config } from "../config.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
@@ -126,10 +127,11 @@ export class App {
         onRoute: (d) => { this.lastRoute = `${d.tier === "cheap" ? m.cheap : this.cfg.model}`; if (d.switched) this.stepNow().notes.push(`route → ${d.tier === "cheap" ? m.cheap : this.cfg.model}: ${d.reason}`); } });
     }
     this.agent = createCodeAgent({
-      model: this.model, modelById: (id) => make({ ...this.cfg, model: id }), cwd: this.cwd, chat: true, contextWindow: windowFor(this.cfg), onWindow: (w) => { rememberWindow(this.cfg, w); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
+      model: this.model, modelById: (id) => make({ ...this.cfg, model: id }), cwd: this.cwd, chat: true, contextWindow: () => windowFor(this.cfg), onWindow: (w) => { rememberWindow(this.cfg, w); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
       signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.profileOptions(), embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
+    if (!windowFor(this.cfg)) void detectWindow({ provider: this.cfg.provider, baseUrl: this.cfg.baseUrl, apiKey: this.cfg.apiKey, model: this.cfg.model }).then((w) => { if (w && !windowFor(this.cfg)) { rememberWindow(this.cfg, w); this.notify("info", `context window detected: ${w.toLocaleString()} tokens`); } });   // a local server states it
   }
   get width() { return Math.max(24, this.screen.cols - 1); }
   /** The window shown in the sidebar, footer and /tokens: the one you set or the agent learned (a small local model), else the known size for this model. */

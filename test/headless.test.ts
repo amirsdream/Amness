@@ -11,6 +11,7 @@ async function mockOpenAI(replies: object[]) {
   const seen: any[] = [];
   const srv = createServer((req, res) => {
     let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
+      if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) { res.statusCode = 404; return void res.end("{}"); }   // the window probe (GET /models, /props) is not a model call
       seen.push(JSON.parse(b));
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ choices: [{ message: replies.shift() }], usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 } }));

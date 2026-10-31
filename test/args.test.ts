@@ -70,3 +70,16 @@ test("the most recent tool call keeps its output open (a short preview); older o
   const read: Block = { ...sh, id: 2, name: "read_file", args: JSON.stringify({ path: "a.ts" }), result: "1\tconst a = 1;" };
   assert.ok(!text(renderBlock(read, ctx(true))).includes("const a"));                       // a lone file read does not open itself
 });
+
+test("detectWindow reads the context window a local server reports (vLLM, LM Studio, llama.cpp, Ollama) and skips hosted providers", async () => {
+  const { detectWindow } = await import("../cli/models.ts");
+  const json = (o: unknown, ok = true) => ({ ok, json: async () => o }) as unknown as Response;
+  const server = (routes: Record<string, unknown>): typeof fetch => (async (url: string | URL | Request) => { const u = String(url); const k = Object.keys(routes).find((r) => u.endsWith(r)); return k ? json(routes[k]) : json({}, false); }) as typeof fetch;
+  const p = { provider: "custom", baseUrl: "http://h:8000/v1", model: "qwen" };
+  assert.equal(await detectWindow(p, server({ "/v1/models": { data: [{ id: "other", max_model_len: 1000 }, { id: "qwen", max_model_len: 8192 }] } })), 8192);           // vLLM
+  assert.equal(await detectWindow(p, server({ "/v1/models": { data: [{ id: "qwen", loaded_context_length: 16384 }] } })), 16384);                                          // LM Studio
+  assert.equal(await detectWindow(p, server({ "/v1/models": { data: [{ id: "qwen" }] }, "/props": { default_generation_settings: { n_ctx: 4096 } } })), 4096);              // llama.cpp
+  assert.equal(await detectWindow(p, server({ "/api/show": { model_info: { "qwen2.context_length": 32768 } } })), 32768);                                                   // Ollama
+  assert.equal(await detectWindow(p, server({})), undefined);
+  assert.equal(await detectWindow({ ...p, provider: "openai" }, server({ "/v1/models": { data: [{ id: "qwen", max_model_len: 8192 }] } })), undefined);
+});

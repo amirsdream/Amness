@@ -136,7 +136,7 @@ export type Options = {
   contextBudget?: number;
   /** The model's context window in tokens (8192 for a small local model, 1_000_000 for a large one). When set, the loop keeps every request inside it: it shrinks old output as the window fills,
    *  writes a handoff note before it overflows, and recovers from a "context too long" error instead of failing. A window stated in such an error replaces this value. */
-  contextWindow?: number;
+  contextWindow?: number | (() => number | undefined);
   /** Called when the window size was learned from a provider error, so it can be remembered. */
   onWindow?: (tokens: number) => void;
   budget?: Budget;
@@ -214,7 +214,7 @@ const FINISH: ToolSpec = {
 const INTENT = /\b(i'll|i will|let me(?! know)|next,? i|now i|i am going to|i'm going to)\b/i;
 
 export const clip = (s: string, n = 6000) =>
-  s.length <= n ? s : `${s.slice(0, (n * 2) / 3)}\n...[${s.length - n} chars cut]...\n${s.slice(-n / 3)}`;
+  s.length <= n ? s : `${s.slice(0, (n * 2) / 3)}\n...[${s.length - n} chars cut; read a smaller part for the rest]...\n${s.slice(-n / 3)}`;
 
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 const SIGNAL = /error|fail|warn|exception|assert|panic|traceback|✗|expected|actual|cannot|not found|denied/i;
@@ -237,7 +237,7 @@ export function condense(s: string, max = 6000): string {
   if (t.length <= max) return t;
   const head = t.slice(0, Math.floor(max * 0.4)), tail = t.slice(t.length - Math.floor(max * 0.3)), mid = t.slice(head.length, t.length - tail.length);
   const sig = mid.split("\n").filter((l) => SIGNAL.test(l)).map((l) => l.slice(0, 200)).slice(0, 25).join("\n");
-  return `${head}\n...[${mid.length} chars cut${sig ? "; the error/warning lines from the cut part follow" : ""}]...\n${sig ? sig + "\n...\n" : ""}${tail}`;
+  return `${head}\n...[${mid.length} chars cut${sig ? "; the error/warning lines from the cut part follow" : ""}; to see the rest read a smaller part: read_file start/end, or grep]...\n${sig ? sig + "\n...\n" : ""}${tail}`;
 }
 
 /** Same call repeated later in the transcript: the older output is stale, so drop it first (cheapest compaction, loses nothing current). */
@@ -379,7 +379,7 @@ export function createHarness(o: Options) {
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
-    let allowNow: Set<string> | undefined, thenNext: string | undefined, budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false, win = o.contextWindow, recoveries = 0, calib = 1;
+    let allowNow: Set<string> | undefined, thenNext: string | undefined, budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false, win = typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow, recoveries = 0, calib = 1;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     /** Tokens a request may use: the window minus room for the reply. */
