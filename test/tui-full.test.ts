@@ -62,7 +62,7 @@ test("full: the LOOP panel and status line follow the loop's phases", async () =
   const t = rig([call("sh", { cmd: "sleep 1" }), say("ok")], { cols: 132, rows: 40, files, ui: "full" });
   await t.start(); t.app.setMode("yolo");
   await t.submit("go");
-  assert.ok(await t.until(() => t.has("Running sleep 1") && t.has("LOOP") && /step \d+ · running a tool/.test(t.screen()), 3000), t.screen());
+  assert.ok(await t.until(() => t.has("Running sleep 1") && t.has("LOOP") && /round 1 · step \d+/.test(t.screen()) && t.has("◉ gather ▸ ✎ act ▸ ✓ verify"), 3000), t.screen());
   assert.ok(!/step \d+\/\d+/.test(t.screen()), "no progress bar toward a step cap this early");
   await t.until(() => t.idle());
   assert.ok(await t.until(() => t.has("LAST RUN") && !t.screen().includes("LOOP"), 2000), t.screen());   // the panel stays, as a summary of the run
@@ -74,7 +74,9 @@ test("/loop shows a step-by-step trace of turns, tools and guards", async () => 
   await t.submit("go"); await t.until(() => t.idle());
   await t.submit("/loop"); await t.settle(200);
   const s = t.screen();
-  assert.match(s, /Agent loop · 3 turns/); assert.ok(s.includes("model") && s.includes("Read") && s.includes("replied without tools"), s);
+  assert.match(s, /Agent loop · 3 turns · 1 round/); assert.ok(s.includes("model") && s.includes("Read") && s.includes("replied without tools"), s);
+  assert.match(s, /model ◉ gather/); assert.match(s, /model ✎ act/);                 // each turn is labelled with its stage (reading is gathering, `echo hi` is acting)
+  assert.match(s, /inferred from its tool calls/);                                    // and the page says the labels are a guess
 });
 
 test("full: consecutive reads and searches collapse into one 'Explored' row that opens on click; edits and commands stay separate", async () => {

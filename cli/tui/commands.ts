@@ -7,6 +7,7 @@ import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, keyFor, storeKey,
 import { noStore, where } from "../keystore.ts";
 import { fetchModels } from "../models.ts";
 import { argOptions } from "./argcomplete.ts";
+import { STAGE_GLYPH, roundOf, stagesOf } from "./looppanel.ts";
 import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
 import { estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
@@ -210,10 +211,12 @@ export function buildCommands(): Cmd[] {
       const T = a.trace; if (!T.length) return a.say(dim("no loop activity yet: send a task first"));
       const tot = T.reduce((n, s) => n + s.completion + s.prompt, 0), ms = T.reduce((n, s) => n + s.ms, 0);
       const waste = cacheWaste(a.tracer?.turns ?? []), wasteCost = waste ? estimateCost(a.cfg.model, waste, 0) : null, wasteNote = waste > 500 ? `${fmtTokens(waste)} tokens re-read at full price after cache breaks${wasteCost !== null ? ` (≈ ${fmtCost(wasteCost - estimateCost(a.cfg.model, waste, 0, waste)!)} wasted)` : ""} · ` : "";
-      const out = ["", bold(`Agent loop · ${T.length} turn${T.length === 1 ? "" : "s"} · ${fmtDuration(ms)} · ${fmtTokens(tot)} tokens`), dim(`${wasteNote}${a.trimmed ? `trimmed ~${fmtTokens(Math.round(a.trimmed / 4))} tokens of stale or noisy output · ` : ""}${a.cacheBreaks ? `${a.cacheBreaks} cache break${a.cacheBreaks === 1 ? "" : "s"} · ` : ""}each turn: the model answers, its tool calls run, results go back; guards are shown where they fired`), ""];
+      const rounds = roundOf(T.map((s) => ({ ...s })));
+      const out = ["", bold(`Agent loop · ${T.length} turn${T.length === 1 ? "" : "s"} · ${rounds} round${rounds === 1 ? "" : "s"} · ${fmtDuration(ms)} · ${fmtTokens(tot)} tokens`), dim("each turn is gather ◉ (read, search), act ✎ (edit, run) or verify ✓ (test, build, check), inferred from its tool calls"), dim(`${wasteNote}${a.trimmed ? `trimmed ~${fmtTokens(Math.round(a.trimmed / 4))} tokens of stale or noisy output · ` : ""}${a.cacheBreaks ? `${a.cacheBreaks} cache break${a.cacheBreaks === 1 ? "" : "s"} · ` : ""}each turn: the model answers, its tool calls run, results go back; guards are shown where they fired`), ""];
       for (const s of T) {
         const pad = String(s.n).padStart(2);
-        out.push(`${cyan(`${pad} ●`)} ${bold("model")} ${dim(`${fmtDuration(s.ms)} · ${fmtTokens(s.prompt)} in · ${fmtTokens(s.completion)} out${s.cached ? ` · ${fmtTokens(s.cached)} cached` : ""}`)}`);
+        const st = stagesOf(s.tools);
+        out.push(`${cyan(`${pad} ●`)} ${bold("model")}${st.length ? " " + cyan(st.map((x) => `${STAGE_GLYPH[x]} ${x}`).join(" + ")) : ""} ${dim(`${fmtDuration(s.ms)} · ${fmtTokens(s.prompt)} in · ${fmtTokens(s.completion)} out${s.cached ? ` · ${fmtTokens(s.cached)} cached` : ""}`)}`);
         s.tools.forEach((x, i) => out.push(`     ${dim(i === s.tools.length - 1 && !s.notes.length ? "└─" : "├─")} ${x.ok ? green("✓") : red("✗")} ${toolCall(x.name, x.args)} ${dim(fmtDuration(x.ms))}${s.parallel && s.parallel > 1 && i === 0 ? dim(`  (${s.parallel} calls this turn)`) : ""}`));
         s.notes.forEach((n, i) => out.push(`     ${dim(i === s.notes.length - 1 ? "└─" : "├─")} ${yellow("⚑")} ${dim(n)}`));
         if (!s.tools.length && !s.notes.length) out.push(`     ${dim("└─ replied without tools")}`);

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Sidebar:** the RUN panel is now a **LOOP** panel: one line per step with the tools it ran, interventions of the harness (nudges, rejections, loop warnings) next to their step, click a step to open it, older steps fold when there is little room, and it stays as LAST RUN after the run. The step limit is shown only when it matters ("of 60" past half, a warning at 80%), instead of a progress bar toward it.
+- **Sidebar:** the RUN panel is now a **LOOP** panel. It draws the cycle gather ◉ → act ✎ → verify ✓ and lights the stage that is running (stages are inferred from the tool calls), counts rounds, and lists the latest steps with their stage icons. Harness interventions (nudges, rejections, loop warnings) stay next to their step, click a step to open it, older steps fold when there is little room, and it stays as LAST RUN after the run. `/loop` labels every turn with its stage and counts the rounds. The step limit is shown only when it matters ("of 60" past half, a warning at 80%), instead of a progress bar toward it.
 
 - **Evals:** `--max-cost <dollars>` (optional, off by default) stops starting sessions at an estimated spend; every run prints its estimated cost. `--calibrate` lists each task's baseline pass rate and which to keep. A task's `check` can read the agent's final message (`run.text`), with `solutionSummary` for the selftest.
 

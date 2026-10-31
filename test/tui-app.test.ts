@@ -494,7 +494,8 @@ test("full-screen sidebar: LOOP shows the steps of the run, then LAST RUN after 
   assert.ok(await t.until(() => /LAST RUN/.test(plain(t.screen()))), plain(t.screen()).slice(0, 1800));
   const s = plain(t.screen());
   assert.match(s, /3 steps · 2 tools/);                      // the run, summarised
-  assert.match(s, /1 ✓ List/); assert.match(s, /2 ✓ List/); assert.match(s, /3 · replied/);   // one line per step; the last step only answered
+  assert.match(s, /1 ◉ List/); assert.match(s, /2 ◉ List/); assert.match(s, /3 · replied/);   // one line per step with its stage icon (listing files is gathering); the last step only answered
+  assert.match(s, /◉ gather ▸ ✎ act ▸ ✓ verify/);               // the cycle is drawn in the sidebar
   assert.doesNotMatch(s, /step \d+\/\d+/);                   // the old "step 3/30" progress bar is gone
   assert.doesNotMatch(s, /○ think|● think/);                 // and so are the three fixed stages
   await t.key(KEY.ctrlD);

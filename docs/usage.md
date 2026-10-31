@@ -60,20 +60,28 @@ If you have no key yet, the first start asks you to pick a provider and paste a 
 
 - **Collapsed reads.** A run of reads and searches becomes one row, for example "Explored · 3 files read · 2 searches". Click it to open it. Edits, commands and failures always get their own card. Long diffs show the first 16 rows, and you click to see the rest.
 - **Cards.** Your prompts, the assistant replies (with code blocks that have a copy button), tool cards with a status chip, and diffs with line numbers and word-level marks. Wide terminals show a split view.
-- **Live run view.** The status line says what the agent does now, for example "Reading src/app.ts" or "Waiting for you". It also shows elapsed time, tokens and the step number. The sidebar has a **LOOP** panel: one line per step of the current run, newest at the bottom.
+- **Live run view.** The status line says what the agent does now, for example "Reading src/app.ts" or "Waiting for you". It also shows elapsed time, tokens and the step number. The sidebar has a **LOOP** panel that draws the cycle the agent goes round and lights the part that is running:
 
   ```text
-  LOOP                           41s
-  ⠋ step 7 · thinking 1.8s
-   5 ✓ Search → Read ×2        3.1s
-     ⚑ nudged: no edits after
-       5 reads
-   6 ✓ Update                  0.8s
-   7 ▸ thinking…
-  7 steps · 12 tools
+  LOOP                round 2 · step 14
+  ◉ gather ▸ ✎ act ▸ ✓ verify
+  ⠋ Updating src/app.ts  2.1s
+   12 ◉ Search → Read ×2     3.1s
+      ⚑ nudged: no edits after
+        5 reads
+   13 ✎ Update               0.8s
+   14 ✎ …
   ```
 
-  A step is one model call and the tools it started. Calls of one kind in a row merge (`Read ×2`). A `✗` means a tool failed. A line with `⚑` means the harness stepped in (a nudge, a loop or stagnation warning, a rejected finish, a denied call, a reviewer finding). Quieter notes (cache breaks, trimming) show only for the latest steps. **Click a step** to open it and see every tool call with its time. When there is not enough room, older steps fold into one line ("… 12 earlier steps · 31 tools · 2 failed"). When the run ends, the panel stays as **LAST RUN** with a one-line summary.
+  - **gather** ◉ (blue): reading, searching, listing files, asking a subagent, shell commands such as `ls` or `git diff`.
+  - **act** ✎ (amber): editing and writing files, and shell commands that change things.
+  - **verify** ✓ (green): shell commands that look like tests, builds, linting or type checks (`npm test`, `pytest`, `tsc`, `cargo test`…), the `check` command, and the verify gate when the agent says it is done.
+
+  The bright stage is the one running now. When two kinds run together, both light up. While the model is thinking and nothing runs, the stage it used last stays visible but dimmer. A test that failed keeps the verify icon red until a later one passes. A **round** is one trip round the cycle: it counts up when the agent gathers or acts again after verifying, so "round 3" means it went back to work twice after checking.
+
+  **These stages are a guess.** Amness reads them from the tool calls, and the loop itself has no such phases. An unusual shell command can be put in the wrong stage, and a step where the model only thinks has no stage.
+
+  Under the cycle you see the latest steps, one line each: the stage icons, the tools used, and the time. Calls of one kind in a row merge (`Read ×2`). A red `✗` means a tool failed. A line with `⚑` means the harness stepped in (a nudge, a loop or stagnation warning, a rejected finish, a denied call, a reviewer finding). It stays visible even when the step is older. **Click a step** to see every tool call with its time. A tall sidebar shows more steps than a short one, and older ones fold into one line. Type **`/loop`** for the whole history of the run, with every turn labelled by its stage. When the run ends, the panel stays as **LAST RUN**.
 
   The step limit is a safety stop, not a goal, so it stays hidden at first. It appears as "of 60" after half the steps and as a yellow bar with a warning at 80%.
 - **Sidebar** (`Ctrl+B`). It shows the session, a context gauge, token use, todos, changed files and the workspace. The *context* is the text the model can read at one time.

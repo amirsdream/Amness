@@ -254,7 +254,7 @@ export class FullView {
     if (this.openFor !== app.runStart) { this.openFor = app.runStart; this.openSteps.clear(); }   // step numbers start again in a new run
     return { live: app.running, phase: app.phase?.phase ?? "model", cap: app.phase?.max ?? 30, now, frame: app.frame, steps,
       elapsedMs: app.running ? now - app.runStart : Math.max(...steps.map((s) => s.t0 + s.ms)) - app.runStart,
-      inflight: [...app.inflight.values()].map((x) => ({ label: toolVerb(x.name, x.args), ms: now - x.t0, agent: x.agent })), open: [...this.openSteps] };
+      inflight: [...app.inflight.values()].map((x) => ({ label: toolVerb(x.name, x.args), ms: now - x.t0, agent: x.agent, name: x.name, args: x.args })), open: [...this.openSteps] };
   }
   private drawSidebar(c: Canvas, t: Theme, x0: number, y0: number, w: number, h: number) {
     const app = this.app, u = app.session.usage, win = contextWindow(app.cfg.model), now = Date.now();
