@@ -166,7 +166,12 @@ You see one line on stderr for each attempt, for example `attempt 1: failed veri
 
 ## Docker and GitHub Actions
 
-- A `Dockerfile` is included: `docker build -t amness .`, then `docker run -it --rm -v "$PWD":/work -e ANTHROPIC_API_KEY amness`. The old version of this page said it has not been built or tested. The README lists a Docker smoke test. **Not verified:** which of the two is right.
+- A `Dockerfile` is included: `docker build -t amness .`, then `docker run -it --rm -v "$PWD":/work -e ANTHROPIC_API_KEY amness`. CI builds the image and runs `--version` and a self-test in it (see [Development](development.md)).
+- **Keys in Docker.** Inside a container Amness never saves a key to disk. Pass it in one of two ways:
+  - an environment variable: `-e ANTHROPIC_API_KEY` (with no value, Docker copies it from your shell, so it is not typed on the command line);
+  - a Docker secret, which is mounted as a file: `-e ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic`. `OPENAI_API_KEY_FILE` and `TAVILY_API_KEY_FILE` work the same way.
+
+  The image sets `AMNESS_KEYSTORE=none`. Amness also detects `/.dockerenv` and Kubernetes on its own. If you type a key into the chat in a container, it is used for that session only.
 - The repository has a GitHub Action in `action.yml`. Its inputs are `task`, `verify`, `provider`, `model`, `max-tokens` and `comment`. See [Features: Scheduled runs and the GitHub Action](features.md#scheduled-runs-and-the-github-action).
 
 ## Related pages

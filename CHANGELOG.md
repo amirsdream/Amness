@@ -10,7 +10,7 @@ First public version. (0.1.0 was staged on npm but never released; it lacked the
 - **Cost:** staged context trimming that keeps the provider cache valid, optional cache keep-alive, model routing, per-role models, subagent budget slices.
 - **Workflow:** git worktree sessions, `/review`, `/pr`, `/branch`, `amness schedule`, `amness acp`, a GitHub Action.
 - **Shell and platform:** the shell is detected per OS (bash, zsh, sh, Git bash, pwsh, Windows PowerShell, cmd), the model is told which one it has, PowerShell and cmd get a safety floor, `/shell` shows what was detected, and `!cmd` runs a command directly.
-- **Keys:** the API key is saved in the macOS Keychain, the Linux keyring or Windows DPAPI instead of a plain file (plain file with mode 600 only where there is no store). Keys from environment variables are never saved. An old plain-text key moves over on the next start.
+- **Keys:** the API key is saved in the macOS Keychain, the Linux keyring or Windows DPAPI instead of a plain file (plain file with mode 600 only where there is no store). Keys from environment variables are never saved. In Docker or Kubernetes nothing is written to disk, and `*_API_KEY_FILE` reads Docker secrets. An old plain-text key moves over on the next start.
 - **Install:** `npm i -g amness` or `npx amness` gives the `amness` binary and the Claude SDK (an optional dependency) (built to `dist`, Node 22.18 or later). Releases are staged by CI and approved by hand.
 - **Measurement:** `amness eval` (paired statistics, ablations, SWE-bench-format suites, leak audit), `amness tune`, trace replay, failure mining.
 

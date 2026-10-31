@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { deleteSecret, getSecret, setSecret } from "./keystore.ts";
+import { deleteSecret, getSecret, noStore, setSecret } from "./keystore.ts";
 
 export const PROVIDERS = {
   anthropic: { label: "Anthropic (Claude)", baseUrl: "https://api.anthropic.com", model: "claude-opus-5-5", needsKey: true },
@@ -19,6 +19,12 @@ const file = () => join(home(), "config.json");
 export const defaults = (): Config => ({ provider: "openai", baseUrl: PROVIDERS.openai.baseUrl, model: PROVIDERS.openai.model, maxTokens: 300_000 });
 
 const SECRETS = ["apiKey", "tavilyKey"] as const;
+/** An environment variable, or the file NAME_FILE points to (Docker and Kubernetes secrets are mounted as files, for example /run/secrets/openai). */
+const envSecret = (name: string): string | undefined => {
+  const v = process.env[name]; if (v) return v;
+  const f = process.env[`${name}_FILE`]; if (!f) return undefined;
+  try { return readFileSync(f, "utf8").trim() || undefined; } catch { return undefined; }
+};
 let fromEnv: Partial<Record<(typeof SECRETS)[number], string>> = {};
 
 export function loadConfig(): Config {
@@ -35,9 +41,10 @@ export function loadConfig(): Config {
   // environment wins, so CI and one-off runs work without touching the saved key. It is never written back (see saveConfig).
   const claude = c.provider === "anthropic";
   fromEnv = {};
-  const key = claude ? process.env.ANTHROPIC_API_KEY : process.env.OPENAI_API_KEY;
+  const key = envSecret(claude ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY");
   if (key) c.apiKey = fromEnv.apiKey = key;
-  if (process.env.TAVILY_API_KEY) c.tavilyKey = fromEnv.tavilyKey = process.env.TAVILY_API_KEY;
+  const tavily = envSecret("TAVILY_API_KEY");
+  if (tavily) c.tavilyKey = fromEnv.tavilyKey = tavily;
   if (process.env.OPENAI_BASE_URL && !claude) c.baseUrl = process.env.OPENAI_BASE_URL;
   if (process.env.AMNESS_MODEL) c.model = process.env.AMNESS_MODEL;
   return c;
@@ -55,7 +62,7 @@ export function saveConfig(c: Config) {
     const v = c[k];
     if (v && v === fromEnv[k]) { delete out[k]; continue; } // this value came from an environment variable: do not store it
     if (!v) { deleteSecret(k); delete out[k]; continue; }
-    if (setSecret(k, v)) delete out[k]; // stored in the OS credential store; otherwise it stays in the file (mode 600)
+    if (setSecret(k, v) || noStore()) delete out[k]; // stored in the OS credential store; otherwise it stays in the file (mode 600), except in a container, where it is kept in memory only
   }
   writeConfigFile(out);
 }

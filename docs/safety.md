@@ -43,7 +43,8 @@ Notes about the provider:
   | macOS | the login Keychain (service `amness`) | encrypted by macOS |
   | Linux with a desktop keyring | the secret service, through `secret-tool` | encrypted by the keyring |
   | Windows | `~/.amness/secrets/apiKey.dpapi` | encrypted with DPAPI: only your Windows user on this machine can decrypt it |
-  | Linux server or Docker (no keyring) | `~/.amness/config.json` with mode 600 | **not encrypted**, only your user can read it. On a server, prefer an environment variable or your platform's secret manager. |
+  | Docker or Kubernetes | nowhere: kept in memory for that run | nothing is written to the image or a volume. Pass the key as an environment variable or a secret file (`ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic`). |
+  | Linux server with no keyring | `~/.amness/config.json` with mode 600 | **not encrypted**, only your user can read it. Prefer an environment variable or your platform's secret manager. |
 
 - Amness passes the key to the system tool on standard input, never on the command line, where other users could see it in the process list.
 - A key that an older version saved in `config.json` is moved to the key store the next time you start Amness, and removed from the file once the move is checked.

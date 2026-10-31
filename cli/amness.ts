@@ -71,7 +71,7 @@ async function ensureReady(): Promise<boolean> {
   if (!id) return false;
   Object.assign(cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model });
   if (id === "custom" || id === "ollama") { cfg.baseUrl = (await ask("Base URL", cfg.baseUrl)) || cfg.baseUrl; cfg.model = (await ask("Model", cfg.model)) || cfg.model; }
-  if (PROVIDERS[id].needsKey) cfg.apiKey = (await ask(`API key (hidden; saved to ${where()})`, "", { secret: true })) || undefined;
+  if (PROVIDERS[id].needsKey) cfg.apiKey = (await ask(`API key (hidden; ${where()})`, "", { secret: true })) || undefined;
   saveConfig(cfg);
   if (!ready(cfg)) return false;
   return (await testConnection(true)) || (await confirm("The test failed. Keep going anyway?", false));
@@ -354,7 +354,7 @@ async function settings() {
       if (pick !== undefined) cfg.effort = (pick || undefined) as typeof cfg.effort;
     }
     else if (what === "url") cfg.baseUrl = (await ask("Base URL", cfg.baseUrl)) || cfg.baseUrl;
-    else if (what === "key") cfg.apiKey = (await ask(`API key (hidden; stored in ${where()})`, cfg.apiKey ?? "", { secret: true })) || undefined;
+    else if (what === "key") cfg.apiKey = (await ask(`API key (hidden; ${where()})`, cfg.apiKey ?? "", { secret: true })) || undefined;
     else if (what === "tavily") cfg.tavilyKey = (await ask("Tavily API key (blank to clear)", "", { secret: true })) || undefined;
     else if (what === "budget") cfg.maxTokens = Math.max(1000, Number(await ask("Max tokens per run", String(cfg.maxTokens))) || cfg.maxTokens);
     else if (what === "test") { saveConfig(cfg); await testConnection(); continue; }

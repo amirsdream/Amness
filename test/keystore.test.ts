@@ -3,12 +3,13 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 
 // Each case runs in a child process, because the key store is chosen from environment variables when the module loads.
 const KEY = "sk-test-0123456789abcdefghij";
 const child = (home: string, code: string, env: Record<string, string> = {}) => {
-  const r = spawnSync(process.execPath, ["--input-type=module", "-e", `import * as c from ${JSON.stringify(join(import.meta.dirname, "../cli/config.ts"))}; ${code}`], {
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", `import * as c from ${JSON.stringify(pathToFileURL(join(import.meta.dirname, "../cli/config.ts")).href)}; ${code}`], {
     encoding: "utf8", env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", AMNESS_HOME: home, ...env },
   });
   assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
@@ -79,4 +80,16 @@ test("Linux system keyring: round-trips when secret-tool and a session are avail
     if (readFileSync(f, "utf8").includes(KEY)) return t.skip("no unlocked keyring session here, so it fell back to the file"); // the fallback is tested above
     assert.equal(child(home, `console.log(c.loadConfig().apiKey)`, env), KEY);
   } finally { spawnSync("secret-tool", ["clear", "service", service, "account", "apiKey"]); }
+});
+
+test("container mode: a key typed in is kept in memory only, and a *_FILE secret is read", () => {
+  const home = fresh(), secret = join(home, "openai-secret");
+  writeFileSync(secret, KEY + "\n");
+  const env = { AMNESS_KEYSTORE: "none", OPENAI_API_KEY_FILE: secret };
+  assert.equal(child(home, `console.log(c.loadConfig().apiKey)`, env), KEY);                 // read from the secret file, newline trimmed
+  child(home, `const x = c.loadConfig(); x.theme = "dark"; c.saveConfig(x);`, env);
+  assert.ok(!readFileSync(join(home, "config.json"), "utf8").includes(KEY));                 // and never written back
+  const home2 = fresh();
+  child(home2, `const x = c.loadConfig(); x.apiKey = "sk-typed-in-9999"; x.theme = "dark"; c.saveConfig(x);`, { AMNESS_KEYSTORE: "none" });
+  assert.ok(!readFileSync(join(home2, "config.json"), "utf8").includes("sk-typed-in"));      // a typed key is not written to disk in a container
 });
