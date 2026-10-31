@@ -1,6 +1,6 @@
 name: Publish to npm
 
-# Runs only when you push a version tag (git tag v0.1.0 && git push --tags). Needs an NPM_TOKEN repository secret.
+# Runs only when you push a version tag (git tag v0.1.0 && git push --tags). Needs an NPM_TOKEN repository secret (a stage-only token is enough). This only STAGES the version; to release it, review with `npm stage list` / `npm stage download <id>`, then `npm stage approve <id>` (2FA) or `npm stage reject <id>`.
 on:
   push:
     tags: ["v*"]
@@ -21,6 +21,6 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npm publish --provenance --access public
+      - run: npm stage publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
