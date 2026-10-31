@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 (2026-10-31)
 
 - **Several providers at once:** each provider keeps its own saved key. `/connect` (alias `/keys`) shows which providers are connected and lets you add, replace or remove a key; `/provider` marks connected ones and uses the saved key. `OPENROUTER_API_KEY` is read for OpenRouter. A key from an older version moves to the provider that was active.
 - **Argument completion:** after a command and a space, the popup lists what it accepts (`/mode`, `/model`, `/theme`, `/sandbox`, on/off switches, turns for `/branch` and more). `/model` also lists the models your provider offers, and the `/model` picker includes them.
