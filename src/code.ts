@@ -95,7 +95,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
   return [
     defineTool<{ path?: string }>({ name: "list_files", description: "List files in the workspace (skips node_modules, .git, dist). Max 300.",
       schema: { type: "object", properties: { path: { type: "string" } } }, readOnly: true,
-      run: ({ path }) => walk(abs(path ?? "."), []).join("\n") || "(empty)" }),
+      run: ({ path }) => path && !existsSync(abs(path)) ? `ERROR: ${path} does not exist.${suggest(path)}` : walk(abs(path ?? "."), []).join("\n") || "(empty)" }),
     defineTool<{ path: string; start?: number; end?: number }>({ name: "read_file", description: "Read a file with line numbers (optionally lines start..end).",
       schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, start: { type: "integer" }, end: { type: "integer" } } }, readOnly: true,
       run: ({ path, start, end }) => {
@@ -280,6 +280,10 @@ export type CodeAgentOptions = {
   embedder?: Embedder;
   /** Start a fresh context with a handoff note when the transcript gets big. Default: at 120k prompt tokens / 500k chars. */
   rollover?: { afterTokens?: number; afterChars?: number } | false;
+  /** The model's context window in tokens. Set for small or local models (8192): the loop then keeps every request inside it and recovers from "context too long" errors. See `Options.contextWindow` in harness.ts. */
+  contextWindow?: number;
+  /** Called when the window size was learned from a provider error, so it can be remembered. */
+  onWindow?: (tokens: number) => void;
   /** Interrupt a running agent (e.g. Ctrl-C). It stops at a safe point with the checkpoint written, so it can be resumed. */
   signal?: AbortSignal | (() => AbortSignal | undefined);
   /** Recorded in exported bundles so you can see where a session came from. */
@@ -414,7 +418,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const h = createHarness({
     model: o.model, compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
     budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
-    rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 },
+    rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 
 Task: ${task}

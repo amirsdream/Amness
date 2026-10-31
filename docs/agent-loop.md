@@ -52,7 +52,7 @@ You type `Fix the failing test in src/math.ts` in the chat and press Enter. The 
 4. **The loop starts a step.** `run()` in `src/harness.ts` first checks the abort signal.
 5. **Steer.** `run()` calls `o.inbox()`. In the chat this is `drainQueue()` in `cli/tui/app.ts`. Each queued message joins the conversation.
 6. **Budget.** `run()` reads `Budget.fraction` (class `Budget` in `src/harness.ts`). At 50%, 75% and 90% it appends a note. At 95% or more, or when another step would not fit, it makes a final report call and stops.
-7. **Compaction.** If the transcript is longer than `contextBudget` (default 60,000 characters), `run()` calls `supersede()` and then `compact()`. Claude models skip this step (see the cache section). Before this, `makeHandoff()` runs if a context rollover is due.
+7. **Compaction.** If a context window is known (`contextWindow`), `run()` estimates the request in tokens, corrected by the provider's own count, and works from the ladder below when it passes 80% of the usable window. Otherwise, if the transcript is longer than `contextBudget` (default 60,000 characters), `run()` calls `supersede()` and then `compact()`. Claude models skip this step (see the cache section). Before this, `makeHandoff()` runs if a context rollover is due.
 8. **Model call.** `run()` checks for a cache break (`firstCacheBreak()`), runs the `PreModel` hook, and calls the model. Text streams to the UI through `onText`.
 9. **Tool calls.** The model asks for `edit_file` and `sh`. Inside `run()`, `exec()` checks the arguments (`validate()` in `src/schema.ts`), runs the `PreToolUse` hook, checks repeated calls (`canonicalCall()`, `findCycle()`), and asks the permission rules and you for approval. Then it runs the tool. The edit and the shell command do not run at the same time, because they can change state.
 10. **Results.** `condense()` shortens the output. `redact()` in `src/secrets.ts` masks secrets. The `PostToolUse` hook runs. For an edit, `Ledger.onEdit()` in `src/ledger.ts` records it. For a shell command, `Ledger.onCommand()` records the exit code.
@@ -87,6 +87,18 @@ You type `Fix the failing test in src/math.ts` in the chat and press Enter. The 
 2. **Drop repeated or expired output** (`supersede()`). An *expired* read is a read of a file that was edited afterwards. Both kinds are replaced by a short note.
 3. **Elide old tool output** (`compact()`). Output over 300 characters in older messages is replaced by a note. The last 6 messages stay intact. The cut goes down to 70% of `contextBudget` in one go.
 4. **Hand off to a fresh context** (`makeHandoff()`). The model writes a note, and the run continues from the task plus that note. For the code agent, this happens when the last prompt passes 120,000 tokens or the transcript passes 500,000 characters. You can change this with the `rollover` option.
+
+### Keeping inside a context window
+
+**What it is.** When the window size is known (`contextWindow` option, `--context-window`, `AMNESS_CONTEXT_WINDOW`, or learned from an error), the loop in `src/harness.ts` uses the functions in `src/context.ts` instead of the fixed character budget. Sizes scale with the window, so it works for 8,192 tokens and for 1,000,000 alike (the triggers use at most 150,000 tokens of a larger window, because long contexts cost money).
+
+1. **Estimate** the real request: messages, tool-call arguments, provider extras and the tool definitions (`estimateTokens()`). After every reply the estimate is corrected by the provider's own prompt token count (`calibration()`).
+2. **At 80% of the usable window** (the window minus room for the reply), shrink in place until the request is at 55%: blank old tool outputs, then shrink long arguments in old tool calls (a `write_file` body stays valid JSON), keeping the newest turns word for word (`fit()`).
+3. **At 90%**, if shrinking was not enough, write a handoff note. The request that asks for the note is built from a shrunk copy so that it fits. If even that overflows, it asks again with less, and last of all writes a note without the model (`mechanicalNote()`: task, files touched, commands run, last message).
+4. **If the provider still says the request is too long**, the loop reads the window or the token count from the message, shrinks harder and tries again, up to 3 times in a row (`isOverflow()`, `windowFromError()`, `requestedFromError()`). `onWindow` reports a learned window so the app can remember it.
+5. Each tool result is capped on entry to a size that fits the window (about 7% of it, between 1,200 and 6,000 characters).
+
+**Limits.** Not measured on a real model yet: the tests use a fake server with an 8k window (`test/context.test.ts`). The tool list and system prompt take about 2,200 tokens, which is a lot in an 8k window. Claude models are append-only and skip stage 2, but still hand off and recover.
 
 **Why.** Every change to old messages breaks the provider's cache from that point on. One large cut every few turns costs less than a small cut every turn.
 

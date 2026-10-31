@@ -39,4 +39,6 @@ test("tokenReport: gauge, stacked map with legend, sparkline, usage, cost, advic
   assert.match(tokenReport({ ...base, lastPrompt: 950_000 }).map(strip).join("\n"), /nearly full: run \/compact now/);
   const unknown = tokenReport({ ...base, model: "my-local-model", lastPrompt: 1000, messages: [] }).map(strip).join("\n");
   assert.match(unknown, /unknown for this model/);
+  const small = tokenReport({ ...base, model: "my-local-model", window: 8192, lastPrompt: 7000, messages: [] }).map(strip).join("\n");
+  assert.match(small, /85%|86%/); assert.match(small, /nearly full|getting full/);
 });

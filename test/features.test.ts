@@ -194,6 +194,9 @@ test("a wrong file name gets the closest real files back, and grep on a missing 
   await assert.rejects(Promise.resolve().then(() => read.run({ path: "zzz.ts" }, {} as any)), /Use list_files or grep/);
   assert.match(String(await grep.run({ pattern: "x", path: "src/gemini.ts" }, {} as any)), /ERROR: src\/gemini\.ts does not exist, so nothing was searched\./);
   assert.match(String(await grep.run({ pattern: "x", path: "src" }, {} as any)), /harness\.ts:1:x/);
+  const list = tools.find((t) => t.name === "list_files")!;                                  // a wrong folder name gets the same help instead of a raw ENOENT
+  assert.match(String(await list.run({ path: "harness" }, {} as any)), /ERROR: harness does not exist\. Did you mean: src\/harness\.ts\?/);
+  assert.match(String(await list.run({ path: "src" }, {} as any)), /src\/harness\.ts|harness\.ts/);
 });
 
 test("sh: a command that is not found (exit 127) explains what that means, and says when the name is really one of the agent's tools", async () => {

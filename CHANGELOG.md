@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Small context windows:** Amness now keeps every request inside the model's context window, so a long session on a small local model (for example a 30B Qwen with an 8k window) no longer dies with "maximum context length". Set the window with `contextWindow` in the config, `AMNESS_CONTEXT_WINDOW`, or `--context-window`; if you set nothing, it is learned from the first overflow error and remembered. As the window fills, old tool output and big tool arguments are shortened first, then a handoff note is written (built from a shrunk copy, with a fallback that needs no model call). The sidebar, footer and `/tokens` show the percentage of this window. `amness run` also gets `--max-steps`. See [Run a local model](docs/providers.md) and [Agent loop](docs/agent-loop.md).
+
 ## 0.1.5 (2026-10-31)
 
 - **Windows colours:** Windows sets neither `TERM` nor `COLORTERM`, so Amness fell back to 16 colours there and the themes looked washed out. Windows Terminal, VS Code and any Windows 10 (build 14931 or newer) console now get full truecolor, like on macOS.

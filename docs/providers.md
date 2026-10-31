@@ -129,6 +129,14 @@ amness run --provider custom --base-url http://localhost:1234/v1 --model <model-
 
 In the chat, run `/provider`, pick "Custom OpenAI-compatible", and type the model id and the base URL when Amness asks.
 
+**Set the context window.** A local server often runs a model with a small context window, such as 8,192 tokens. Amness keeps every request inside the window you give it. When the window fills up, it shortens old tool output first, then writes a handoff note and continues from that. Tell Amness the window in one of three ways:
+
+- `contextWindow` in `~/.amness/config.json`, for example `"contextWindow": 8192`.
+- The `AMNESS_CONTEXT_WINDOW` environment variable.
+- `--context-window 8192` in `amness run`.
+
+If you set nothing, Amness learns the window from the first "context length exceeded" error (the message usually states it), recovers, and remembers it for that model. The sidebar, the footer and `/tokens` show the percentage of this window. With a very small window the fixed part of each request (the system prompt and the tool list) already takes about 2,000 tokens, so an 8,192 window leaves room for only a few turns between handoffs. A window of 16,000 or more is much more comfortable.
+
 **Limits and common problems.**
 
 - Agent work needs **tool calling**, so choose a model that supports it. Small models can fail at it. Tool-calling quality varies a lot between local models.
@@ -168,6 +176,7 @@ In `auto` mode Amness fixes these cases for you:
 | `ANTHROPIC_API_KEY` | The key for `anthropic`. |
 | `OPENAI_BASE_URL` | The base URL for non-Claude providers. |
 | `AMNESS_MODEL` | The model id. It wins over the saved config. |
+| `AMNESS_CONTEXT_WINDOW` | The model's context window in tokens (for a small local model). It wins over the saved config. |
 | `AMNESS_HOME` | The config folder. The default is `~/.amness`. |
 | `AMNESS_UI` | `full` or `inline`. |
 | `AMNESS_EMBED_MODEL` | The embedding model for semantic memory. The default is `text-embedding-3-small`. |

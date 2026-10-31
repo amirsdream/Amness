@@ -15,7 +15,7 @@ import { runPlugin } from "./plugincli.ts";
 import { runSchedule } from "./schedulecli.ts";
 import { ACP_HELP, runAcp } from "./acpcli.ts";
 import { runEval, runTune } from "./evalcli.ts";
-import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, home, keyFor, loadConfig, mask, ready, saveConfig, type Config, type ProviderId } from "./config.ts";
+import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, home, keyFor, loadConfig, mask, ready, rememberWindow, saveConfig, windowFor, type Config, type ProviderId } from "./config.ts";
 import { where } from "./keystore.ts";
 import { DEMO_TASK, explain, runDemo } from "./demo.ts";
 import { formatEvent } from "./format.ts";
@@ -153,7 +153,7 @@ async function runCode(job: CodeJob) {
   let ac = new AbortController();
   const cp = checkpointOf(job.dir);
   const agent = createCodeAgent({
-    model: makeModel(), cwd: job.dir, verify: job.verify, budget, approve, selfExtend: job.selfExtend, tools: mcp?.tools, signal: () => ac.signal,
+    model: makeModel(), cwd: job.dir, contextWindow: windowFor(cfg), onWindow: (w) => rememberWindow(cfg, w), verify: job.verify, budget, approve, selfExtend: job.selfExtend, tools: mcp?.tools, signal: () => ac.signal,
     checkpointFile: cp, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e) => { onEvent(e); live?.onEvent(e); if (e.kind === "edit") edits.push(e); },
   });

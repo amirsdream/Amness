@@ -278,6 +278,16 @@ test("Alt+M opens the model picker directly", async () => {
   await t.key(KEY.ctrlD);
 });
 
+test("a small window set in the config (a local 8k model) drives the context percentage in the sidebar and the footer, not the table's guess for the model", async () => {
+  const t = rig([]); await t.start();
+  t.app.cfg.model = "qwen3-30b"; t.app.lastPrompt = 6000; t.app.render();
+  assert.equal(t.app.ctxPct, 5);                                  // unknown model: the default guess is 128k
+  t.app.cfg.contextWindow = 8192; t.app.render();
+  assert.equal(t.app.window, 8192); assert.equal(t.app.ctxPct, 73); assert.match(plain(t.screen()), /73%/);
+  t.app.cfg.contextWindow = undefined; t.app.cfg.windows = { "qwen3-30b": 4096 }; assert.equal(t.app.window, 4096);   // a window learned from an error counts too
+  await t.key(KEY.ctrlD);
+});
+
 test("status line animates while working (spinner glyph + elapsed + tokens), and warns about a full context window", async () => {
   const g = gate();
   const t = rig([async () => { await g.p; return say("done"); }]); await t.start();

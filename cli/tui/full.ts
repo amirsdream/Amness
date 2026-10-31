@@ -14,7 +14,7 @@ import type { MouseEv } from "./keys.ts";
 import { MOUSE_OFF, MOUSE_ON } from "./keys.ts";
 import { drawModal, type ModalHit } from "./modal.ts";
 import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay } from "./overlays.ts";
-import { contextWindow, estimateCost, fmtDuration, fmtTokens } from "./pricing.ts";
+import { estimateCost, fmtDuration, fmtTokens } from "./pricing.ts";
 import { BOLD, F, ITAL, chip, fit, split } from "./rich.ts";
 import { renderSidebar } from "./sidebar.ts";
 import { cellWidth, clipWidth } from "./text.ts";
@@ -272,7 +272,7 @@ export class FullView {
       inflight: [...app.inflight.values()].map((x) => ({ label: toolVerb(x.name, x.args), ms: now - x.t0, agent: x.agent, name: x.name, args: x.args })), open: [...this.openSteps] };
   }
   private drawSidebar(c: Canvas, t: Theme, x0: number, y0: number, w: number, h: number) {
-    const app = this.app, u = app.session.usage, win = contextWindow(app.cfg.model), now = Date.now();
+    const app = this.app, u = app.session.usage, win = app.window, now = Date.now();
     const mkey = `${app.session.messages.length}|${app.lastPrompt}`;
     if (this.ctxCache?.key !== mkey) {
       const m = contextMap(app.session.messages, app.lastPrompt, JSON.stringify(app.agent.registry.visible({ step: 0, messages: [] }).map((x) => x.name + x.description)).length);

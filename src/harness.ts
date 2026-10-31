@@ -2,6 +2,7 @@ import { type Schema, validate, parseLooseJson } from "./schema.ts";
 
 import { ProgressTracker, type TurnFacts } from "./progress.ts";
 import { redact } from "./secrets.ts";
+import { calibration, estimateTokens, fit, isOverflow, mechanicalNote, requestedFromError, windowFromError } from "./context.ts";
 export type ToolCall = { id: string; type?: "function"; function: { name: string; arguments: string } };
 export type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** set when the provider reported nothing and the harness estimated (about 4 characters per token) */ estimated?: boolean; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
 export type Message = { role: "system" | "user" | "assistant" | "tool"; content: string | null; /** pictures attached to a user message (base64) */ images?: { mime: string; data: string }[]; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: Usage;
@@ -131,8 +132,13 @@ export type Options = {
   /** Gate for `finish`: return true/undefined to accept, or a string / {ok:false, feedback} to reject with feedback. */
   verify?: (summary: string) => Promise<true | string | void | { ok: boolean; feedback?: string }> | true | string | void;
   maxSteps?: number;
-  /** Chars of transcript before old tool output is elided. */
+  /** Chars of transcript before old tool output is elided. Ignored when `contextWindow` is set. */
   contextBudget?: number;
+  /** The model's context window in tokens (8192 for a small local model, 1_000_000 for a large one). When set, the loop keeps every request inside it: it shrinks old output as the window fills,
+   *  writes a handoff note before it overflows, and recovers from a "context too long" error instead of failing. A window stated in such an error replaces this value. */
+  contextWindow?: number;
+  /** Called when the window size was learned from a provider error, so it can be remembered. */
+  onWindow?: (tokens: number) => void;
   budget?: Budget;
   /** Asked before any `risky` tool call. Return true to allow, or false / a string (shown to the model) to deny. No handler = deny. */
   approve?: Approve;
@@ -373,8 +379,27 @@ export function createHarness(o: Options) {
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
-    let allowNow: Set<string> | undefined, thenNext: string | undefined, budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false;
+    let allowNow: Set<string> | undefined, thenNext: string | undefined, budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false, win = o.contextWindow, recoveries = 0, calib = 1;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
+
+    /** Tokens a request may use: the window minus room for the reply. */
+    const usable = () => { const w = Math.min(win ?? 0, 150_000); return w - Math.min(Math.round(w * 0.15), 2048); };   // a 1M window is not a reason to carry 800k tokens: long contexts cost money and blur the model
+    /** Size cap for one tool result entering the transcript: a small window cannot afford 6000 characters per call. */
+    const entryCap = () => (win ? Math.max(1200, Math.min(6000, Math.round(win * 0.07 * 3.5))) : 6000);
+    /** Replace the conversation by a handoff note. The request that asks for the note must itself fit, so it is made from a shrunk copy. */
+    const roll = async (specs: ToolSpec[]) => {
+      let note = "";
+      for (let tries = 0; ; tries++) {
+        const req = win ? msgs.map((x) => ({ ...x })) : msgs;
+        if (win) fit(req, specs, Math.max(256, (usable() - estimateTokens([{ role: "user", content: HANDOFF_PROMPT }]) * calib - Math.round(win * 0.12)) / calib / 2 ** tries), Math.round((win * 0.1) / calib / 2 ** tries), true);
+        try { note = await makeHandoff(o.compactModel ?? o.model, specs, req, o.budget); break; }
+        catch (e) { if (!isOverflow(e) || sig()?.aborted) throw e; if (tries >= 2) { note = mechanicalNote(msgs); break; } }   // the request for the note was itself too big: ask again with less, then write the note ourselves
+      }
+      const first = (msgs.find((x) => x.role === "user")?.content ?? "").split(HANDOFF_MARK)[0];
+      msgs.splice(1, msgs.length, { role: "user", content: `${first}${HANDOFF_MARK} (you are continuing, not starting over)\n${note}` });
+      seen.clear(); nudges = 0; lastPrompt = 0;
+      o.onHandoff?.(note); emit({ kind: "rollover", detail: note.slice(0, 200) });
+    };
 
     for (let step = 0; step < max; step++) {
       lastStep = step;
@@ -405,13 +430,16 @@ export function createHarness(o: Options) {
       const menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => t.deferred && !reg.loaded.has(t.name)) : [];
       const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 80)}`).join("\n") }] : []), FINISH];
       const r = o.rollover, size = msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0);
-      if (r && step > 0 && (lastPrompt >= (r.afterTokens ?? Infinity) || size >= (r.afterChars ?? Infinity))) {
-        const note = await makeHandoff(o.compactModel ?? o.model, specs, msgs, o.budget);
-        const first = (msgs.find((x) => x.role === "user")?.content ?? "").split(HANDOFF_MARK)[0];
-        msgs.splice(1, msgs.length, { role: "user", content: `${first}${HANDOFF_MARK} (you are continuing, not starting over)\n${note}` });
-        seen.clear(); nudges = 0; lastPrompt = 0;
-        o.onHandoff?.(note); emit({ kind: "rollover", detail: note.slice(0, 200) });
-      }
+      if (win) {
+        // Window-aware: shrink old output before the window fills (cheap, loses little), and hand off only when shrinking is not enough.
+        let est = estimateTokens(msgs, specs) * calib;
+        if (est > usable() * 0.8 && !off.has("compact") && !o.model.appendOnly && !(await hook("PreCompact", { tokens: Math.round(est), window: win }))?.block) {
+          const s1 = supersede(msgs, 6, (n) => reg.get(n)?.readOnly === true), res = fit(msgs, specs, (usable() * 0.55) / calib, (usable() * 0.15) / calib);
+          if (s1 + res.saved > 0) emit({ kind: "trim", saved: s1 + Math.round(res.saved * 3.5), what: res.stages.join(", ") || "stale tool output" });
+          est = estimateTokens(msgs, specs) * calib;
+        }
+        if (step > 0 && est > usable() * 0.9) await roll(specs);
+      } else if (r && step > 0 && (lastPrompt >= (r.afterTokens ?? Infinity) || size >= (r.afterChars ?? Infinity))) await roll(specs);
       if (!off.has("wrapup") && !warned && max > 6 && step === max - 3) {
         warned = true; emit({ kind: "nudge", detail: "step limit near" });
         msgs.push({ role: "user", content: `You have 3 steps left. Stop exploring: finish the most important remaining work, verify it, and call \`finish\` with what is done and what is not.` });
@@ -420,7 +448,7 @@ export function createHarness(o: Options) {
       emit({ kind: "phase", phase: "compact", step, max });
       // Editing old messages breaks the provider's prompt-cache prefix from that point on, and cached input is ~10x cheaper than fresh input,
       // so history is only rewritten when the window needs it, and then all stages at once (one break), cutting well below the budget (hysteresis).
-      if (!off.has("compact") && !o.model.appendOnly && msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) > (o.contextBudget ?? 60_000)) {
+      if (!win && !off.has("compact") && !o.model.appendOnly && msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) > (o.contextBudget ?? 60_000)) {
         const veto = (await hook("PreCompact", { chars: msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) }))?.block;
         const s = veto ? 0 : supersede(msgs, 6, (n) => reg.get(n)?.readOnly === true) + compact(msgs, o.contextBudget);
         if (s > 0) emit({ kind: "trim", saved: s, what: "stale tool output" });
@@ -435,15 +463,26 @@ export function createHarness(o: Options) {
         if (pre?.context) msgs.push({ role: "user", content: pre.context });
         allowNow = pre?.tools ? new Set(pre.tools) : undefined; thenNext = pre?.then; }
       emit({ kind: "phase", phase: "model", step, max });
-      let m: Message;
+      let m!: Message;
       let streamed = false;
-      try { m = await o.model(msgs, specs, { signal: sig(), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); }
-      catch (e) {
-        if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
-        throw e;
+      for (;;) {
+        try { m = await o.model(msgs, specs, { signal: sig(), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); recoveries = 0; break; }
+        catch (e) {
+          if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
+          // The provider says the request does not fit. Learn the window from the message (or guess it from our own estimate), shrink harder, and ask again.
+          if (!isOverflow(e) || off.has("compact") || recoveries >= 3) throw e;
+          recoveries++;
+          const asked = requestedFromError(e); if (asked) calib = calibration(asked, estimateTokens(msgs, specs));
+          const stated = windowFromError(e), was = win; win = stated ?? Math.max(1024, Math.floor(Math.min(win ?? Infinity, estimateTokens(msgs, specs) * calib) * 0.8));
+          if (win !== was) o.onWindow?.(win);
+          const res = fit(msgs, specs, (usable() * 0.5) / calib, (usable() * 0.12) / calib);
+          emit({ kind: "trim", saved: Math.round(res.saved * 3.5), what: `overflow recovery (window ${win} tokens)` });
+          if (!res.fits) await roll(specs);
+        }
       }
       ensureUsage(m, msgs); void hook("PostModel", { step, text: (m.content ?? "").slice(0, 4000), tools: (m.tool_calls ?? []).map((c) => c.function.name), usage: m.usage });
       o.budget?.add(m); tokens += m.usage?.total_tokens ?? 0; lastCost = Math.max(0, (m.usage?.total_tokens ?? 0) - 0.9 * (m.usage?.cached_tokens ?? 0)); lastPrompt = m.usage?.prompt_tokens ?? 0;
+      if (win && !m.usage?.estimated && lastPrompt > 0) calib = calibration(lastPrompt, estimateTokens(msgs, specs));      // `msgs` is exactly what was sent: learn how far our estimate is from the provider's count
       if (o.record) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
       emit({ kind: "turn", step, tokens, prompt: m.usage?.prompt_tokens ?? 0, completion: m.usage?.completion_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0, reasoning: m.usage?.reasoning_tokens ?? 0 });
       if (m.content?.trim()) emit({ kind: "assistant", text: m.content, streamed });
@@ -531,7 +570,7 @@ export function createHarness(o: Options) {
         }
         let result: string;
         emit({ kind: "toolstart", id: c.id, name, args: raw });
-        try { const r = await t!.run(args, { registry: reg, step, callId: c.id, emit: (ev) => { if (ev.kind === "edit") { epoch++; turnEdits.push({ path: ev.path, diff: ev.diff }); if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw) : condense(raw); ingress += raw.length - result.length; }
+        try { const r = await t!.run(args, { registry: reg, step, callId: c.id, emit: (ev) => { if (ev.kind === "edit") { epoch++; turnEdits.push({ path: ev.path, diff: ev.diff }); if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); const raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok"; result = off.has("condense") ? clip(raw, entryCap()) : condense(raw, entryCap()); ingress += raw.length - result.length; }
         catch (e) { result = `ERROR: ${(e as Error).message}`; }
         if (name === "sh" && !off.has("ledger")) o.ledger?.onCommand(String(args.cmd ?? ""), result);
         if (o.redact && !off.has("redact")) { const rr = redact(result); if (rr.count) { result = rr.text; emit({ kind: "hook", event: "Redact", detail: `masked ${rr.count} secret(s) (${rr.kinds.join(", ")}) in the output of ${name}`, blocked: false }); } }

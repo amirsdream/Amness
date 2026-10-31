@@ -39,12 +39,12 @@ export function contextMap(messages: Message[], promptTokens = 0, toolDefChars =
 
 export type ReportInput = {
   model: string; messages: Message[]; usage: { prompt: number; completion: number; calls: number; cached?: number; reasoning?: number }; series: number[];
-  lastPrompt: number; turnTokens: number; turnBudget: number; width: number; /** size of the tool definitions sent with every request */ toolDefChars?: number;
+  /** context window in tokens; default: the known size for the model */ window?: number; lastPrompt: number; turnTokens: number; turnBudget: number; width: number; /** size of the tool definitions sent with every request */ toolDefChars?: number;
 };
 
 /** The /tokens panel. */
 export function tokenReport(r: ReportInput): string[] {
-  const win = contextWindow(r.model), used = r.lastPrompt || contextMap(r.messages, 0, r.toolDefChars).total, pct = Math.min(100, Math.round((used / win) * 100));
+  const win = r.window ?? contextWindow(r.model), used = r.lastPrompt || contextMap(r.messages, 0, r.toolDefChars).total, pct = Math.min(100, Math.round((used / win) * 100));
   const map = contextMap(r.messages, r.lastPrompt, r.toolDefChars), barW = Math.max(16, Math.min(48, r.width - 12));
   const sb = stackedBar(map.parts.map((p) => ({ label: p.label, value: p.tokens, color: p.color })), barW);
   const cached = r.usage.cached ?? 0, reasoning = r.usage.reasoning ?? 0;

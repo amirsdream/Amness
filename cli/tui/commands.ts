@@ -224,7 +224,7 @@ export function buildCommands(): Cmd[] {
       return a.openPager(out, "loop trace");
     } },
     { name: "tokens", alias: "cost", help: "context window, what fills it, tokens and cost", live: true, run: (a) => {
-      a.commit(tokenReport({ model: a.cfg.model, messages: a.session.messages, usage: a.session.usage, series: a.session.usage.series ?? [], lastPrompt: a.lastPrompt, turnTokens: a.runTokens, turnBudget: a.running ? a.cfg.maxTokens : 0, width: a.width,
+      a.commit(tokenReport({ model: a.cfg.model, window: a.window, messages: a.session.messages, usage: a.session.usage, series: a.session.usage.series ?? [], lastPrompt: a.lastPrompt, turnTokens: a.runTokens, turnBudget: a.running ? a.cfg.maxTokens : 0, width: a.width,
         toolDefChars: JSON.stringify(a.agent.registry.visible({ step: 0, messages: [] }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }))).length }));
     } },
     { name: "todos", help: "show the agent's checklist", live: true, run: (a) => a.commit(["", ...(a.todos.length ? todoList(a.todos, a.width) : [dim("  no todo list right now")])]) },
