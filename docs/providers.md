@@ -135,7 +135,7 @@ In the chat, run `/provider`, pick "Custom OpenAI-compatible", and type the mode
 - The `AMNESS_CONTEXT_WINDOW` environment variable.
 - `--context-window 8192` in `amness run`.
 
-If you set nothing, Amness learns the window from the first "context length exceeded" error (the message usually states it), recovers, and remembers it for that model. The sidebar, the footer and `/tokens` show the percentage of this window. With a very small window the fixed part of each request (the system prompt and the tool list) already takes about 2,000 tokens, so an 8,192 window leaves room for only a few turns between handoffs. A window of 16,000 or more is much more comfortable.
+If you set nothing, Amness learns the window from the first "context length exceeded" error (the message usually states it), recovers, and remembers it for that model. The sidebar, the footer and `/tokens` show the percentage of this window. With a very small window the fixed part of each request (the system prompt and the tool list) already takes about 2,000 tokens, so an 8,192 window leaves room for only a few turns between handoffs. A window of 16,000 or more is much more comfortable. For a window of 16,384 or less Amness uses a small-window profile: a shorter system prompt, compact Skills and Memory blocks, and only the core tools (`read_file`, `list_files`, `grep`, `edit_file`, `write_file`, `sh`, `finish`) in the prompt. The other tools are found with `tool_search` when the model needs them. A bare "hi" then costs about 1,300 to 1,500 tokens.
 
 **Limits and common problems.**
 

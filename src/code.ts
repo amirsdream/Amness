@@ -198,6 +198,12 @@ MEMORY: notes from earlier sessions may appear below the task; treat them as hin
 Never invent file contents or command output. Don't ask the user questions; choose sensible defaults. Some commands need human approval; if denied, use another route.`;
 
 /** Conversational variant of the prompt: answers questions directly, plans, delegates exploration, works within permission modes. */
+/** For small context windows: the same rules as CHAT_SYSTEM and CODE_SYSTEM in about a third of the words. */
+export const COMPACT_SYSTEM = `You are a software engineer working in the user's repository. Be concise; cite files as path:line.
+- Look before you answer: list_files, grep, read_file (read part of a big file with start/end). Never invent file contents or tool output.
+- Change code with edit_file or write_file, then check it (run the tests or the build) before you finish.
+- Do what you said in the same turn: no plans without a tool call. Call \`finish\` when the task is done and verified.
+- Other tools (memory, skills, repo_map, background shells, subagents) are found with tool_search.`;
 export const CHAT_SYSTEM = `You are an expert software engineer pair-programming with the user in their terminal, inside their repository. Be concise and direct; format with Markdown (short paragraphs, \`inline code\`, fenced code blocks).
 How to work:
 - Questions: answer from the code. Explore first (list_files, grep, read_file; in a large repository start with repo_map, find_refs and impact when you have them) instead of guessing; cite files as path:line. Use the \`task\` tool for broad searches so your own context stays clean.
@@ -302,7 +308,9 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const routers = plugins.filter((p) => p.route);
   if (plugins.length) o = { ...o, model: routers.length && o.modelById ? routedByFunction(o.model, o.modelById, (i) => { for (const p of routers) { const r = p.route!(i); if (r) return r; } }) : o.model, hooks: composeHooks(o.hooks, plugins, o.cwd), tools: [...(o.tools ?? []), ...plugins.flatMap((p) => p.tools ?? [])] };
   const policyFn = plugins.some((p) => p.policy) ? (c: { tool: string; args: Record<string, unknown> }) => checkPolicies(plugins, { ...c, cwd: o.cwd }) : undefined;
-  const SYS = (chat: boolean | undefined) => applySystem(plugins, (chat ? CHAT_SYSTEM : CODE_SYSTEM) + "\n" + shellNote(), o.cwd);
+  /** A small context window (16k tokens or less, like a local 30B model on 8k): a shorter system prompt, compact skills and memory blocks, and the rarely used tools out of the prompt. A request for "hi" then costs about 1.5k tokens instead of 3.4k. */
+  const small = () => { const w = typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow; return !!w && w <= 16_384; };
+  const SYS = (chat: boolean | undefined) => applySystem(plugins, (small() ? COMPACT_SYSTEM : chat ? CHAT_SYSTEM : CODE_SYSTEM) + "\n" + shellNote(), o.cwd);
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
@@ -335,6 +343,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const shown = new Set<string>();   // memory notes already in this conversation
   const rescanIndex = () => { if (codeIndex && !registry.get("repo_map") && codeIndex.list().length >= indexMin) registry.add(...indexTools(codeIndex)); };
   rescan(); rescanIndex();
+  registry.lean = { when: small, names: new Set(["memory_save", "memory_search", "memory_forget", "todo_write", "skill", "task", "repo_map", "impact", "find_refs", "sh_start", "sh_read", "sh_stop", "sh_list", "apply_patch"]) };
   let todos: { content: string; status: "pending" | "in_progress" | "done" }[] = [];
   if (o.chat) {
     registry.add(
@@ -454,8 +463,8 @@ ${note}
       text = await withContract(text);
       if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
       if (!history.length && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
-      if (!history.length) { rescanIndex(); rescanAgents(); rescan(); const sb = skillsBlock(skillList); if (sb) text += "\n\n" + sb; }
-      if (!history.length && backend) { shown.clear(); const ctx = backend.context(userText, 6000, shown); if (ctx) text += "\n\n" + ctx; }
+      if (!history.length) { rescanIndex(); rescanAgents(); rescan(); const sb = skillsBlock(skillList, small()); if (sb) text += "\n\n" + sb; }
+      if (!history.length && backend) { shown.clear(); const ctx = backend.context(userText, small() ? 800 : 6000, shown); if (ctx) text += "\n\n" + ctx; }
       else if (backend) { const d = backend.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const img = extra.images?.length ? { images: extra.images } : {};
       const msgs: Message[] = history.length ? [...history, { role: "user", content: text, ...img }]
@@ -481,8 +490,8 @@ ${note}
         prompt = `${t || b.task}\n\n## Handoff from a previous session (possibly another machine or model)\nOriginal task: ${b.task}\nStatus then: ${b.status.finished ? "finished" : "unfinished"}${b.status.summary ? ` - ${b.status.summary}` : ""}\n${b.handoff}\n\nRestored ${r.restored.length} file(s) from that session${r.skipped.length ? `; kept your version of: ${r.skipped.join(", ")}` : ""}. Re-check the workspace before continuing; it may have changed.`;
       }
       if (guidance && !resume) { const g = guidance.start(); if (g) prompt += "\n\n" + g; }
-      if (!resume) { rescanIndex(); rescan(); const sb = skillsBlock(skillList); if (sb) prompt += "\n\n" + sb; }
-      if (backend && !resume) { const ctx = backend.context(prompt); if (ctx) prompt += "\n\n" + ctx; }
+      if (!resume) { rescanIndex(); rescan(); const sb = skillsBlock(skillList, small()); if (sb) prompt += "\n\n" + sb; }
+      if (backend && !resume) { const ctx = backend.context(prompt, small() ? 800 : 6000); if (ctx) prompt += "\n\n" + ctx; }
       const offered = plans && !resume && t.trim() ? plans.find(t) : undefined;
       if (offered) { prompt += "\n\n" + planBlock(offered.plan, offered.similarity); o.onEvent?.({ kind: "plan", detail: `offered a plan from a similar task (${Math.round(offered.similarity * 100)}% similar)` }); }
       if (opts.images?.length && !resume) resume = [{ role: "system", content: SYS(o.chat) }, { role: "user", content: prompt, images: opts.images }];

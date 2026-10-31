@@ -49,17 +49,20 @@ export const defineTool = <A = any>(t: Tool<A>) => t;
 export class Registry {
   tools = new Map<string, Tool>(); loaded = new Set<string>();
   constructor(ts: Tool[] = []) { this.add(...ts); }
+  /** Tools that stay out of the prompt (found through `tool_search`) while `when()` is true, as well as any tool marked `deferred`. For a small context window: the rarely used tools move out, and come back when the model asks. */
+  lean?: { when: () => boolean; names: Set<string> };
+  isDeferred(t: Tool) { return !!t.deferred || (!!this.lean && this.lean.names.has(t.name) && this.lean.when()); }
   add(...ts: Tool[]) { for (const t of ts) this.tools.set(t.name, t); return this; }
   remove(name: string) { this.loaded.delete(name); return this.tools.delete(name); }
   get(name: string) { return this.tools.get(name); }
-  hasDeferred() { return [...this.tools.values()].some((t) => t.deferred); }
+  hasDeferred() { return [...this.tools.values()].some((t) => this.isDeferred(t)); }
   visible(s: { step: number; messages: Message[] }) {
-    return [...this.tools.values()].filter((t) => (!t.deferred || this.loaded.has(t.name)) && (!t.when || t.when(s)));
+    return [...this.tools.values()].filter((t) => (!this.isDeferred(t) || this.loaded.has(t.name)) && (!t.when || t.when(s)));
   }
   /** Keyword-rank the not-yet-loaded deferred tools by name + description. */
   search(q: string, n = 5) {
     const words = q.toLowerCase().split(/\W+/).filter((w) => w.length > 1);
-    return [...this.tools.values()].filter((t) => t.deferred && !this.loaded.has(t.name))
+    return [...this.tools.values()].filter((t) => this.isDeferred(t) && !this.loaded.has(t.name))
       .map((t) => ({ t, score: words.filter((w) => `${t.name} ${t.description}`.toLowerCase().includes(w)).length }))
       .filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.t.name.localeCompare(b.t.name)).slice(0, n).map((x) => x.t);
   }
@@ -343,7 +346,7 @@ export function createHarness(o: Options) {
       const hits = reg.search(query);
       hits.forEach((t) => reg.loaded.add(t.name));
       return hits.length ? "Loaded (callable from your next turn):\n" + hits.map((t) => `- ${t.name}: ${t.description}\n  schema: ${JSON.stringify(t.schema)}`).join("\n")
-        : `No match. Not yet loaded: ${[...reg.tools.values()].filter((t) => t.deferred && !reg.loaded.has(t.name)).map((t) => t.name).join(", ") || "(none)"}`;
+        : `No match. Not yet loaded: ${[...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)).map((t) => t.name).join(", ") || "(none)"}`;
     },
   };
   const emit = (e: Event) => o.onEvent?.(e);
@@ -375,8 +378,8 @@ export function createHarness(o: Options) {
    * the prefix, a fraction of what a cold re-read costs). Returns how many prompt tokens were served from cache.
    */
   async function warm(msgs: Message[], opts: { signal?: AbortSignal } = {}): Promise<{ prompt: number; cached: number }> {
-    const visible = reg.visible({ step: lastStep, messages: msgs }), menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => t.deferred && !reg.loaded.has(t.name)) : [];
-    const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 80)}`).join("\n") }] : []), FINISH];
+    const visible = reg.visible({ step: lastStep, messages: msgs }), menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)) : [];
+    const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), FINISH];
     const m = await o.model(msgs, specs, { signal: opts.signal, maxTokens: 16 });
     o.budget?.add(m);
     return { prompt: m.usage?.prompt_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0 };
@@ -439,8 +442,8 @@ export function createHarness(o: Options) {
         }
       } else if (over) { emit({ kind: "budget", detail: over }); return end(`stopped: ${over}`, false, step, "budget"); }
       const visible = reg.visible({ step, messages: msgs }), names = new Set(visible.map((t) => t.name));
-      const menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => t.deferred && !reg.loaded.has(t.name)) : [];
-      const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 80)}`).join("\n") }] : []), FINISH];
+      const menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)) : [];
+      const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), FINISH];
       const r = o.rollover, size = msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0);
       if (win) {
         // Window-aware: shrink old output before the window fills (cheap, loses little), and hand off only when shrinking is not enough.
@@ -522,7 +525,7 @@ export function createHarness(o: Options) {
         const t = name === "tool_search" && menu.length ? searchTool : reg.get(name);
         if (allowNow && !allowNow.has(name)) return `ERROR: ${name} is not allowed in this phase. ${allowNow.size ? `Allowed now: ${[...allowNow].join(", ")}.` : "Do not call any tool yet: answer in text."}`;
         if (t && name !== "finish" && t !== searchTool && !names.has(name)) {
-          if (t.deferred && !reg.loaded.has(name)) { reg.loaded.add(name); return `ERROR: ${name} was not loaded yet; it is now. Retry the call. schema: ${JSON.stringify(t.schema)}`; }
+          if (reg.isDeferred(t) && !reg.loaded.has(name)) { reg.loaded.add(name); return `ERROR: ${name} was not loaded yet; it is now. Retry the call. schema: ${JSON.stringify(t.schema)}`; }
           return `ERROR: tool ${name} is not available right now. Available: ${[...names, "finish"].join(", ")}`;
         }
         const schema = name === "finish" ? FINISH.parameters : t?.schema;

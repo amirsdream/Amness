@@ -103,3 +103,18 @@ test("when even the handoff request overflows, the harness asks again with less,
   const r = await createHarness({ model, tools: [tiny], system: "s", maxSteps: 90, stagnationTurns: 0, contextWindow: 2048, onEvent: (e) => events.push(e) }).run("TASK");
   assert.equal(r.finished, true); assert.ok(asked >= 3, "it tried the model three times"); assert.ok(events.some((e) => e.kind === "rollover" && /written automatically/.test((e as any).detail)));
 });
+
+test("small window profile: a bare 'hi' sends a short system prompt, few tools and compact blocks, and a left-out tool is still found with tool_search", async () => {
+  const { createCodeAgent } = await import("../src/index.ts");
+  const { mkdtempSync } = await import("node:fs"), { tmpdir } = await import("node:os"), { join } = await import("node:path");
+  const sent: { msgs: Message[]; names: string[] }[] = [];
+  const replies: Message[] = [{ role: "assistant", content: null, tool_calls: [{ id: "s", function: { name: "tool_search", arguments: '{"query":"memory save"}' } }] }, { role: "assistant", content: "ok" }];
+  const model: Model = async (msgs, specs) => { sent.push({ msgs: msgs.map((m) => ({ ...m })), names: specs.map((s) => s.name) }); return replies.shift()!; };
+  const mk = (contextWindow?: number) => createCodeAgent({ model, cwd: mkdtempSync(join(tmpdir(), "amness-s-")), chat: true, index: false, contextWindow, stagnationTurns: 0 } as never);
+  await mk().run("hi"); const big = sent.shift()!; sent.length = 0; replies.push({ role: "assistant", content: null, tool_calls: [{ id: "s", function: { name: "tool_search", arguments: '{"query":"memory save"}' } }] }, { role: "assistant", content: "ok" });
+  await mk(8192).run("hi"); const small = sent.shift()!, after = sent.shift()!;
+  assert.ok(big.names.length >= 15 && small.names.length <= 10, `${big.names.length} tools vs ${small.names.length}`);
+  assert.ok(!small.names.includes("memory_save") && small.names.includes("read_file") && small.names.includes("edit_file") && small.names.includes("tool_search"));
+  assert.ok(small.msgs[0].content!.length < big.msgs[0].content!.length / 2, "short system prompt");
+  assert.ok(after.names.includes("memory_save"), "the tool the model asked for is now loaded");
+});
