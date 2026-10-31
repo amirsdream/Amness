@@ -10,7 +10,7 @@ import { test } from "node:test";
 const KEY = "sk-test-0123456789abcdefghij";
 const child = (home: string, code: string, env: Record<string, string> = {}) => {
   const r = spawnSync(process.execPath, ["--input-type=module", "-e", `import * as c from ${JSON.stringify(pathToFileURL(join(import.meta.dirname, "../cli/config.ts")).href)}; ${code}`], {
-    encoding: "utf8", env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", AMNESS_HOME: home, ...env },
+    encoding: "utf8", env: { ...(process.platform === "win32" ? process.env : { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }), AMNESS_HOME: home, ...env }, // Windows tools need the user-profile variables
   });
   assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
 };
@@ -62,7 +62,8 @@ test("Windows DPAPI: the key is encrypted on disk, round-trips, and is removed o
   const f = join(home, "config.json");
   writeFileSync(f, JSON.stringify({ provider: "openai", apiKey: KEY }));
   assert.equal(child(home, `console.log(c.loadConfig().apiKey)`, env), KEY);
-  assert.ok(!readFileSync(f, "utf8").includes(KEY), "the key must be gone from the config file");
+  const probe = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$p = [Console]::In.ReadToEnd().Trim(); ConvertTo-SecureString $p -AsPlainText -Force | ConvertFrom-SecureString"], { input: "abcd", encoding: "utf8", timeout: 60_000 });
+  assert.ok(!readFileSync(f, "utf8").includes(KEY), `the key must be gone from the config file (powershell probe: status ${probe.status}, error ${probe.error}, stderr ${probe.stderr?.slice(0, 300)}, stdout length ${probe.stdout?.length})`);
   const blob = join(home, "secrets", "apiKey.dpapi");
   assert.ok(existsSync(blob) && !readFileSync(blob, "utf8").includes(KEY), "the stored string is encrypted");
   assert.equal(child(home, `console.log(c.loadConfig().apiKey)`, env), KEY);

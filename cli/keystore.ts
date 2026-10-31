@@ -11,8 +11,8 @@ import { join } from "node:path";
 const SERVICE = process.env.AMNESS_KEYSTORE_SERVICE || "amness"; // the override is for tests
 export type Backend = "keychain" | "secret-service" | "dpapi" | "file" | "none";
 
-const run = (cmd: string, args: string[], input?: string) => {
-  try { const r = spawnSync(cmd, args, { input, encoding: "utf8", timeout: 10_000 }); return r.error ? undefined : r; } catch { return undefined; }
+const run = (cmd: string, args: string[], input?: string, timeout = 10_000) => {
+  try { const r = spawnSync(cmd, args, { input, encoding: "utf8", timeout }); return r.error ? undefined : r; } catch { return undefined; }
 };
 
 export function backend(): Backend {
@@ -33,7 +33,7 @@ export const noStore = (): boolean => backend() === "none";
 // Windows: PowerShell turns the key into an encrypted string that only this Windows user on this machine can decrypt (DPAPI). The string is kept in ~/.amness/secrets/<name>.dpapi.
 const dir = () => join(process.env.AMNESS_HOME ?? join(homedir(), ".amness"), "secrets");
 const blob = (name: string) => join(dir(), `${name}.dpapi`);
-const ps = (script: string, input: string) => run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], input);
+const ps = (script: string, input: string) => run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], input, 60_000); // Windows PowerShell can take several seconds to start
 const PS_ENCRYPT = "$p = [Console]::In.ReadToEnd().Trim(); ConvertTo-SecureString $p -AsPlainText -Force | ConvertFrom-SecureString";
 const PS_DECRYPT = "$e = [Console]::In.ReadToEnd().Trim(); $s = ConvertTo-SecureString $e; [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))";
 
