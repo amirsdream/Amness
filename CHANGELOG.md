@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.7 (2026-11-01)
 
 - **Skills you can see and manage:** `/skills` now shows which skills the model is using (and how often each was used here), and the sidebar has a SKILLS panel with `●` in use, `○` available, `⊘` off. New: `/skills show`, `new`, `add <folder or git URL>` (with a preview and a question first), `remove` (to a trash folder), `on` and `off`, and `amness skills` on the command line. With more than 8 skills, only the 8 that match your message best are listed to the model (4 in a small window), and the rest are counted. `/skills draft` asks the model to write a skill from a finished conversation as a **draft** that only becomes active when you approve it. See [Skills](docs/features.md#skills).
 - **Small windows:** the list of left-out tools in the prompt now carries names only (about 250 tokens saved). Tool definitions are also sent shorter (the first sentence of each description, none inside the parameters, and a hand-written short text for `edit_file`); names, types, required lists and enums are unchanged. `amness eval` gets `--context-window` and `--schemas full|compact` to measure the difference.

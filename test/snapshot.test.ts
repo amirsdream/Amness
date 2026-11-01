@@ -63,5 +63,5 @@ test("TUI: /undo after a turn whose shell command changed files puts the working
   await t.submit("/undo");
   assert.ok(await t.until(() => readFileSync(join(t.dir, "a.txt"), "utf8") === "original\n" && !existsSync(join(t.dir, "new.txt")), 8000), "the undo finished");   // wait for the result, not a fixed time: a slow runner needs longer
   assert.equal(readFileSync(join(t.dir, "a.txt"), "utf8"), "original\n"); assert.ok(!existsSync(join(t.dir, "new.txt")));
-  assert.ok(t.has("undid shell changes") || t.has("rewound the conversation"), t.screen());
+  assert.ok(await t.until(() => t.has("undid shell changes") || t.has("rewound the conversation"), 8000), t.screen());      // the message is drawn a moment after the files are back
 });
