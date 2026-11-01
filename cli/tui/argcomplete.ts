@@ -3,6 +3,7 @@
 import { effortsFor, loadPrompts, SANDBOX_MODES, SHELL_CHOICES, STRATEGIES } from "../../src/index.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS } from "../config.ts";
 import { fetchModels } from "../models.ts";
+import { listDrafts } from "../../src/index.ts";
 import { themeNames, THEMES } from "./themes.ts";
 import type { App } from "./app.ts";
 
@@ -47,6 +48,13 @@ export function argOptions(a: App, cmd: string, words: string[]): ArgResult {
     case "branch": return first ? ok(a.session.turns.map((t, i) => ({ value: String(i + 1), detail: t.text.replace(/\s+/g, " ").slice(0, 60) }))) : ok([]);
     case "pr": return first ? ok(opts(["draft", "create it as a draft"])) : ok([]);
     case "report": return first ? ok([{ value: "case", detail: "turn the last request into an eval task", more: true }]) : ok([]);
+    case "skills": {
+      if (first) return ok([["list", "all skills and which are in use"], ["show", "print a skill's instructions"], ["new", "create a skill from a template"], ["add", "install from a folder or git URL"], ["remove", "move a skill to the trash"], ["on", "switch a skill on"], ["off", "switch a skill off"], ["draft", "write a skill from this conversation (a draft you approve)"], ["drafts", "drafts waiting for approval"], ["approve", "make a draft active"], ["reject", "delete a draft"]].map(([value, detail]) => ({ value, detail, more: ["show", "new", "add", "remove", "on", "off", "approve", "reject"].includes(value) })));
+      if (words.length === 1 && ["show", "remove", "rm", "on", "off"].includes(words[0])) return ok((a.agent.allSkills ?? []).filter((x) => (words[0] === "on" ? a.agent.skillState.isOff(x.name) : words[0] === "off" ? !a.agent.skillState.isOff(x.name) : true)).map((x) => ({ value: x.name, detail: x.description.slice(0, 60) })));
+      if (words.length === 1 && ["approve", "reject"].includes(words[0])) return ok(listDrafts(a.cwd).map((d) => ({ value: d.name, detail: d.description.slice(0, 60) })));
+      if (words.length === 1 && words[0] === "add") return { options: [], open: true };
+      return ok([]);
+    }
     case "mcp": return first ? ok([{ value: "list" }, { value: "off" }]) : ok([]);
     case "budget": return first ? { options: opts(["100k"], ["300k", "the default"], ["500k"], ["1m"], ["2m"]), open: true } : ok([]);
     case "check": case "verify": return first ? { options: [{ value: "off", detail: "switch it off" }], open: true } : ok([]);

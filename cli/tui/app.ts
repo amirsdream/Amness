@@ -506,6 +506,7 @@ export class App {
         this.stepNow().notes.push("audit: " + line + (e.notes.length ? " · " + e.notes.join("; ") : ""));
         this.notify(e.notes.length ? "warn" : "ok", `${line}${e.notes.length ? ". Note: " + e.notes.join("; ") : ""}`, [dim(`  ◐ ${line}${e.notes.length ? " · " + e.notes.join("; ") : ""}`)]);
       } break;
+      case "skill": this.skillsUsed.set(e.name, (this.skillsUsed.get(e.name) ?? 0) + 1); this.stepNow().notes.push(`skill ${e.name} loaded`); break;
       case "hook": this.stepNow().notes.push(`hook ${e.event}${e.blocked ? " blocked" : ""}: ${one(e.detail, 100)}`); if (e.blocked || e.detail !== "added context") this.notify(e.blocked ? "warn" : "info", `hook ${e.event}: ${one(e.detail, 200)}`, [dim(`  ⚙ hook ${e.event}: ${one(e.detail, w - 20)}`)]); break;
       case "policy": if (!sub) this.policyLog = [...this.policyLog, `${e.action.padEnd(5)} ${e.tool}: ${e.reason}`].slice(-20); break;
       case "cachebreak": if (!sub) { this.cacheBreaks++; this.stepNow().notes.push("cache break: " + e.reason); } break;
@@ -637,7 +638,9 @@ export class App {
   private rebuildBlocksIfEmpty() { if (!this.blocks.blocks.length && this.session.messages.length) this.blocks.loadMessages(this.session.messages); }
   rebuildBlocks() { this.blocks.loadMessages(this.session.messages); this.full?.invalidate(); }
   async resumeById(id: string) { const s = this.store.load(id); if (!s) return; this.loadSession(s); this.rebuildBlocks(); this.render(); }
-  newConversation() { this.saveSession(); this.session = newSession(this.cwd, this.cfg.model); this.edits = []; this.trace = []; this.trimmed = 0; this.cacheBreaks = 0; this.lastPrompt = 0; this.todos = []; this.pendingContext = []; this.blocks.clear(); this.full?.invalidate(); this.buildAgent(); }
+  /** skills the model loaded in this conversation, with how many times */
+  skillsUsed = new Map<string, number>();
+  newConversation() { this.skillsUsed.clear(); this.saveSession(); this.session = newSession(this.cwd, this.cfg.model); this.edits = []; this.trace = []; this.trimmed = 0; this.cacheBreaks = 0; this.lastPrompt = 0; this.todos = []; this.pendingContext = []; this.blocks.clear(); this.full?.invalidate(); this.buildAgent(); }
   loadSession(s: SessionData) { this.saveSession(); this.session = s; this.recount(); this.edits = []; }
   saveSession() { if (this.persist && this.session.turns.length) try { this.session.model = this.cfg.model; this.store.save(this.session); } catch { /* read-only dir */ } }
   saveHistory() { if (!this.persist) return; try { mkdirSync(home(), { recursive: true }); writeFileSync(join(home(), "history.json"), JSON.stringify(this.editor.history.slice(0, 200))); } catch { /* ignore */ } }

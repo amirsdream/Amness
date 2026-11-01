@@ -83,6 +83,7 @@ export type Event =
   | { kind: "turn"; step: number; tokens: number; prompt: number; completion: number; cached: number; reasoning: number }
   | { kind: "rollover"; detail: string }
   | { kind: "plan"; detail: string }
+  | { kind: "skill"; name: string }
   /** Context that was shrunk without losing anything current (chars; roughly 4 per token). */
   | { kind: "trim"; saved: number; what: string }
   /** The request prefix changed since the last call, so the provider's prompt cache will miss from `at` onward (message index; -1 = tool definitions). */

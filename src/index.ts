@@ -1,5 +1,6 @@
 export * from "./harness.ts";
 export * from "./cache.ts";
+export * from "./skillmgr.ts";
 export * from "./coverage.ts";
 export * from "./respcache.ts";
 export * from "./context.ts";

@@ -33,6 +33,7 @@ export function formatEvent(e: Event & { agent?: string }): string {
     }
     case "aborted": return `${who}${yellow("⏹ stopped")} ${dim("run interrupted; progress is saved and can be resumed")}`;
     case "turn": case "phase": case "trim": case "cachebreak": case "run": case "model": case "policy": case "toolstart": case "text": case "thinking": case "assistant": case "todos": case "steer": return "";
+    case "skill": return `${who}${magenta("◇ skill")} ${dim(e.name + " loaded")}`;
     case "plan": return `${who}${magenta("◇ plan")} ${dim(e.detail)}`;
     case "rollover": return `${who}${magenta("⟳ context rollover")} ${dim("handoff note written; continuing in a fresh context")}`;
     case "review": return `${who}${e.pass ? green("✔ review") : yellow("✖ review")} ${dim(e.inconclusive ? "inconclusive (accepted)" : e.pass ? "the reviewer found no problems" : e.findings.slice(0, 2).map((f) => one(f, 70)).join("; "))}`;

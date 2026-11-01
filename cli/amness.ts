@@ -12,6 +12,7 @@ import { App } from "./tui/app.ts";
 import { builtinCases as cases } from "../src/evalcases.ts";
 import { runBench } from "./benchcli.ts";
 import { runPlugin } from "./plugincli.ts";
+import { runSkills } from "./skillcli.ts";
 import { runSchedule } from "./schedulecli.ts";
 import { ACP_HELP, runAcp } from "./acpcli.ts";
 import { runEval, runTune } from "./evalcli.ts";
@@ -378,6 +379,7 @@ const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
   amness --inline | --full     choose the interface (default: full-screen; AMNESS_UI or /ui also work)
   amness eval [flags]          compare harness variants statistically (amness eval --help)
   amness bench [flags]         compare Amness, Claude Code and Codex on the same tasks (amness bench --help)
+  amness skills [list|new|add|remove|on|off]   manage skills (amness skills --help)
   amness plugin new <name>     scaffold a plugin (guardrails, loop rules, tools, commands) (amness plugin --help)
   amness schedule <cmd>        recurring headless runs through cron (amness schedule --help)
   amness acp                   serve the Agent Client Protocol on stdio for editors (Zed, JetBrains)
@@ -447,6 +449,7 @@ async function main() {
   if (quick === "--help" || quick === "-h" || quick === "help") return void console.log(TOP_HELP);
   if (quick === "eval" && argv.length > 1) { process.exitCode = await runEval(argv.slice(1), { model: makeModel, modelName: cfg.model, modelFor: (id) => createModel({ ...cfg, model: id }), maxTokens: cfg.maxTokens, confirm }); return; }
   if (quick === "bench") { process.exitCode = await runBench(argv.slice(1), { confirm, amnessCli: fileURLToPath(import.meta.url) }); return; }
+  if (quick === "skills") { process.exitCode = await runSkills(argv.slice(1), { confirm: (q) => confirm(q, false) }); return; }
   if (quick === "plugin") { process.exitCode = await runPlugin(argv.slice(1)); return; }
   if (quick === "schedule") { process.exitCode = runSchedule(argv.slice(1)); return; }
   if (quick === "acp") { if (argv.includes("--help")) return void console.log(ACP_HELP); process.exitCode = await runAcp({ model: rawModel, version: VERSION, maxTokens: cfg.maxTokens }); return; }

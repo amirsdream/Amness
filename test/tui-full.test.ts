@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { call, say, rig, KEY, sleep } from "./helpers/apprig.ts";
 import { cellWidth, strip } from "../cli/tui/text.ts";
 import { renderDiffRows } from "../cli/tui/diffview.ts";
@@ -160,5 +162,31 @@ test("links: when no browser can be started the address is copied instead, and t
   await t.type(mouse(0, x + 5, y + 1)); await t.type(mouse(0, x + 5, y + 1, true));
   assert.ok(await t.until(() => clip.length === 1, 2000), "copied"); assert.equal(clip[0], url);
   assert.ok(await t.until(() => t.has("could not open a browser"), 1500), t.screen());
+  await t.key(KEY.ctrlD);
+});
+
+const skillFiles = { "README.md": "# Demo\n", ".amness/skills/release/SKILL.md": "---\nname: release\ndescription: cut a release of this package\n---\n# Release\n1. bump\n", ".amness/skills/lint/SKILL.md": "---\nname: lint\ndescription: run the linter\n---\n# Lint\nrun it\n" };
+
+test("skills: the sidebar lists them, marks the one the model loads as in use, and /skills shows it with its counts", async () => {
+  const t = rig([call("skill", { name: "release" }), say("done")], { cols: 132, rows: 40, files: skillFiles, ui: "full" });
+  await t.start();
+  assert.ok(await t.until(() => t.has("SKILLS") && t.has("○ release") && t.has("○ lint")), t.screen());
+  await t.submit("cut a release"); assert.ok(await t.until(() => t.idle()));
+  assert.ok(await t.until(() => /● release\s+×1/.test(t.screen()) && t.has("1 in use")), t.screen());
+  await t.submit("/skills"); assert.ok(await t.until(() => t.has("in use ×1") && t.has("used 1×")), t.screen());
+  await t.key(KEY.ctrlD);
+});
+
+test("skills: /skills off hides one from the model and marks it in the sidebar, /skills on brings it back; new makes a template; remove keeps the folder in the trash", async () => {
+  const t = rig([], { cols: 132, rows: 40, files: skillFiles, ui: "full" });
+  await t.start();
+  await t.submit("/skills off lint"); assert.ok(await t.until(() => t.has("lint is switched off") && t.has("⊘ lint")), t.screen());
+  await t.submit("/skills on lint"); assert.ok(await t.until(() => t.has("lint is on again") && t.has("○ lint")), t.screen());
+  await t.submit("/skills new my-skill when to use it"); assert.ok(await t.until(() => t.has("created")), t.screen());
+  assert.ok(existsSync(join(t.dir, ".amness/skills/my-skill/SKILL.md")));
+  await t.submit("/skills remove my-skill"); assert.ok(await t.until(() => t.has("Remove skill my-skill?")), t.screen());
+  await t.key(KEY.up); await t.key(KEY.enter);                                                      // the dialog starts on Cancel (the safe choice); move up to "move to the trash"
+  assert.ok(await t.until(() => t.has("removed my-skill")), t.screen()); assert.ok(!existsSync(join(t.dir, ".amness/skills/my-skill")));
+  await t.submit("/skills bogus"); assert.ok(await t.until(() => t.has("unknown: /skills bogus")));
   await t.key(KEY.ctrlD);
 });

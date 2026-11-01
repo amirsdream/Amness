@@ -316,7 +316,8 @@ When you start the chat, Amness picks a first `/verify` command for you if it ca
 | `/procs [stop <id>]` | Lists background processes the agent started, or stops one. |
 | `/profile` | Shows the harness settings that apply to this model. |
 | `/report [case <name>]` | Shows repeated problems in your traces. `case <name>` turns your last request into an eval task. |
-| `/plugins`, `/agents`, `/skills` | Lists loaded plugins, custom subagents and skills. |
+| `/plugins`, `/agents` | Lists loaded plugins and custom subagents. |
+| `/skills [list\|show\|new\|add\|remove\|on\|off\|draft\|approve\|reject]` | Shows which skills exist and which one the model is using, and adds, creates, switches off or removes them. See [Skills](features.md#skills). |
 | `/reload-plugins` | Loads the plugin files again after you edited one. Project plugins that you did not approve are skipped. See [Plugins](plugins.md). |
 | `/strategy [name\|off]` | Chooses a loop strategy: `plan-first` or `explore-then-act`. Without an argument it shows the current one. See [Plugins](plugins.md#change-the-loop-with-a-strategy). |
 

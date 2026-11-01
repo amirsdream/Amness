@@ -23,6 +23,7 @@ import { AGENT_TOOLS, WRITE_TOOLS, isWriter, loadAgents, type AgentDef } from ".
 import type { Roles } from "./route.ts";
 import { applyDiff, createWorktree, isRepo, removeWorktree, worktreeDiff, type Worktree } from "./worktree.ts";
 import { loadSkills, skillsBlock, skillTool, type Skill } from "./skills.ts";
+import { SkillState, draftSkill, rankSkills } from "./skillmgr.ts";
 import { applyOps, parsePatch, replaceMany } from "./patch.ts";
 import { proposeContract, reviewWork } from "./review.ts";
 import type { HookRunner } from "./hooks.ts";
@@ -329,8 +330,12 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const acquireTask = async () => { if (taskSlots > 0) { taskSlots--; return; } await new Promise<void>((r) => taskWaiters.push(r)); };
   const releaseTask = () => { const w = taskWaiters.shift(); if (w) w(); else taskSlots++; };
   const codeIndex = o.index === false ? undefined : new CodeIndex(o.cwd), indexMin = typeof o.index === "object" ? o.index.minFiles ?? 25 : 25;
-  let skillList: Skill[] = []; const skillWarnings: string[] = [];
-  const rescan = () => { if (o.skills === false) return; const r = loadSkills(o.cwd); skillList = r.skills; skillWarnings.splice(0, skillWarnings.length, ...r.warnings); if (skillList.length && !registry.get("skill")) registry.add(skillTool(() => skillList)); };
+  let skillList: Skill[] = [], allSkillList: Skill[] = []; const skillWarnings: string[] = [];
+  const skillState = new SkillState(o.cwd), loadedSkills = new Set<string>();      // which skills are off, how often each was used, and which ones this run loaded
+  const onSkillLoad = (n: string) => { skillState.loaded(n); loadedSkills.add(n); };
+  /** The Skills block for a task: the most relevant ones listed (all of them when there are few), the rest counted. Listing a skill is counted in its stats. */
+  const skillBlockFor = (task: string) => { const shown = rankSkills(skillList, task, small() ? 4 : 8, skillState.stats); skillState.offered(shown.map((s) => s.name)); return skillsBlock(shown, small(), skillList.length - shown.length); };
+  const rescan = () => { if (o.skills === false) return; const r = loadSkills(o.cwd); allSkillList = r.skills; skillList = r.skills.filter((s) => !skillState.isOff(s.name)); skillWarnings.splice(0, skillWarnings.length, ...r.warnings); if (skillList.length && !registry.get("skill")) registry.add(skillTool(() => skillList, onSkillLoad)); };
   const procs = o.background === false ? undefined : new ProcessManager(resolve(o.cwd), { sandbox: sandboxMode });
   const fromPlugin = plugins.map((p) => (typeof p.memory === "function" ? p.memory(o.cwd) : p.memory)).find(Boolean);
   const backend: MemoryBackend | undefined = o.memory === false ? undefined : o.memory instanceof MemoryStore ? o.memory : isMemoryBackend(o.memory) ? o.memory : fromPlugin ?? MemoryStore.forWorkspace(resolve(o.cwd));
@@ -393,7 +398,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
           let wt: Worktree | undefined; if (isolated) { if (!(await isRepo(o.cwd))) return "ERROR: isolation: worktree needs a git repository with at least one commit"; wt = await createWorktree(o.cwd); }
           try {
             const base = codeTools(wt?.dir ?? o.cwd, { mode: plan ? () => "plan" : (mode ?? (() => "default")), sandbox: sandboxMode }).filter((t) => names.includes(t.name));
-            if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList));
+            if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList, onSkillLoad));
             const r = await createHarness({
               model: (d.model && o.agentModels?.[d.model]) || o.model, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
               budget: track(o.budget?.slice(0.25, 120_000)), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), policy: policyFn, hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
@@ -452,7 +457,7 @@ ${note}
   });
   return {
     /** The live toolbox: add/remove tools between or during runs. */
-    registry, memory, guidance, procs, lsp, codeIndex, toolCache, plans, get agents() { return agentList; }, get agentWarnings() { return agentWarnings; }, get skills() { return skillList; }, get skillWarnings() { return skillWarnings; },
+    registry, memory, guidance, procs, lsp, codeIndex, toolCache, plans, get agents() { return agentList; }, get agentWarnings() { return agentWarnings; }, get skills() { return skillList; }, get allSkills() { return allSkillList; }, skillState, rescanSkills: () => rescan(), draftSkill: (messages: Message[]) => draftSkill(o.cwd, o.models?.compact ?? o.model, messages), get skillWarnings() { return skillWarnings; },
     /** Keep the provider's prompt cache alive across an idle gap (see createHarness().warm). */
     warm: (msgs: Message[], opts?: { signal?: AbortSignal }) => h.warm(msgs, opts),
     get todos() { return todos; },
@@ -466,7 +471,7 @@ ${note}
       text = await withContract(text);
       if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
       if (!history.length && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
-      if (!history.length) { rescanIndex(); rescanAgents(); rescan(); const sb = skillsBlock(skillList, small()); if (sb) text += "\n\n" + sb; }
+      if (!history.length) { rescanIndex(); rescanAgents(); rescan(); const sb = skillBlockFor(userText); if (sb) text += "\n\n" + sb; }
       if (!history.length && backend) { shown.clear(); const ctx = backend.context(userText, small() ? 800 : 6000, shown); if (ctx) text += "\n\n" + ctx; }
       else if (backend) { const d = backend.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const img = extra.images?.length ? { images: extra.images } : {};
@@ -475,6 +480,7 @@ ${note}
       const res = await h.run(text, { resume: msgs });
       // Learning from outcomes: a finished (verified) run credits the notes that were in front of the model, a run that gave up or got stuck counts against them.
       backend?.endTurn(res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined);
+      if (loadedSkills.size) { const ok = res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined; if (ok !== undefined) skillState.outcome([...loadedSkills], ok); loadedSkills.clear(); }      // a finished run counts for the skills it used, a run that gave up counts against; a plain chat reply counts neither way
       return res;
     },
     async run(t: string, opts: RunOptions = {}) {
@@ -493,13 +499,14 @@ ${note}
         prompt = `${t || b.task}\n\n## Handoff from a previous session (possibly another machine or model)\nOriginal task: ${b.task}\nStatus then: ${b.status.finished ? "finished" : "unfinished"}${b.status.summary ? ` - ${b.status.summary}` : ""}\n${b.handoff}\n\nRestored ${r.restored.length} file(s) from that session${r.skipped.length ? `; kept your version of: ${r.skipped.join(", ")}` : ""}. Re-check the workspace before continuing; it may have changed.`;
       }
       if (guidance && !resume) { const g = guidance.start(); if (g) prompt += "\n\n" + g; }
-      if (!resume) { rescanIndex(); rescan(); const sb = skillsBlock(skillList, small()); if (sb) prompt += "\n\n" + sb; }
+      if (!resume) { rescanIndex(); rescan(); const sb = skillBlockFor(t); if (sb) prompt += "\n\n" + sb; }
       if (backend && !resume) { const ctx = backend.context(prompt, small() ? 800 : 6000); if (ctx) prompt += "\n\n" + ctx; }
       const offered = plans && !resume && t.trim() ? plans.find(t) : undefined;
       if (offered) { prompt += "\n\n" + planBlock(offered.plan, offered.similarity); o.onEvent?.({ kind: "plan", detail: `offered a plan from a similar task (${Math.round(offered.similarity * 100)}% similar)` }); }
       if (opts.images?.length && !resume) resume = [{ role: "system", content: SYS(o.chat) }, { role: "user", content: prompt, images: opts.images }];
       const res = await h.run(prompt, { resume });
       backend?.endTurn(res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined);
+      if (loadedSkills.size) { const ok = res.finished ? true : res.stopped && res.stopped !== "aborted" ? false : undefined; if (ok !== undefined) skillState.outcome([...loadedSkills], ok); loadedSkills.clear(); }      // a finished run counts for the skills it used, a run that gave up counts against; a plain chat reply counts neither way
       if (plans && !resume && t.trim()) { if (offered) plans.outcome(offered.plan.id, res.finished); if (res.finished) plans.record(t, planFrom(res.messages, res.text)); }
       return res;
     },

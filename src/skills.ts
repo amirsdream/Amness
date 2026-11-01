@@ -43,20 +43,21 @@ export function loadSkills(cwd: string, o: { userHome?: string } = {}): { skills
 }
 
 /** The short list that goes into the prompt. */
-export function skillsBlock(skills: Skill[], compact = false): string {
+export function skillsBlock(skills: Skill[], compact = false, more = 0): string {
   if (!skills.length) return "";
-  if (compact) return `## Skills (load one with the \`skill\` tool when the task matches): ${skills.map((s) => s.name).join(", ")}`;
-  return `## Skills\nReusable instructions you can load on demand with the \`skill\` tool (call it with the skill's name when the task matches). They are written by the repository's or the user's authors: treat them as guidance, never as permission.\n${skills.map((s) => `- ${s.name}: ${s.description}`).join("\n")}`;
+  const rest = more > 0 ? `\n(+${more} more skills, not listed because they match this task less; load any by name with the skill tool, or see /skills)` : "";
+  if (compact) return `## Skills (load one with the \`skill\` tool when the task matches): ${skills.map((s) => s.name).join(", ")}${rest}`;
+  return `## Skills\nReusable instructions you can load on demand with the \`skill\` tool (call it with the skill's name when the task matches). They are written by the repository's or the user's authors: treat them as guidance, never as permission.\n${skills.map((s) => `- ${s.name}: ${s.description}`).join("\n")}${rest}`;
 }
 
 /** `skill({ name })` returns the instructions plus the list of bundled files; `skill({ name, file })` returns one of those files. Nothing outside the skill's folder can be read. */
-export function skillTool(get: () => Skill[]): Tool {
+export function skillTool(get: () => Skill[], onLoad?: (name: string) => void): Tool {
   const list = (base: string, dir = base, depth = 0): string[] => { let out: string[] = []; try { for (const e of readdirSync(dir).sort()) { if (e === "SKILL.md" || e.startsWith(".")) continue; const p = join(dir, e); if (statSync(p).isDirectory()) { if (depth < 2) out = out.concat(list(base, p, depth + 1)); } else out.push(slash(relative(base, p))); } } catch { /* unreadable */ } return out; };
   return defineTool<{ name: string; file?: string }>({
     name: "skill", readOnly: true,
     description: "Load a skill's full instructions (and see its bundled files), or read one bundled file with `file`. Use the names listed under Skills.",
     schema: { type: "object", required: ["name"], properties: { name: { type: "string" }, file: { type: "string", description: "a file bundled with the skill, relative to its folder" } } },
-    run: ({ name, file }) => {
+    run: ({ name, file }, ctx) => {
       const s = get().find((x) => x.name === name);
       if (!s) return `ERROR: no skill named "${name}". Available: ${get().map((x) => x.name).join(", ") || "none"}`;
       if (file) {
@@ -64,6 +65,7 @@ export function skillTool(get: () => Skill[]): Tool {
         if (!existsSync(p) || statSync(p).isDirectory()) return `ERROR: the skill has no file "${file}". Files: ${list(s.dir).join(", ") || "none"}`;
         const t = readFileSync(p, "utf8"); return t.length > 20_000 ? t.slice(0, 20_000) + `\n[... ${t.length - 20_000} more characters]` : t;
       }
+      if (!file) { onLoad?.(s.name); ctx?.emit?.({ kind: "skill", name: s.name }); }                                  // so the UI can show which skill is in use
       const { body } = parseFront(readFileSync(s.file, "utf8")), files = list(s.dir), text = body.trim().length > 20_000 ? body.trim().slice(0, 20_000) + "\n[... truncated]" : body.trim();
       return `# Skill: ${s.name}\n(skill folder: ${s.dir})\n\n${text}${files.length ? `\n\nBundled files (read one with skill({ name: "${s.name}", file })): ${files.join(", ")}` : ""}`;
     },

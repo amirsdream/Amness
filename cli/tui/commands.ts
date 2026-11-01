@@ -2,6 +2,8 @@
 import { relatives } from "./session.ts";
 import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
 import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { approveDraft, fetchSource, inspectSource, installSkills, listDrafts, rejectDraft, scaffoldSkill, trashSkill } from "../../src/index.ts";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, keyFor, storeKey, type Connection, type ProviderId } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
@@ -386,9 +388,46 @@ export function buildCommands(): Cmd[] {
       const l = a.agent.agents ?? [], w = a.agent.agentWarnings ?? [];
       a.commit(["", bold("  Subagents"), `  ${cyan("explore".padEnd(16))} ${dim("[built in · read-only]")} broad searches and questions that need reading many files`, ...l.map((s) => `  ${cyan(s.name.padEnd(16))} ${dim(`[${s.scope} · ${s.tools.join(", ")}${s.isolation ? " · isolated worktree" : ""}${s.model ? " · model " + s.model : ""}]`)} ${s.description}`), ...(!l.length ? [dim("  add .amness/agents/<name>.md (front matter: name, description, tools, model, isolation) to define your own")] : []), ...w.map((x) => "  " + yellow("⚠ ") + dim(x))]);
     } },
-    { name: "skills", help: "skills found (SKILL.md folders in .amness/.agents/.claude skills, project and home)", live: true, run: (a) => {
-      const l = a.agent.skills ?? [], w = a.agent.skillWarnings ?? [];
-      a.commit(["", bold("  Skills"), ...(l.length ? l.map((s) => `  ${cyan(s.name.padEnd(22))} ${dim(`[${s.scope} · ${s.source}]`)} ${s.description}`) : [dim("  none found. Add .amness/skills/<name>/SKILL.md with a name and description in its front matter.")]), ...w.map((x) => "  " + yellow("⚠ ") + dim(x))]);
+    { name: "skills", help: "see which skills exist and are in use; new, add, remove, on, off, show, draft", args: "[list|show|new|add|remove|on|off|draft|drafts|approve|reject] [name]", live: true, run: async (a, arg) => {
+      const [sub = "list", ...rest] = arg.trim().split(/\s+/).filter(Boolean), name = rest[0], agent = a.agent, st = agent.skillState;
+      const find = (n?: string) => (agent.allSkills ?? []).find((s) => s.name === n);
+      const done = (msg: string) => { agent.rescanSkills(); a.say(msg, dim); };
+      try {
+        if (sub === "list" || sub === "ls") {
+          const all = agent.allSkills ?? [], drafts = listDrafts(a.cwd);
+          const row = (s: (typeof all)[number]) => { const off = st.isOff(s.name), uses = a.skillsUsed.get(s.name) ?? 0, k = st.stats[s.name]; const mark = off ? dim("⊘") : uses ? green("●") : dim("○"); const use = uses ? green(` in use ×${uses}`) : ""; const hist = k?.loaded ? dim(` · used ${k.loaded}×${k.finished || k.failed ? `, runs: ${k.finished} finished, ${k.failed} stopped` : ""}`) : ""; return `  ${mark} ${(off ? dim : cyan)(s.name.padEnd(22))} ${dim(`[${s.scope} · ${s.source}]`)}${use}${hist}${off ? dim(" · off") : ""}\n      ${dim(s.description)}`; };
+          a.commit(["", bold("  Skills"), ...(all.length ? all.flatMap((s) => row(s).split("\n")) : [dim("  none yet. /skills new <name> makes one, /skills add <folder or git URL> installs one.")]), ...(drafts.length ? ["", bold("  Drafts waiting for you"), ...drafts.map((d) => `  ${cyan(d.name.padEnd(22))} ${dim(d.description)}`), dim("  /skills approve <name> · /skills reject <name>")] : []), ...((agent.skillWarnings ?? []).map((w) => "  " + dim(w))), "", dim("  ● in use now   ○ available   ⊘ switched off   ·   /skills show|new|add|remove|on|off|draft")]);
+          return;
+        }
+        if (sub === "show") { const s = find(name); if (!s) return void a.say(name ? `no skill named ${name}` : "usage: /skills show <name>", red); const t = readFileSync(s.file, "utf8").split("\n"); a.commit(["", bold(`  ${s.name}`) + dim(`  ${s.dir}`), ...t.slice(0, 40).map((l) => "  " + dim(l)), ...(t.length > 40 ? [dim(`  … ${t.length - 40} more lines`)] : [])]); return; }
+        if (sub === "on" || sub === "off") { const s = find(name); if (!s) return void a.say(name ? `no skill named ${name}` : `usage: /skills ${sub} <name>`, red); st.setOff(s.name, sub === "off"); return void done(`${s.name} is ${sub === "off" ? "switched off: not listed to the model and not loadable" : "on again"}`); }
+        if (sub === "new") { const r = scaffoldSkill(a.cwd, name ?? "", rest.slice(1).join(" ") || undefined); return void done(`created ${r.file}\nedit it: the description line decides when the model loads it. It is picked up automatically.`); }
+        if (sub === "remove" || sub === "rm") {
+          const s = find(name); if (!s) return void a.say(name ? `no skill named ${name}` : "usage: /skills remove <name>", red);
+          const ok = await a.pick(`Remove skill ${s.name}?`, [{ label: "Move to .amness/skills-trash", value: "yes", hint: "reversible: the folder is kept" }, { label: "Cancel", value: "no" }], 1); if (ok !== "yes") return;
+          const to = trashSkill(a.cwd, s); st.forget(s.name); return void done(`removed ${s.name} (kept at ${to})`);
+        }
+        if (sub === "add" || sub === "install") {
+          if (!name) return void a.say("usage: /skills add <folder or git URL> [user]   (user = install for all your projects)", red);
+          a.say(`reading ${name}…`, dim); const src = fetchSource(name);
+          try {
+            const found = inspectSource(src.dir); if (!found.length) return void a.say(`no SKILL.md found in ${name} (or one folder down)`, red);
+            const scope = rest[1] === "user" ? "user" : "project";
+            a.commit(["", bold(`  Skills found in ${name}`), ...found.flatMap((f) => [`  ${f.problems.length ? red("✗") : green("✓")} ${cyan(f.name)} ${dim(`${f.files.length} file${f.files.length === 1 ? "" : "s"}`)}${f.scripts.length ? yellow(`  includes scripts: ${f.scripts.slice(0, 4).join(", ")}`) : ""}`, `      ${dim(f.description || "(no description)")}`, ...f.problems.map((p) => "      " + red(p))]), "", dim("  A skill is a set of instructions the model will follow. Read it first (/skills show <name> after installing), and do not install skills you do not trust.")]);
+            const ok = await a.pick(`Install ${found.filter((f) => !f.problems.length).length} skill(s) for ${scope === "user" ? "all your projects" : "this project"}?`, [{ label: "Install", value: "yes" }, { label: "Cancel", value: "no" }], 1); if (ok !== "yes") return;
+            const r = installSkills(a.cwd, found, { scope }); return void done(`${r.installed.length ? `installed: ${r.installed.join(", ")}` : "nothing installed"}${r.skipped.length ? `\nskipped: ${r.skipped.join("; ")}` : ""}`);
+          } finally { src.cleanup(); }
+        }
+        if (sub === "draft") {
+          if (a.session.messages.length < 3) return void a.say("nothing to learn from yet: finish a task first, then /skills draft", dim);
+          a.note("drafting a skill from this conversation…", 60_000); const d = await agent.draftSkill(a.session.messages);
+          return void a.commit(["", `  ${green("✓")} drafted ${cyan(d.name)}`, `    ${dim(d.description)}`, dim(`    saved to ${d.file}; it is NOT active. Read it, then /skills approve ${d.name} or /skills reject ${d.name}.`)]);
+        }
+        if (sub === "drafts") { const l = listDrafts(a.cwd); return void a.say(l.length ? l.map((d) => `${d.name}: ${d.description}`).join("\n") : "no drafts", dim); }
+        if (sub === "approve") { if (!name) return void a.say("usage: /skills approve <name>", red); approveDraft(a.cwd, name); return void done(`${name} is active now`); }
+        if (sub === "reject") { if (!name) return void a.say("usage: /skills reject <name>", red); rejectDraft(a.cwd, name); return void a.say(`${name} deleted`, dim); }
+        a.say(`unknown: /skills ${sub}. Try /skills, show, new, add, remove, on, off, draft`, red);
+      } catch (e) { a.say((e as Error).message, red); }
     } },
     { name: "check", help: "fast command run after every edit (typecheck, lint); failures go straight back to the model", args: "[cmd|off]", run: (a, arg) => {
       if (!arg) return void a.say(a.check ? `post-edit check: ${cyan(a.check)}` : "no post-edit check set. /check npx tsc --noEmit", dim);

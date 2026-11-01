@@ -899,13 +899,36 @@ Skills
   release   [project · .amness/skills]  steps to cut a release of this package
 ```
 
+### See, add, switch off and remove skills
+
+**What it is.** `/skills` in the chat, and `amness skills` on the command line, manage skills while you work. Nothing needs a restart: Amness rescans the folders each time.
+
+| Command | What it does |
+|---|---|
+| `/skills` | Lists every skill. `●` means the model loaded it in this conversation (with a count), `○` means available, `⊘` means switched off. It also shows how often each skill was used in this project and whether those runs finished. |
+| `/skills show <name>` | Prints the skill's instructions. Read a skill before you rely on it. |
+| `/skills new <name> [description]` | Creates `.amness/skills/<name>/SKILL.md` from a template. The `description` line decides when the model loads the skill, so write it as "use when…". |
+| `/skills add <folder or git URL> [user]` | Installs skills from a folder, or from a git repository (`https://github.com/owner/repo/tree/branch/path` picks a subfolder). It shows what it found, which files are scripts, and any problems, then asks. `user` installs for all your projects. |
+| `/skills remove <name>` | Moves the folder to `.amness/skills-trash`, so you can get it back. |
+| `/skills off <name>`, `/skills on <name>` | Switches a skill off or on for this project. A skill that is off is not listed to the model and cannot be loaded. |
+| `/skills draft` | After you finished something, asks the model to write a skill from the conversation. The result is only a **draft** in `.amness/skills-proposed`. |
+| `/skills approve <name>`, `/skills reject <name>` | Makes a draft active, or deletes it. |
+
+The sidebar has a **SKILLS** panel with the same marks, so you can see at a glance which skill the model is using. A loaded skill also appears as a line in the transcript.
+
+**Which skills the model sees.** With 8 skills or fewer, all are listed. With more, Amness lists the 8 that match your message best (4 in a small context window) and says how many more exist. The model can still load any of them by name. Listing, loading and finished runs are counted per skill in `.amness/skills-state.json`.
+
+**Why drafts wait for you.** Research on skills learned from an agent's own runs found that it is not an automatic gain: it helped some models a little and made others much worse ([EvoClawBench, arXiv 2607.09711](https://arxiv.org/abs/2607.09711)). Task-specific skills worked better than personal-preference ones ([arXiv 2608.10319](https://arxiv.org/abs/2608.10319)). So a person decides what becomes active.
+
+**Safety.** A skill is a set of instructions that the model follows. Installing one from the internet is like running advice from a stranger. Amness never installs without asking, never follows symbolic links, refuses very large skills (200 files or 2 MB), and lists bundled scripts before you say yes. Scripts still need your approval when the model runs them.
+
 **Limits and common problems.**
 
 - If two skills have the same name, the project wins over your home folder, and the first folder in the list above wins over the later ones.
 - A skill needs a `description:` line and a usable name. Otherwise it is skipped, and `/skills` shows a warning.
 - Skill text is capped at 20,000 characters.
 - Skills from a repository you cloned are untrusted instructions. They are guidance only, and they cannot grant permissions.
-- Status: default. Covered by automated tests.
+- Status: default. Covered by automated tests. Whether skills improve results on a real model is **not measured yet**.
 
 **Related pages.** [Plugins](plugins.md).
 

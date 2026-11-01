@@ -15,6 +15,7 @@ export type SidebarData = {
   /** the agent loop of the current (or last) run, step by step */ loop?: LoopData;
   sandbox?: string;
   /** one line per plugin status (see Plugin.status) */ pluginStatus?: string[];
+  /** skills: loaded in this conversation (uses > 0), available, or switched off */ skills?: { name: string; uses: number; off: boolean }[];
   /** the token cap for the current/last turn: tokens counted (cached input at a tenth), the cap, and whether usage was estimated */ budget?: { used: number; max: number };
   procs?: { id: string; name: string; status: string; secs: number }[];
   tools: number; mcp: number; memory: number; running: boolean; elapsedMs: number; tip?: string;
@@ -71,6 +72,13 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
     if (d.changes.length > 8) push(F(t.faint, `+${d.changes.length - 8} more files`));
   }
   if (d.procs?.length) { head("PROCESSES"); for (const p of d.procs.slice(0, 5)) push((p.status === "running" ? F(t.ok, "● ") : F(t.faint, "○ ")) + F(t.text, clipWidth(`${p.id} ${p.name}`, inner - 10)) + F(t.faint, ` ${p.status === "running" ? p.secs + "s" : p.status}`)); }
+  if (d.skills?.length) {                                                                                             // which skills exist, and which one the model is using
+    const on = d.skills.filter((s) => !s.off), used = on.filter((s) => s.uses > 0);
+    head("SKILLS", F(t.dim, used.length ? `${used.length} in use · ${on.length}` : String(on.length)));
+    const order = [...d.skills].sort((a, b) => Number(a.off) - Number(b.off) || b.uses - a.uses);
+    for (const s of order.slice(0, 6)) push((s.off ? F(t.faint, "⊘ ") : s.uses ? F(t.ok, "● ") : F(t.faint, "○ ")) + (s.off ? F(t.faint, clipWidth(s.name, inner - 2)) : s.uses ? BOLD(F(t.text, clipWidth(s.name, inner - 6))) + F(t.dim, ` ×${s.uses}`) : F(t.dim, clipWidth(s.name, inner - 2))));
+    if (order.length > 6) push(F(t.faint, `+${order.length - 6} more · /skills`));
+  }
   head("WORKSPACE");
   if (d.sandbox && d.sandbox !== "off") push(F(t.ok, "⛨ ") + F(t.dim, `sandbox ${d.sandbox}`));
   for (const s of d.pluginStatus ?? []) push(F(t.accent2, "◇ ") + F(t.dim, clipWidth(s, inner - 3)));
