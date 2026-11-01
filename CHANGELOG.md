@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- **Small windows:** the list of left-out tools in the prompt now carries names only (about 250 tokens saved).
+- **Small windows:** the list of left-out tools in the prompt now carries names only (about 250 tokens saved). Tool definitions are also sent shorter (the first sentence of each description, none inside the parameters, and a hand-written short text for `edit_file`); names, types, required lists and enums are unchanged. `amness eval` gets `--context-window` and `--schemas full|compact` to measure the difference.
+- **Tool names:** a call to a tool that does not exist is now answered with the closest real name (`readfile` → `read_file`), so a small model can fix the call in one step.
 
 ## 0.1.6 (2026-10-31)
 

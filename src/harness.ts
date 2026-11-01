@@ -3,7 +3,7 @@ import { type Schema, validate, parseLooseJson } from "./schema.ts";
 import { ProgressTracker, type TurnFacts } from "./progress.ts";
 import { redact } from "./secrets.ts";
 import { ToolCache, isPointer, pointerText, repairPointers, stillAbove } from "./cache.ts";
-import { calibration, estimateTokens, fit, isOverflow, mechanicalNote, requestedFromError, windowFromError } from "./context.ts";
+import { calibration, closestName, compactSpec, estimateTokens, fit, isOverflow, mechanicalNote, requestedFromError, windowFromError } from "./context.ts";
 export type ToolCall = { id: string; type?: "function"; function: { name: string; arguments: string } };
 export type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** set when the provider reported nothing and the harness estimated (about 4 characters per token) */ estimated?: boolean; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
 export type Message = { role: "system" | "user" | "assistant" | "tool"; content: string | null; /** pictures attached to a user message (base64) */ images?: { mime: string; data: string }[]; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: Usage;
@@ -26,6 +26,8 @@ export type Tool<A = any> = {
   cacheable?: boolean;
   /** A fingerprint of whatever this call reads (a file: size and mtime). The stored result is dropped when it changes. */
   stamp?: (args: A) => string;
+  /** A shorter description for small context windows (see `compactSpecs`). Without one, the first sentence is used. */
+  short?: string;
   /** Hidden from the model until it finds it via `tool_search` (keeps prompts small when you have many tools). */
   deferred?: boolean;
   /** Availability per turn; the tool is only shown (and callable) while this returns true. */
@@ -145,6 +147,8 @@ export type Options = {
   contextBudget?: number;
   /** Reuse results of pure read tools (`cacheable`) while nothing has changed, and answer a repeat with a one-line pointer when the first result is still in the conversation. Default on; `false` switches it off. A `ToolCache` can be shared across runs. */
   toolCache?: ToolCache | false;
+  /** Send shorter tool definitions (see `compactSpec` in context.ts). For small context windows; default off. */
+  compactSpecs?: boolean | (() => boolean);
   /** The model's context window in tokens (8192 for a small local model, 1_000_000 for a large one). When set, the loop keeps every request inside it: it shrinks old output as the window fills,
    *  writes a handoff note before it overflows, and recovers from a "context too long" error instead of failing. A window stated in such an error replaces this value. */
   contextWindow?: number | (() => number | undefined);
@@ -339,7 +343,7 @@ const feedback = (v: Awaited<ReturnType<NonNullable<Options["verify"]>>>): strin
 
 export function createHarness(o: Options) {
   const reg = o.tools instanceof Registry ? o.tools : new Registry(o.tools);
-  const spec = (t: Tool): ToolSpec => ({ name: t.name, description: t.description, parameters: t.schema });
+  const spec = (t: Tool): ToolSpec => { const s: ToolSpec = { name: t.name, description: t.description, parameters: t.schema }; return (typeof o.compactSpecs === "function" ? o.compactSpecs() : o.compactSpecs) ? compactSpec(s, t.short) : s; };
   const searchTool: Tool<{ query: string }> = {
     name: "tool_search", description: "", schema: { type: "object", required: ["query"], properties: { query: { type: "string" } } },
     run: ({ query }) => {
@@ -529,7 +533,7 @@ export function createHarness(o: Options) {
           return `ERROR: tool ${name} is not available right now. Available: ${[...names, "finish"].join(", ")}`;
         }
         const schema = name === "finish" ? FINISH.parameters : t?.schema;
-        const errs = schema ? validate(args, schema) : [`unknown tool "${name}". Available: ${[...names, "finish"].join(", ")}`];
+        const errs = schema ? validate(args, schema) : [`unknown tool "${name}".${(() => { const c = closestName(name, [...names, "finish", ...[...reg.tools.keys()]]); return c ? ` Did you mean "${c}"?` : ""; })()} Available: ${[...names, "finish"].join(", ")}`];
         if (errs.length) { emit({ kind: "repair", detail: errs.join("; ") }); return `ERROR: ${errs.join("; ")}`; }
         if (name === "finish") {
           const stop = await hook("Stop", { summary: args.summary, task, ...(o.ledger ? o.ledger.audit(task) : { changed: [], notes: [] }) });

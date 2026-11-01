@@ -34,6 +34,30 @@ export function mechanicalNote(msgs: Message[]): string {
   return `(written automatically: the context was too small to ask the model for a summary)\nGOAL: see the task above\nDONE (tool calls, oldest first): ${[...files].slice(-40).join("; ") || "none recorded"}\nCOMMANDS: ${cmds.slice(-10).join("; ") || "none"}\nLAST SAID: ${last ?? "nothing"}\nNEXT: inspect the workspace (git status, git diff) to see the current state, then continue the task.`;
 }
 
+/**
+ * A tool definition in fewer tokens (after TSCG, arXiv 2605.26165: rule-based schema compilation for small models). Deterministic and conservative: the description becomes the tool's own `short` text if it has one,
+ * else its first sentence (at most 120 characters); descriptions inside the parameters are dropped. Names, types, required lists and enums stay, so a call that was valid stays valid.
+ */
+export function compactSpec(s: ToolSpec, short?: string): ToolSpec {
+  const first = (s.description.match(/^[\s\S]*?[.!?](?=\s|$)/)?.[0] ?? s.description).trim();
+  const strip = (v: unknown): unknown => (Array.isArray(v) ? v.map(strip) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v as object).filter(([k, x]) => !(k === "description" && typeof x === "string")).map(([k, x]) => [k, strip(x)])) : v);
+  return { ...s, description: short ?? (first.length > 120 ? first.slice(0, 117) + "…" : first), parameters: strip(s.parameters) as ToolSpec["parameters"] };
+}
+
+/** The closest name in a list (a typo, a missing prefix, a different case), or undefined. */
+export function closestName(name: string, names: string[]): string | undefined {
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const n = norm(name); if (!n) return undefined;
+  const dist = (a: string, b: string) => { const d = Array.from({ length: b.length + 1 }, (_, j) => j); for (let i = 1; i <= a.length; i++) { let prev = d[0]; d[0] = i; for (let j = 1; j <= b.length; j++) { const t = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = t; } } return d[b.length]; };
+  let best: { name: string; score: number } | undefined;
+  for (const c of names) {
+    const m = norm(c); if (!m) continue;
+    const score = m === n ? 0 : m.includes(n) || n.includes(m) ? 1 : dist(n, m);
+    if (score <= Math.max(2, Math.floor(m.length / 3)) && (!best || score < best.score)) best = { name: c, score };
+  }
+  return best?.name;
+}
+
 /** Index where the recent tail begins: the newest turns worth about `tailTokens` stay verbatim. Always at the start of a turn, never between a tool call and its results. */
 export function tailStart(msgs: Message[], tailTokens: number): number {
   let used = 0, i = msgs.length;

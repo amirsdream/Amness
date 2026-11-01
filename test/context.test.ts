@@ -118,3 +118,21 @@ test("small window profile: a bare 'hi' sends a short system prompt, few tools a
   assert.ok(small.msgs[0].content!.length < big.msgs[0].content!.length / 2, "short system prompt");
   assert.ok(after.names.includes("memory_save"), "the tool the model asked for is now loaded");
 });
+
+test("compactSpec keeps names, types, required lists and enums, and shortens the descriptions; closestName fixes a mistyped tool name", async () => {
+  const { compactSpec, closestName } = await import("../src/context.ts");
+  const spec = { name: "list_files", description: "List files in the workspace (skips node_modules, .git, dist). Max 300. More detail nobody needs.", parameters: { type: "object", required: ["path"], properties: { path: { type: "string", description: "the folder, relative" }, mode: { type: "string", enum: ["a", "b"] } } } } as never;
+  const c = compactSpec(spec) as { description: string; parameters: any };
+  assert.equal(c.description, "List files in the workspace (skips node_modules, .git, dist)."); assert.deepEqual(c.parameters.required, ["path"]); assert.deepEqual(c.parameters.properties.mode.enum, ["a", "b"]); assert.equal(c.parameters.properties.path.description, undefined);
+  assert.equal(compactSpec(spec, "Lists files.").description, "Lists files.");
+  assert.equal(closestName("readfile", ["read_file", "grep", "sh"]), "read_file"); assert.equal(closestName("Read_Files", ["read_file", "grep"]), "read_file"); assert.equal(closestName("grepp", ["grep", "sh"]), "grep");
+  assert.equal(closestName("fly_to_moon", ["read_file", "grep", "sh"]), undefined);
+});
+
+test("a call to an unknown tool is answered with the closest real name", async () => {
+  const bad: Message = { role: "assistant", content: null, tool_calls: [{ id: "u1", function: { name: "readfile", arguments: '{"path":"a"}' } }] };
+  const seen: Message[][] = []; const replies: Message[] = [bad, { role: "assistant", content: null, tool_calls: [{ id: "f", function: { name: "finish", arguments: '{"summary":"x"}' } }] }];
+  const model: Model = async (msgs) => { seen.push(msgs.map((m) => ({ ...m }))); return replies.shift()!; };
+  await createHarness({ model, tools: [read], stagnationTurns: 0 }).run("go");
+  assert.match(seen[1].find((m) => m.role === "tool")!.content!, /unknown tool "readfile"\. Did you mean "read"\?/);
+});

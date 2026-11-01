@@ -123,7 +123,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
         ctx.emit?.({ kind: "edit", ...unifiedDiff(path, before, content), before: before === null || before.length < 500_000 ? before : undefined });
         return `wrote ${content.length} chars to ${path}` + (await o.check?.([path]) ?? "") + (o.guidance?.nested(path) ?? "");
       } }),
-    defineTool<{ path: string; old?: string; new?: string; edits?: { old: string; new: string }[] }>({ name: "edit_file", description: "Replace exact, unique text in a file you have read. Give `old` and `new`, or an `edits` list of several replacements applied in order (all or nothing). If the text differs only in indentation it is still matched when unique. Shows the result.",
+    defineTool<{ path: string; old?: string; new?: string; edits?: { old: string; new: string }[] }>({ name: "edit_file", short: "Replace unique text `old` with `new` in a file you read, or pass `edits` (a list of old/new) for several.", description: "Replace exact, unique text in a file you have read. Give `old` and `new`, or an `edits` list of several replacements applied in order (all or nothing). If the text differs only in indentation it is still matched when unique. Shows the result.",
       schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, old: { type: "string" }, new: { type: "string" }, edits: { type: "array", items: { type: "object", required: ["old", "new"], properties: { old: { type: "string" }, new: { type: "string" } } } } } }, ...mutating,
       preview: ({ path, old, new: nw, edits }) => { const s = readFileSync(abs(path), "utf8"), r = replaceMany(s, edits?.length ? edits : old !== undefined && nw !== undefined ? [{ old, new: nw }] : []); return "error" in r ? undefined : unifiedDiff(path, s, r.out).diff; },
       run: async ({ path, old, new: nw, edits }, ctx) => {
@@ -291,6 +291,8 @@ export type CodeAgentOptions = {
   rollover?: { afterTokens?: number; afterChars?: number } | false;
   /** The model's context window in tokens. Set for small or local models (8192): the loop then keeps every request inside it and recovers from "context too long" errors. See `Options.contextWindow` in harness.ts. */
   contextWindow?: number | (() => number | undefined);
+  /** Shorter tool definitions. Default: on for a small context window (16k or less), off otherwise. */
+  compactSchemas?: boolean;
   /** Offer the plan of a similar finished task, and keep the plan of this one when it finishes (see plancache.ts). Off by default: not measured yet. */
   plans?: boolean;
   /** Called when the window size was learned from a provider error, so it can be remembered. */
@@ -432,7 +434,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const sessionFile = resolve(o.cwd, ".amness/handoff.md");
   let task = "";
   const h = createHarness({
-    model: o.model, toolCache, compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
+    model: o.model, toolCache, compactSpecs: () => o.compactSchemas ?? small(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
     budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
