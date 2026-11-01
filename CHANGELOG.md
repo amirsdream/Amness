@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Small windows:** the list of left-out tools in the prompt now carries names only (about 250 tokens saved).
+
 ## 0.1.6 (2026-10-31)
 
 - **Small-window profile:** with a context window of 16,384 tokens or less, Amness sends a much smaller request. A bare "hi" cost 3.4k tokens on a local Qwen (42% of an 8k window); it now costs about 1.3k to 1.5k. The system prompt is a third of the size, the Skills and Memory blocks are compact, and the rarely used tools (memory, skills, subagents, repo map, background shells, patches) stay out of the prompt until the model asks for them with `tool_search`. Nothing changes for large windows.

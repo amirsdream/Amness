@@ -379,7 +379,7 @@ export function createHarness(o: Options) {
    */
   async function warm(msgs: Message[], opts: { signal?: AbortSignal } = {}): Promise<{ prompt: number; cached: number }> {
     const visible = reg.visible({ step: lastStep, messages: msgs }), menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)) : [];
-    const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), FINISH];
+    const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: reg.lean?.when() ? "Load more tools by keyword before using them. Not yet loaded: " + menu.map((t) => t.name).join(", ") : "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), FINISH];
     const m = await o.model(msgs, specs, { signal: opts.signal, maxTokens: 16 });
     o.budget?.add(m);
     return { prompt: m.usage?.prompt_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0 };
@@ -443,7 +443,7 @@ export function createHarness(o: Options) {
       } else if (over) { emit({ kind: "budget", detail: over }); return end(`stopped: ${over}`, false, step, "budget"); }
       const visible = reg.visible({ step, messages: msgs }), names = new Set(visible.map((t) => t.name));
       const menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)) : [];
-      const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), FINISH];
+      const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: reg.lean?.when() ? "Load more tools by keyword before using them. Not yet loaded: " + menu.map((t) => t.name).join(", ") : "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), FINISH];
       const r = o.rollover, size = msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0);
       if (win) {
         // Window-aware: shrink old output before the window fills (cheap, loses little), and hand off only when shrinking is not enough.
