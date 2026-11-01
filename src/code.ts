@@ -7,6 +7,7 @@ import { applyBundle, collectFiles, readBundle, writeBundle, type Bundle } from 
 import { unifiedDiff } from "./diff.ts";
 import { createToolTool, loadSavedTools } from "./dynamic.ts";
 import { ToolCache } from "./cache.ts";
+import { coverageCheck } from "./coverage.ts";
 import { PlanCache, planBlock, planFrom } from "./plancache.ts";
 import { createHarness, defineTool, clip, makeHandoff, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, isMemoryBackend, memoryTools, type MemoryBackend } from "./memory.ts";
@@ -434,7 +435,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const sessionFile = resolve(o.cwd, ".amness/handoff.md");
   let task = "";
   const h = createHarness({
-    model: o.model, toolCache, compactSpecs: () => o.compactSchemas ?? small(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
+    model: o.model, toolCache, finishChecks: [coverageCheck], compactSpecs: () => o.compactSchemas ?? small(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
     budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff

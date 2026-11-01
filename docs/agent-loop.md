@@ -58,7 +58,7 @@ You type `Fix the failing test in src/math.ts` in the chat and press Enter. The 
 10. **Results.** `condense()` shortens the output. `redact()` in `src/secrets.ts` masks secrets. The `PostToolUse` hook runs. For an edit, `Ledger.onEdit()` in `src/ledger.ts` records it. For a shell command, `Ledger.onCommand()` records the exit code.
 11. **Checks after the tools.** `run()` updates the read streak, `ProgressTracker.observe()` in `src/progress.ts`, and the count of turns where every call failed.
 12. **The next step.** The model sees the test result. It calls `finish` with a summary.
-13. **The finish gate.** `exec()` runs the `Stop` hook, then `Ledger.check()`, then the `verify` command (built in `createCodeAgent()` in `src/code.ts`, run with `runShell()`), then the reviewer if it is on. If all pass, the loop emits an `audit` event and a `finish` event and returns.
+13. **The finish gate.** `exec()` runs the `Stop` hook, then `Ledger.check()`, then the coverage check (`coverageCheck()` in `src/coverage.ts`), then the `verify` command (built in `createCodeAgent()` in `src/code.ts`, run with `runShell()`), then the reviewer if it is on. If all pass, the loop emits an `audit` event and a `finish` event and returns.
 14. **The answer reaches you.** `chat()` calls `memory.endTurn()` and returns. `turn()` saves the messages. Each loop event passed through `onEvent()` in `cli/tui/app.ts` into the block store (`cli/tui/blocks.ts`), and `draw()` in `cli/tui/full.ts` showed it on screen.
 
 **Limits and common problems.**
@@ -143,6 +143,7 @@ A *guard* watches the loop. You can switch each one off with the `off` option (s
 | `wrapup` | Warns 3 steps before the step cap. Adds budget notes. Makes the final report. Checks for 12 read-only turns in a row. |
 | `stuck` | After 3 turns in a row where every tool call failed, asks the model to reflect. After 6, stops the run. |
 | `stagnation` | See the next section. |
+| `coverage` | When the task says to read each (or every, or all) file, and the file list the agent printed shows files it never opened, refuses the finish and names the unread files. At most twice per run. Silent when it cannot tell (no file list, or the history was replaced by a handoff). Added after a local Qwen read 3 of 32 files and described all 32. |
 | `compact`, `condense`, `schedule`, `ledger`, `review`, `redact` | Switch off the matching feature. |
 
 `off` takes a list of these names. The type is `Guard` in `src/harness.ts`. With `amness replay <trace.jsonl> --off loop,stuck` you can replay a recorded session with some guards off. See [Evaluating the harness](evaluation.md).

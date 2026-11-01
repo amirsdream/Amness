@@ -133,7 +133,7 @@ export class Budget {
 
 export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string; /** from the built-in safety floor: "don't ask again" shortcuts must not skip this prompt */ floor?: boolean }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
-export type Guard = "toolcache" | "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation" | "review" | "redact";
+export type Guard = "coverage" | "toolcache" | "nudge" | "loop" | "compact" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation" | "review" | "redact";
 
 export type Options = {
   model: Model;
@@ -147,6 +147,8 @@ export type Options = {
   contextBudget?: number;
   /** Reuse results of pure read tools (`cacheable`) while nothing has changed, and answer a repeat with a one-line pointer when the first result is still in the conversation. Default on; `false` switches it off. A `ToolCache` can be shared across runs. */
   toolCache?: ToolCache | false;
+  /** Checks run when the model tries to finish. Return a message to send it back to work (at most twice per run), or nothing to accept. The code agent uses one to refuse "I read every file" when it did not. */
+  finishChecks?: ((ctx: { task: string; summary: string; messages: Message[] }) => string | void)[];
   /** Send shorter tool definitions (see `compactSpec` in context.ts). For small context windows; default off. */
   compactSpecs?: boolean | (() => boolean);
   /** The model's context window in tokens (8192 for a small local model, 1_000_000 for a large one). When set, the loop keeps every request inside it: it shrinks old output as the window fills,
@@ -396,7 +398,7 @@ export function createHarness(o: Options) {
     const seen = new Map<string, number>(), history: string[] = [];
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     world++;            // files may have changed since the last run
-    let epoch = 0, ledgerRejects = 0, reviewRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
+    let epoch = 0, ledgerRejects = 0, reviewRejects = 0, coverageRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? 30;
     let allowNow: Set<string> | undefined, thenNext: string | undefined, budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false, win = typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow, recoveries = 0, calib = 1;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
@@ -542,6 +544,10 @@ export function createHarness(o: Options) {
             const problems = o.ledger.check(String(args.summary ?? ""), { gated: !!o.verify });
             if (problems.length && ledgerRejects < 2) { ledgerRejects++; const detail = `the record does not support your summary: ${problems.join(" ")}`; emit({ kind: "rejected", detail }); return `REJECTED: ${detail}\nFix it (run the command, or correct the summary), then finish again.`; }
             if (problems.length) emit({ kind: "hook", event: "Ledger", detail: `finishing with unverified claims: ${problems.join(" ")}`, blocked: false });
+          }
+          if (o.finishChecks && !off.has("coverage")) for (const chk of o.finishChecks) {
+            const why = chk({ task, summary: String(args.summary ?? ""), messages: msgs });
+            if (why && coverageRejects < 2) { coverageRejects++; emit({ kind: "rejected", detail: why }); return `REJECTED: ${clip(why, 3000)}`; }
           }
           if (o.verify) emit({ kind: "phase", phase: "verify", step, max });
           const fb = feedback(await o.verify?.(args.summary));

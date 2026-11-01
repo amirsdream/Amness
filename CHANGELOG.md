@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Small windows:** the list of left-out tools in the prompt now carries names only (about 250 tokens saved). Tool definitions are also sent shorter (the first sentence of each description, none inside the parameters, and a hand-written short text for `edit_file`); names, types, required lists and enums are unchanged. `amness eval` gets `--context-window` and `--schemas full|compact` to measure the difference.
+- **"Read each file" means each file:** when a task asks the agent to read every file, and it tries to finish after opening only some of the files it listed, the finish is refused with the names of the unread files (twice at most). Switch off with `--off coverage`. A local Qwen had described 32 files after reading 3.
 - **Tool names:** a call to a tool that does not exist is now answered with the closest real name (`readfile` → `read_file`), so a small model can fix the call in one step.
 
 ## 0.1.6 (2026-10-31)
