@@ -16,19 +16,41 @@ export class Editor {
   private goal: number | null = null;   // desired display column for vertical moves
   private pastes = new Map<number, string>();
   private pasteN = 0;
+  // Undo/redo: a snapshot before each change. Typing in one place is one step (like any editor); moving the cursor, deleting or pasting starts a new one.
+  private undos: { lines: string[]; row: number; col: number }[] = [];
+  private redos: { lines: string[]; row: number; col: number }[] = [];
+  private typedAt = -1;
 
   get text() { return this.lines.join("\n"); }
   get empty() { return this.text.length === 0; }
   get cursorIndex() { return this.lines.slice(0, this.row).reduce((n, l) => n + l.length + 1, 0) + this.col; }
 
   setText(t: string, cursor: "end" | number = "end") {
+    if (t !== this.text) this.snap();
     this.lines = t.split("\n"); this.goal = null;
     if (cursor === "end") { this.row = this.lines.length - 1; this.col = this.lines[this.row].length; }
     else { let i = cursor; this.row = 0; while (this.row < this.lines.length - 1 && i > this.lines[this.row].length) { i -= this.lines[this.row].length + 1; this.row++; } this.col = i; }
   }
-  clear() { this.setText(""); this.pastes.clear(); this.hIdx = -1; }
+  clear() { this.lines = [""]; this.row = this.col = 0; this.goal = null; this.pastes.clear(); this.hIdx = -1; this.undos = []; this.redos = []; this.typedAt = -1; }
+
+  private snap(typing = false) {
+    if (typing && this.typedAt === this.cursorIndex) return;                                   // still typing where the last character went: same undo step
+    this.undos.push({ lines: [...this.lines], row: this.row, col: this.col }); if (this.undos.length > 200) this.undos.shift();
+    this.redos = []; this.typedAt = -1;
+  }
+  private swap(from: Editor["undos"], to: Editor["undos"]): boolean {
+    const s = from.pop(); if (!s) return false;
+    to.push({ lines: [...this.lines], row: this.row, col: this.col });
+    this.lines = s.lines; this.row = s.row; this.col = s.col; this.goal = null; this.typedAt = -1; return true;
+  }
+  undo(): boolean { return this.swap(this.undos, this.redos); }
+  redo(): boolean { return this.swap(this.redos, this.undos); }
 
   insert(s: string) {
+    const typing = s.length <= 2 && !/\s/.test(s);
+    this.snap(typing); this.ins(s); if (typing) this.typedAt = this.cursorIndex;
+  }
+  private ins(s: string) {
     s = s.replace(/\r\n?/g, "\n"); this.goal = null;
     const parts = s.split("\n"), cur = this.lines[this.row], tail = cur.slice(this.col);
     this.lines[this.row] = cur.slice(0, this.col) + parts[0];
@@ -42,16 +64,17 @@ export class Editor {
   paste(s: string) {
     s = s.replace(/\r\n?/g, "\n");
     const n = s.split("\n").length;
-    if (s.length > 600 || n > 8) { const id = ++this.pasteN; this.pastes.set(id, s); this.insert(`[Pasted text #${id} +${n} line${n > 1 ? "s" : ""}]`); }
-    else this.insert(s);
+    this.snap();
+    if (s.length > 600 || n > 8) { const id = ++this.pasteN; this.pastes.set(id, s); this.ins(`[Pasted text #${id} +${n} line${n > 1 ? "s" : ""}]`); }
+    else this.ins(s);
   }
-  newline() { this.insert("\n"); }
+  newline() { this.snap(); this.ins("\n"); }
 
   private prevIdx(s: string, i: number) { if (i <= 0) return 0; i--; if (i > 0 && s.charCodeAt(i) >= 0xdc00 && s.charCodeAt(i) <= 0xdfff) i--; return i; }
   private nextIdx(s: string, i: number) { if (i >= s.length) return s.length; const c = s.charCodeAt(i); return i + (c >= 0xd800 && c <= 0xdbff ? 2 : 1); }
 
   backspace() {
-    this.goal = null;
+    this.goal = null; if (this.col > 0 || this.row > 0) this.snap();
     if (this.col > 0) {
       const before = this.lines[this.row].slice(0, this.col), m = before.match(/\[Pasted text #\d+ \+\d+ lines?\]$/);   // delete a placeholder as one unit
       const from = m ? this.col - m[0].length : this.prevIdx(before, this.col);
@@ -62,7 +85,7 @@ export class Editor {
     }
   }
   del() {
-    this.goal = null; const l = this.lines[this.row];
+    this.goal = null; const l = this.lines[this.row]; if (this.col < l.length || this.row < this.lines.length - 1) this.snap();
     if (this.col < l.length) this.lines[this.row] = l.slice(0, this.col) + l.slice(this.nextIdx(l, this.col));
     else if (this.row < this.lines.length - 1) { this.lines[this.row] = l + this.lines[this.row + 1]; this.lines.splice(this.row + 1, 1); }
   }
@@ -87,9 +110,9 @@ export class Editor {
     while (i < l.length && isWord(l[i])) i++;
     this.col = i;
   }
-  deleteWordBack() { const to = this.col; this.wordLeft(); this.lines[this.row] = this.lines[this.row].slice(0, this.col) + this.lines[this.row].slice(to); }
-  killToEnd() { this.goal = null; const l = this.lines[this.row]; if (this.col < l.length) this.lines[this.row] = l.slice(0, this.col); else this.del(); }
-  killToStart() { this.goal = null; this.lines[this.row] = this.lines[this.row].slice(this.col); this.col = 0; }
+  deleteWordBack() { this.snap(); const to = this.col; this.wordLeft(); this.lines[this.row] = this.lines[this.row].slice(0, this.col) + this.lines[this.row].slice(to); }
+  killToEnd() { this.snap(); this.goal = null; const l = this.lines[this.row]; if (this.col < l.length) this.lines[this.row] = l.slice(0, this.col); else this.del(); }
+  killToStart() { this.snap(); this.goal = null; this.lines[this.row] = this.lines[this.row].slice(this.col); this.col = 0; }
 
   /** Soft-wrapped visual rows for a given content width, plus where the cursor lands. */
   layout(width: number): Layout {

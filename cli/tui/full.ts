@@ -11,16 +11,20 @@ import { Canvas } from "./canvas.ts";
 import { isQuiet, renderBlock, renderGroup, type Hit, type RenderCtx, type Rendered } from "./cards.ts";
 import type { Block } from "./blocks.ts";
 import type { MouseEv } from "./keys.ts";
-import { MOUSE_OFF, MOUSE_ON } from "./keys.ts";
+import { MOUSE_OFF, MOUSE_ON, type Key } from "./keys.ts";
+import { findRows, type FindHit } from "./find.ts";
+import { existsSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { drawModal, type ModalHit } from "./modal.ts";
 import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay } from "./overlays.ts";
 import { estimateCost, fmtDuration, fmtTokens } from "./pricing.ts";
 import { BOLD, F, ITAL, chip, fit, split } from "./rich.ts";
 import { renderSidebar } from "./sidebar.ts";
+import { newPanelState, sidebarData, toggleStep, toolVerb } from "./panel.ts";
+export { toolVerb } from "./panel.ts";
 import { cellWidth, clipWidth } from "./text.ts";
 import { getTheme, type Theme } from "./themes.ts";
 import { level as colorLevel, TIPS } from "./theme.ts";
-import { contextMap } from "./tokens.ts";
 import { LOGO_ART } from "./brand.ts";
 import { argSummary, toolLabel } from "./view.ts";
 
@@ -51,10 +55,11 @@ export class FullView {
   private lastClick = { t: 0, x: -1, y: -1, n: 0 };
   private sideX = 1e9; private mainW = 80; private toastBase = 20;
   private lastWheel = 0;
-  private ctxCache?: { key: string; map: { label: string; pct: number; color: number }[] };
   private forceFull = true;
+  /** ctrl+f: the text being searched, its matches (rows of the whole transcript), which one is current, and where the view was before (esc goes back). */
+  find?: { q: string; hits: FindHit[]; cur: number; back: number; jump: boolean };
+  private fileSeen = new Map<string, boolean>();
   private tipIdx = Math.floor(Math.random() * TIPS.length);
-  private startedAt = Date.now();
 
   constructor(app: App) {
     this.app = app;
@@ -71,7 +76,7 @@ export class FullView {
   leave() { this.app.io.output.write(MOUSE_OFF + "\x1b[?25h\x1b[?1049l"); }
   setMouse(on: boolean) { this.mouseOn = on; this.app.io.output.write(on ? MOUSE_ON : MOUSE_OFF); this.toast(on ? "mouse on (drag to select, wheel to scroll)" : "mouse off: native selection restored", "info"); }
   toast(text: string, kind: Toast["kind"] = "info", ms = 2600) { this.toasts.push({ text, kind, until: Date.now() + ms }); this.toasts = this.toasts.slice(-3); }
-  invalidate() { this.forceFull = true; this.cache.clear(); }
+  invalidate() { this.forceFull = true; this.cache.clear(); this.fileSeen.clear(); }
 
   // ------------------------------------------------------------------ frame
   draw() {
@@ -125,7 +130,8 @@ export class FullView {
   // ------------------------------------------------------------------ transcript
   private ctxFor(width: number, now: number): RenderCtx {
     const app = this.app, brand = brandOfModel(app.cfg.model, app.cfg.provider, this.theme);
-    return { theme: this.theme, width, now, frame: app.frame, expandAll: this.expandAll, live: app.running, brand, diffMode: this.diffMode, kids: (id: string) => app.blocks.kids(id) };
+    const exists = (p: string) => { let v = this.fileSeen.get(p); if (v === undefined) { try { const a = resolve(app.cwd, p); v = a.startsWith(resolve(app.cwd)) && existsSync(a) && statSync(a).isFile(); } catch { v = false; } this.fileSeen.set(p, v); } return v; };
+    return { theme: this.theme, width, now, frame: app.frame, expandAll: this.expandAll, live: app.running, brand, diffMode: this.diffMode, kids: (id: string) => app.blocks.kids(id), exists };
   }
   private sig(b: Block, ctx: RenderCtx): string {
     const base = `${ctx.theme.name}|${ctx.width}|${ctx.diffMode}|${ctx.expandAll}|${ctx.brand.icon}|`;
@@ -162,6 +168,11 @@ export class FullView {
       this.items.push({ b, r, start: total }); total += r.rows.length; prevTool = b.kind === "tool" && (!b.agent || b.agent === "lead") && r.rows.length <= 2;
     }
     for (const id of this.cache.keys()) if (!live.has(id)) this.cache.delete(id);
+    if (this.find) {
+      const f = this.find; f.hits = findRows(this.items.flatMap((it) => it.r.text), f.q);
+      if (f.jump) { f.cur = f.hits.length - 1; f.jump = false; this.prevTotal = total; if (f.cur >= 0) this.scroll = Math.max(0, total - h - (f.hits[f.cur].row - Math.floor(h / 2))); }   // newest match first
+      f.cur = Math.min(f.cur, f.hits.length - 1);
+    }
     if (this.scroll > 0 && total > this.prevTotal) { this.scroll += total - this.prevTotal; this.unseen += total - this.prevTotal; }   // keep the view anchored while scrolled up
     this.prevTotal = total;
     const maxScroll = Math.max(0, total - h); this.scroll = Math.max(0, Math.min(this.scroll, maxScroll)); if (this.scroll === 0) this.unseen = 0;
@@ -176,6 +187,7 @@ export class FullView {
       yy = it.start + it.r.rows.length;
     }
     void yy;
+    if (this.find) this.find.hits.forEach((m, i) => { const row = m.row - start; if (row >= 0 && row < h) c.tint(x0 + m.col, y0 + row, m.w, 1, i === this.find!.cur ? t.accent : t.selection); });
     // scrollbar
     if (total > h) {
       const thumb = Math.max(1, Math.round((h * h) / total)), top = Math.round(((start) / Math.max(1, total - h)) * (h - thumb));
@@ -210,6 +222,7 @@ export class FullView {
   }
   private hitClick(h: Hit, b: Block, group = false) {
     if (h.kind === "link" && h.text) return this.openLink(h.text);
+    if (h.kind === "file" && h.text) { const m = /^(.*?)(?::(\d+))?$/.exec(h.text)!; this.app.openFile(m[1], m[2] ? Number(m[2]) : undefined); return; }
     const before = this.total;
     if (h.kind === "copy" && h.text !== undefined) { this.copy(h.text); this.toast(`copied code block (${h.text.length} characters)`, "ok"); return; }
     if (group) { if (this.groupOpen.has(b.id)) this.groupOpen.delete(b.id); else this.groupOpen.add(b.id); }
@@ -217,6 +230,28 @@ export class FullView {
     else if (b.kind === "tool") { b.more = true; this.app.blocks.version++; }
     this.cache.delete(b.id); this.app.render();
     void before;
+  }
+  /** ctrl+f: start searching the conversation; typing narrows it live. */
+  openFind() { this.find = { q: "", hits: [], cur: -1, back: this.scroll, jump: false }; }
+  /** Keys while the find bar is open. Returns false for a key that closes it and should then act as usual. */
+  findKey(k: Key): boolean {
+    const f = this.find; if (!f) return false;
+    const go = (d: number) => { if (!f.hits.length) return; f.cur = (f.cur + d + f.hits.length) % f.hits.length; const m = f.hits[f.cur]; this.scroll = Math.max(0, this.total - this.viewH - (m.row - Math.floor(this.viewH / 2))); };
+    if (k.name === "escape") { this.scroll = f.back; this.find = undefined; return true; }
+    if (k.name === "enter") { this.find = undefined; return true; }
+    if (k.name === "up" || (k.ctrl && (k.name === "f" || k.name === "p"))) { go(-1); return true; }
+    if (k.name === "down" || (k.ctrl && k.name === "n")) { go(1); return true; }
+    if (k.name === "backspace") { f.q = [...f.q].slice(0, -1).join(""); f.jump = true; return true; }
+    if ((k.name === "char" || k.name === "paste") && !k.ctrl && !k.alt && k.text) { f.q += k.text.replace(/\n/g, " "); f.jump = true; return true; }
+    if (k.name === "mouse") return false;
+    this.find = undefined; return false;
+  }
+  /** alt+↑ / alt+↓: jump to the previous or next of your own messages. */
+  jumpPrompt(dir: -1 | 1) {
+    const users = this.items.filter((i) => i.b.kind === "user"); if (!users.length) return;
+    const top = Math.max(0, this.total - this.viewH - this.scroll);
+    const target = dir < 0 ? [...users].reverse().find((u) => u.start < top) : users.find((u) => u.start > top);
+    if (target) this.scrollToBlock(target.b.id); else if (dir > 0) this.scrollTo(0);
   }
   scrollTo(fromBottom: number) { this.scroll = Math.max(0, fromBottom); if (this.scroll === 0) this.unseen = 0; this.app.render(); }
   scrollBy(rows: number) { this.scroll = Math.max(0, this.scroll + rows); if (this.scroll === 0) this.unseen = 0; this.app.render(); }
@@ -262,40 +297,13 @@ export class FullView {
 
   // ------------------------------------------------------------------ sidebar
   /** Steps the user opened in the LOOP section by clicking. */
-  private openSteps = new Set<number>(); private openFor = 0;
-  private loopData(now: number): import("./looppanel.ts").LoopData | undefined {
-    const app = this.app, steps = app.trace.filter((s) => s.t0 >= app.runStart - 50);   // this run's steps (the trace spans the whole session)
-    if (!steps.length) return undefined;
-    if (this.openFor !== app.runStart) { this.openFor = app.runStart; this.openSteps.clear(); }   // step numbers start again in a new run
-    return { live: app.running, phase: app.phase?.phase ?? "model", cap: app.phase?.max ?? 30, now, frame: app.frame, steps,
-      elapsedMs: app.running ? now - app.runStart : Math.max(...steps.map((s) => s.t0 + s.ms)) - app.runStart,
-      inflight: [...app.inflight.values()].map((x) => ({ label: toolVerb(x.name, x.args), ms: now - x.t0, agent: x.agent, name: x.name, args: x.args })), open: [...this.openSteps] };
-  }
+  /** Which loop steps are open, the context-map cache and the tip: per-view state for the shared sidebar data (panel.ts). */
+  private panel = newPanelState();
   private drawSidebar(c: Canvas, t: Theme, x0: number, y0: number, w: number, h: number) {
-    const app = this.app, u = app.session.usage, win = app.window, now = Date.now();
-    const mkey = `${app.session.messages.length}|${app.lastPrompt}`;
-    if (this.ctxCache?.key !== mkey) {
-      const m = contextMap(app.session.messages, app.lastPrompt, JSON.stringify(app.agent.registry.visible({ step: 0, messages: [] }).map((x) => x.name + x.description)).length);
-      const tot = Math.max(1, m.total), cols: Record<string, number> = { tools: t.tool.read, assistant: t.tool.edit, you: t.ok, system: t.accent, defs: t.accent2 };
-      this.ctxCache = { key: mkey, map: m.parts.map((p) => ({ label: p.label, pct: Math.round((p.tokens / tot) * 100), color: cols[p.key] })).sort((a, b) => b.pct - a.pct) };
-    }
-    const changes = new Map<string, { path: string; added: number; removed: number; created: boolean; blockId: number }>();
-    for (const b of app.blocks.blocks) if (b.kind === "tool" && b.edit) { const p = changes.get(b.edit.path); changes.set(b.edit.path, { path: b.edit.path, added: (p?.added ?? 0) + b.edit.added, removed: (p?.removed ?? 0) + b.edit.removed, created: p?.created ?? b.edit.created, blockId: b.id }); }
-    const used = app.lastPrompt || this.ctxCache.map.reduce((n, m) => n + m.pct, 0) * 0;
-    const { rows, hits } = renderSidebar({
-      title: app.session.title, model: app.cfg.model, provider: app.cfg.provider, api: app.model.api?.(), branch: app.branch, cwd: shortPath(app.cwd), mode: app.mode, effort: app.cfg.effort,
-      skills: (app.agent.allSkills ?? []).map((s) => ({ name: s.name, uses: app.skillsUsed.get(s.name) ?? 0, off: app.agent.skillState.isOff(s.name) })),
-      pluginStatus: app.pluginStatus(), budget: { used: Math.round(app.budget.effective), max: app.budget.maxTokens }, ctxPct: app.ctxPct, ctxUsed: used, ctxMax: win, series: u.series ?? [], map: this.ctxCache.map,
-      usage: { prompt: u.prompt, completion: u.completion, calls: u.calls, cached: u.cached ?? 0, reasoning: u.reasoning ?? 0 }, cost: estimateCost(app.cfg.model, u.prompt, u.completion, u.cached ?? 0),
-      todos: app.todos, changes: [...changes.values()].reverse(), tools: app.agent.registry.visible({ step: 0, messages: [] }).length, mcp: app.mcp.length, memory: app.memory?.list().length ?? 0,
-      sandbox: app.cfg.sandbox,
-      procs: app.agent.procs?.list().map((p) => ({ id: p.id, name: p.name, status: p.status, secs: Math.round((now - p.startedAt) / 1000) })),
-      running: app.running, elapsedMs: now - this.startedAt, tip: TIPS[this.tipIdx],
-      loop: this.loopData(now),
-    }, t, w, h);
+    const { rows, hits } = renderSidebar(sidebarData(this.app, this.panel, t, Date.now()), t, w, h);
     rows.forEach((r, i) => c.put(x0 + 1, y0 + i, r, w - 1));
     for (let i = 0; i < h; i++) c.text(x0, y0 + i, "│", { fg: t.border, bg: t.surface });
-    for (const hh of hits) if (hh.row < h) this.regions.push({ x: x0, y: y0 + hh.row, w, h: 1, kind: "change", click: () => { if (hh.kind === "step" && hh.step !== undefined) { this.openSteps.has(hh.step) ? this.openSteps.delete(hh.step) : this.openSteps.add(hh.step); this.invalidate(); } else if (hh.blockId !== undefined) this.scrollToBlock(hh.blockId); } });
+    for (const hh of hits) if (hh.row < h) this.regions.push({ x: x0, y: y0 + hh.row, w, h: 1, kind: "change", click: () => { if (hh.kind === "step" && hh.step !== undefined) { toggleStep(this.panel, hh.step); this.invalidate(); } else if (hh.blockId !== undefined) this.scrollToBlock(hh.blockId); } });
   }
 
   // ------------------------------------------------------------------ status line, input, footer
@@ -320,13 +328,13 @@ export class FullView {
     const label = ` ${MODE_LABEL[mode] ?? mode} `;
     c.text(x + 2, y, label, { fg: t.onAccent, bg: col, attr: A.bold });
     this.regions.push({ x: x + 2, y, w: label.length, h: 1, kind: "mode", click: () => { app.cycleMode(); app.render(); } });
-    const hint = app.running ? " enter queues · esc interrupts " : " ⇧⇥ mode  ⌥↵ newline ";
+    const hint = app.running ? " enter queues · esc interrupts " : app.vimNormal ? " NORMAL · i insert · enter send " : app.cfg.vim ? " INSERT · esc normal " : " ⇧⇥ mode  ⌥↵ newline ";
     c.text(x + w - cellWidth(hint) - 2, y, hint, { fg: t.faint, bg: t.surface });
     const ed = app.editor, innerW = w - 6, r = ed.render(innerW, "", ""), rows = Math.min(8, r.lines.length);
     const first = Math.max(0, Math.min(r.cursor.row - rows + 1, r.lines.length - rows)), shown = r.lines.slice(first, first + rows);
     const empty = ed.empty;
     shown.forEach((ln, i) => {
-      const yy = y + 1 + i, prompt = i === 0 && first === 0 ? F(col, BOLD("❯")) : " ";
+      const yy = y + 1 + i, prompt = i === 0 && first === 0 ? (app.vimNormal ? F(t.accent2, BOLD("N")) : F(col, BOLD("❯"))) : " ";
       c.ansi(x + 2, yy, prompt, { bg: t.surface });
       if (empty && i === 0) c.ansi(x + 4, yy, F(t.faint, ITAL(app.running ? "Type to steer the agent…" : "Ask anything…   @ files  ·  / commands  ·  !cmd run a command  ·  # remember")), { bg: t.surface }, innerW);
       else c.ansi(x + 4, yy, ln.replace(/(@[^\s]+)/g, (m) => F(t.accent2, m)).replace(/\[Pasted text #\d+ \+\d+ lines?\]/g, (m) => F(t.warn, m)), { bg: t.surface, fg: t.text }, innerW);
@@ -354,6 +362,11 @@ export class FullView {
       : app.editor.empty ? [["enter", "send"], ["ctrl+p", "commands"], ["ctrl+o", "expand tools"], ["ctrl+b", "sidebar"], ["pgup/dn", "scroll"], ["?", "help"]] : [["enter", "send"], ["⌥enter", "newline"], ["tab", "complete"], ["esc esc", "clear"]];
     const left = hints.map(([k, l]) => F(t.dim, k) + " " + F(t.faint, l)).join(F(t.border, "  ·  "));
     const p = app.ctxPct, cost = app.cost, right = [p !== null ? F(p > 85 ? t.err : p > 60 ? t.warn : t.dim, `ctx ${p}%`) : "", cost ? F(t.dim, cost) : "", this.mouseOn ? "" : F(t.warn, "mouse off")].filter(Boolean).join(F(t.border, "  ·  "));
+    if (this.find) {
+      const f = this.find, n = f.hits.length, pos = !f.q ? "" : n ? `${f.cur + 1}/${n}` : "no match";
+      c.ansi(0, y, fit(" " + BOLD(F(t.accent, "Find")) + " " + F(t.text, f.q) + F(t.accent, "▏") + "  " + F(n || !f.q ? t.dim : t.warn, pos) + "   " + F(t.faint, "↑ older · ↓ newer · enter stay · esc back"), W, t.bg));
+      return;
+    }
     c.ansi(0, y, fit(" " + (app.notice && now < app.noticeUntil ? F(t.warn, app.notice) : left), W - cellWidth(right) - 1, t.bg));
     if (right) c.ansi(W - cellWidth(right) - 1, y, right);
   }
@@ -457,12 +470,5 @@ export function gradientText(text: string, stops: number[], phase = 0): string {
   return chars.map((ch, i) => (ch === " " ? ch : F(sample(stops, (i / n + phase) % 1), ch))).join("");
 }
 const sample = (stops: number[], x: number) => { const p = Math.max(0, Math.min(1, x)) * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(p)); return stops.length === 1 ? stops[0] : mix(stops[i], stops[i + 1], p - i); };
-const VERBS: Record<string, string> = { read_file: "Reading", list_files: "Listing", grep: "Searching", write_file: "Writing", edit_file: "Editing", sh: "Running", web_search: "Searching the web for", fetch_url: "Fetching", task: "Delegating", memory_save: "Saving note", memory_search: "Recalling", todo_write: "Planning" };
-/** "Reading src/app.ts": what a tool call is doing, for the status line and the run panel. */
-export function toolVerb(name: string, args: string, past = false): string {
-  const a = argSummary(name, args), v = VERBS[name] ?? toolLabel(name);
-  return past ? `${toolLabel(name)} ${a}`.trim() : `${v} ${a}`.trim();
-}
-const shortPath = (p: string) => { const h = process.env.HOME ?? ""; return h && p.startsWith(h) ? "~" + p.slice(h.length) : p; };
 function ago(iso: string) { const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000); return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 129600 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; }
 void InputOverlay; void ITAL; void BOLD; void split; void estimateCost; void ({} as Cell);

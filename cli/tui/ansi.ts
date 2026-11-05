@@ -1,5 +1,5 @@
 // ANSI strings <-> styled cells. The renderers produce ANSI strings; the full-screen canvas and the screenshot tool need cells.
-import { cpWidth } from "./text.ts";
+import { graphemeWidth, graphemes } from "./text.ts";
 
 /** Colour: -1 = terminal default, 0x000000..0xFFFFFF = truecolor, 0x1000000 + n = 256-palette index n. */
 export const DEFAULT = -1;
@@ -44,13 +44,13 @@ export function applySgr(st: St, params: string): void {
 /** Parse an ANSI string into styled cells. Wide characters become one cell with w = 2. Unknown escape sequences are dropped. */
 export function parseAnsi(s: string, base: Partial<St> = {}): Cell[] {
   const st: St = { fg: base.fg ?? DEFAULT, bg: base.bg ?? DEFAULT, attr: base.attr ?? 0 }, out: Cell[] = [];
-  const re = /\x1b\[([0-9;:?]*)([A-Za-z])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|([\s\S])/gu;
+  const re = /\x1b\[([0-9;:?]*)([A-Za-z])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|([^\x1b]+)|\x1b/gu;
   for (let m; (m = re.exec(s)); ) {
-    if (m[2] === "m") { const b = { ...base }; applySgr(st, m[1]); void b; }
-    else if (m[3] !== undefined) {
-      const cp = m[3].codePointAt(0)!, w = cpWidth(cp);
-      if (w === 0) { if (out.length && cp >= 0x300) out[out.length - 1].ch += m[3]; continue; }     // combining marks join the previous cell
-      out.push({ ch: m[3], w, fg: st.fg, bg: st.bg, attr: st.attr });
+    if (m[2] === "m") applySgr(st, m[1]);
+    else if (m[3] !== undefined) for (const g of graphemes(m[3])) {
+      const w = graphemeWidth(g);
+      if (w === 0) { if (out.length && g.codePointAt(0)! >= 0x300) out[out.length - 1].ch += g; continue; }     // a lone combining mark joins the previous cell
+      out.push({ ch: g, w, fg: st.fg, bg: st.bg, attr: st.attr });
     }
   }
   return out;

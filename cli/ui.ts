@@ -1,7 +1,9 @@
 // Tiny zero-dependency terminal UI: colors, boxes, arrow-key menus, prompts, spinner. Falls back to plain line input when piped.
 import { createInterface, emitKeypressEvents, type Interface } from "node:readline";
 
-const color = (!!process.stdout.isTTY || !!process.env.FORCE_COLOR) && !process.env.NO_COLOR;
+let color = (!!process.stdout.isTTY || !!process.env.FORCE_COLOR) && !process.env.NO_COLOR;
+/** Colour on or off from now on, whatever the terminal is: the desktop app has no terminal but shows these colours as HTML. */
+export const forceColor = (on: boolean) => { color = on; };
 const sgr = (code: string) => (s: string) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
 export const bold = sgr("1"), dim = sgr("2"), red = sgr("31"), green = sgr("32"), yellow = sgr("33"), blue = sgr("34"), magenta = sgr("35"), cyan = sgr("36"), gray = sgr("90");
 export const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
