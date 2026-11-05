@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 (2026-11-05)
+
+- **Desktop: clicking an item in a picker chooses it.** In 0.2.0, hovering a list item rebuilt the list, so a mouse click was often lost: the model button opened the model list, but clicking a model did not change it (the keyboard worked). This affected every picker in the desktop app (`/model`, `/resume`, `/theme`, `/mode`…). The window checks now hover like a mouse.
+
 ## 0.2.0 (2026-11-05)
 
 **Upgrade note:** Electron is now a dependency, for the desktop app. Installing stays small: Electron downloads its program (about 100 MB) only the first time you start `amness-desktop`, so the first start takes a little longer. If you never use the desktop app, nothing is downloaded. Set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` to prevent the download; `amness-desktop` then opens in a Chrome/Edge window or your browser.
