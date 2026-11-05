@@ -220,6 +220,27 @@ The inline renderer (`cli/tui/screen.ts`) uses the same `App` and the same agent
 - Synchronized output and OSC 52 depend on your terminal. If your terminal ignores them, you may see flicker or copying may not reach your clipboard. Not verified on every terminal.
 - Tests for the canvas, keys and full-screen view are in `test/tui-canvas.test.ts`, `test/tui-keys.test.ts` and `test/tui-full.test.ts`.
 
+## Understand how the desktop app shares the terminal app's core
+
+**What it is.** The desktop app (`amness-desktop`) and the terminal app run the same `App` class. Only the drawing is different.
+
+**How it works.**
+
+1. `cli/desktop.ts` starts a local server (`cli/desktop/server.ts`) on `127.0.0.1` with a random access token. Then it opens an Electron window on it.
+2. The server runs one `App` with `ui: "remote"` (`cli/tui/app.ts`). In this mode the `App` has no terminal. Where the terminal would redraw, it calls the `remote` hooks instead.
+3. `cli/desktop/bridge.ts` turns the `App`'s state into events for the window: the transcript blocks, the side panel data, toasts, and the dialogs the `App` opens (`app.overlay`).
+4. The side panel data comes from `sidebarData()` in `cli/tui/panel.ts`. The terminal sidebar uses the same function.
+5. The window sends what you do back to the same `App` methods the terminal uses: `submitText()`, `interrupt()`, `setMode()`, `runCommand()`, and the answer to a dialog.
+6. Command completion in both apps comes from `App.suggestionsFor()`.
+
+So a new command, dialog or panel field in the `App` appears in both apps without more code.
+
+**Limits and common problems.**
+
+- The desktop draws its own HTML for the transcript and the panel. A new kind of block needs a small change in `cli/desktop/ui/app.js`.
+- The run panel is the terminal's own text (`renderLoop()`), turned into HTML colours.
+- Tests: `test/desktop.test.ts` (the server and bridge) and `npm run test:desktop-ui` (the real window, needs a screen).
+
 ## Next steps
 
 - [The agent loop](agent-loop.md): follow one turn through these files.

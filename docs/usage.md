@@ -144,6 +144,19 @@ In the full-screen view, the **most recent** tool call stays open. A shell comma
 | `?` | Shows the shortcuts (when the input is empty). |
 | `Ctrl+B`, `Ctrl+T` | Full-screen only: toggle the sidebar, change the theme. |
 | `PgUp`, `PgDn`, `Ctrl+Home`, `Ctrl+End` | Scroll the transcript, jump to the end. |
+| `Ctrl+R` | Searches your earlier messages. Type part of one, then press `Enter` to put it in the input box. |
+| `Ctrl+Z`, `Ctrl+Y` | Undo and redo while you type (`Ctrl+_` also undoes). Typing in one place is one step. |
+| `Ctrl+G` | Opens your message in your own editor (`$VISUAL` or `$EDITOR`, for example `code --wait`). When you save and close it, the text comes back. |
+| `Ctrl+V` | Pastes an image from the clipboard. It is saved in `.amness/paste/` and mentioned, so it goes with your next message. |
+| `Ctrl+F` | Full-screen only: finds text in the conversation. Matches are highlighted as you type. `↑` `↓` go to older or newer matches, `Enter` stays there, `Esc` goes back. |
+| `Alt+↑`, `Alt+↓` | Full-screen only: jump to your previous or next message. |
+| Click a file path | Full-screen only: a path in a reply, such as `src/app.ts:12`, opens in your editor at that line. |
+
+**Vim mode.** `/vim` turns on vim-style editing in the input box. `Esc` switches to normal mode. There you can use `h j k l w b e 0 ^ $ gg G`, `x X D C S`, `dd dw cw yy p P`, `u` (undo), `Ctrl+R` (redo) and counts such as `3w`. `i a I A o O` go back to typing. `Enter` sends the message.
+
+**Notifications.** If a turn takes more than 20 seconds, or the agent needs your approval while you are in another window, Amness shows a desktop notification. It uses your terminal's own notification when the terminal supports it (iTerm2, WezTerm, Ghostty, kitty, Windows Terminal), and the system notifier otherwise. Nothing is shown while the terminal is in front. `/notify off` turns this off, and `/notify test` sends a test notification.
+
+**Sessions.** `/rename <name>` names the current conversation. `/resume` shows a preview of each conversation, and you can type to search. `amness chat --resume <name>` starts with a named conversation.
 
 **Example.**
 
@@ -297,7 +310,8 @@ When you start the chat, Amness picks a first `/verify` command for you if it ca
 |---|---|
 | `/clear` (alias `/new`) | Starts a new conversation. The old one is saved. |
 | `/compact` | Summarises the conversation to free context. |
-| `/resume` (alias `/sessions`) | Continues an earlier conversation. |
+| `/resume` (alias `/sessions`) | Continues an earlier conversation. Type to search. The list shows the last messages of the conversation you highlight. |
+| `/rename <name>` | Names this conversation. You can then start with it: `amness chat --resume <name>`. |
 | `/undo`, `/rewind`, `/diff` | Revert the last turn, go back to a turn, review all changes. |
 | `/branch [n]`, `/branches` | Fork the conversation after turn n, or switch between branches. |
 | `/export [file]`, `/import <file>` | Write a portable session bundle, or continue from one. |
@@ -355,9 +369,28 @@ When you start the chat, Amness picks a first `/verify` command for you if it ca
 | `/diffmode [auto\|stacked\|split]` | Chooses the diff layout. |
 | `/mouse [on\|off]` | Turns the mouse on or off. Off restores native text selection. |
 | `/ui [full\|inline]` | Switches the interface. |
+| `/vim [on\|off]` | Vim-style editing in the input box. See "Vim mode" above. |
+| `/notify [on\|off\|test]` | Desktop notifications when a long turn ends or approval is needed while you are in another window. `test` sends one now. |
 | `/exit` (alias `/quit`) | Leaves the chat. |
 
 **Your own commands.** A file `audit.md` in `.amness/commands/` (or `~/.amness/commands/`) creates `/audit`. See [Features: Your own commands](features.md#your-own-commands).
+
+## Replace an expired API key
+
+**What it is.** When the provider refuses your key (a `401` error, or a message that the key is invalid, expired or revoked), Amness asks for a new one right away.
+
+**How to use it.**
+
+1. Paste the new key into the box that opens. It is hidden while you type.
+2. Press `Enter`. Amness saves the key and sends your message again.
+
+Press `Esc` to skip. You can also change keys at any time with `/connect`.
+
+**Limits.**
+
+- If the key comes from an environment variable (for example `OPENAI_API_KEY`), Amness does not ask. Update the variable and restart, or unset it and use `/connect`.
+- A `403` about something else (for example a model that is not available in your region) does not open the box.
+- Status: covered by automated tests.
 
 ## Save notes and keep long sessions going
 

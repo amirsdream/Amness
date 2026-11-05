@@ -1,12 +1,17 @@
 // The chat TUI: one persistent conversation with a live input box, streaming output, permission prompts and slash commands.
-import { execFile } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { onRateLimitWait } from "../model.ts";
 import { STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
-import { PROVIDERS, home, rememberWindow, saveConfig, windowFor, type Config } from "../config.ts";
+import { PROVIDERS, home, keyFor, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
+import { noStore, where } from "../keystore.ts";
+import { editExternally, editorCommand, readClipboardImage, savePastedImage } from "./external.ts";
+import { fileOpenCommand } from "./find.ts";
+import { FOCUS_OFF, FOCUS_ON, notify } from "./notify.ts";
+import { Vim } from "./vim.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
 import { createModel } from "../model.ts";
@@ -40,9 +45,13 @@ export type AppOptions = {
   input?: any; output?: Out & { on?: (e: string, f: () => void) => void };
   makeModel?: (cfg: Config) => Model;
   resume?: "last" | string; prompt?: string; persist?: boolean; /** idle ms before a cache keep-alive ping (default 270000) */ keepWarmMs?: number;
-  /** "full" = the full-screen UI (alternate screen, mouse, sidebar); "inline" = the classic scrollback UI. */
-  ui?: "full" | "inline";
+  /** "full" = the full-screen UI (alternate screen, mouse, sidebar); "inline" = the classic scrollback UI; "remote" = no terminal: another front end (the desktop app) shows the same App through `remote`. */
+  ui?: "full" | "inline" | "remote";
+  /** For ui "remote": how the App tells its front end that something changed. Dialogs are the App's own overlays (`app.overlay`), which the front end shows and answers. */
+  remote?: RemoteHooks;
 };
+/** A front end that is not a terminal. `changed` is called wherever the terminal UI would redraw; the front end reads the App's state then (throttled on its side). */
+export type RemoteHooks = { changed(): void; toast(level: "info" | "ok" | "warn" | "error", text: string): void; copy?(text: string): void };
 const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const GLYPHS = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];            // the status line "breathes"
 const MODES: PermMode[] = ["default", "acceptEdits", "plan"];
@@ -81,14 +90,16 @@ export class App {
   private timer: ReturnType<typeof setInterval> | undefined; private flushT: ReturnType<typeof setTimeout> | undefined; private renderT: ReturnType<typeof setTimeout> | undefined;
   private escAt = 0; private ctrlcAt = 0; frame = 0; private stopped = false;
   /** The structured transcript the full-screen UI draws (kept in both modes so switching never loses history). */
-  blocks = new BlockStore(); ui: "full" | "inline"; full?: FullView;
+  blocks = new BlockStore(); ui: "full" | "inline" | "remote"; full?: FullView; remote?: RemoteHooks;
+  /** The transcript is drawn from structured blocks (full screen, desktop), not printed to scrollback (inline). */
+  get structured() { return !!this.full || this.ui === "remote"; }
   private opts: AppOptions;
   done: Promise<number>; private resolveDone!: (n: number) => void;
 
   constructor(o: AppOptions) {
     this.opts = o; this.cfg = o.cfg; this.cwd = o.cwd; this.snaps = new Snapshots(o.cwd); this.version = o.version; this.persist = o.persist ?? true;
     this.io = { input: o.input ?? process.stdin, output: o.output ?? (process.stdout as any) };
-    this.ui = o.ui ?? "inline"; this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.cwd);
+    this.ui = o.ui ?? "inline"; this.remote = o.remote; this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.cwd);
     if (this.ui === "full") this.full = new FullView(this);
     this.session = newSession(o.cwd, o.cfg.model);
     this.builtin = buildCommands();
@@ -144,23 +155,25 @@ export class App {
     setShell(this.cfg.shell); { const fb = shellFallbackNote(); if (fb) this.note(fb); }
     onRateLimitWait((ms, attempt, conc) => this.note(`rate limited by the provider: waiting ${Math.ceil(ms / 1000)}s, then retrying (attempt ${attempt}); ${conc} request${conc === 1 ? "" : "s"} at a time for now`));
     const { input, output } = this.io;
-    input.setRawMode?.(true); input.setEncoding?.("utf8"); input.resume?.();
-    output.write(PASTE_ON);
-    this.full?.enter();
-    input.on("data", this.onData);
+    if (this.ui !== "remote") {                                                    // a remote front end owns its own window: no terminal to set up
+      input.setRawMode?.(true); input.setEncoding?.("utf8"); input.resume?.();
+      output.write(PASTE_ON + FOCUS_ON);
+      this.full?.enter();
+      input.on("data", this.onData);
+      output.on?.("resize", () => { this.full?.invalidate(); this.render(); });
+      process.once("exit", this.restore);
+    }
     void this.askHookTrust();
-    output.on?.("resize", () => { this.full?.invalidate(); this.render(); });
-    process.once("exit", this.restore);
     this.files.ensure().catch(() => {});
     this.refreshBranch();
     let resumed: string | undefined;
     if (this.opts.resume) {
-      const s = this.opts.resume === "last" ? this.store.latest() : this.store.load(this.opts.resume);
+      const s = this.opts.resume === "last" ? this.store.latest() : this.store.load(this.opts.resume) ?? this.store.find(this.opts.resume);   // an id, or a name given with /rename
       if (s) { this.session = s; resumed = `"${s.title}" · ${s.turns.length} turn${s.turns.length === 1 ? "" : "s"}`; this.recount(); }
     }
-    if (this.full) { if (resumed) this.blocks.loadMessages(this.session.messages); } else this.commit(welcome({ version: this.version, model: this.cfg.model, provider: this.cfg.provider, cwd: this.cwd, branch: this.branch, notes: this.agent.memory?.list().length ?? 0, verify: this.verify, mode: this.mode, resumed, tip: TIPS[Math.floor(Math.random() * TIPS.length)] }, this.width));
+    if (this.structured) { if (resumed) this.blocks.loadMessages(this.session.messages); } else this.commit(welcome({ version: this.version, model: this.cfg.model, provider: this.cfg.provider, cwd: this.cwd, branch: this.branch, notes: this.agent.memory?.list().length ?? 0, verify: this.verify, mode: this.mode, resumed, tip: TIPS[Math.floor(Math.random() * TIPS.length)] }, this.width));
     this.setTitle(`Amness · ${basename(this.cwd)}`);
-    if (resumed && !this.full) this.replay();
+    if (resumed && !this.structured) this.replay();
     this.render();
     if (this.opts.prompt) void this.dispatch(this.opts.prompt);
     return this.done;
@@ -175,7 +188,8 @@ export class App {
   restore = () => {
     if (this.stopped) return; this.stopped = true;
     clearInterval(this.timer);
-    try { if (this.full) this.full.leave(); else { this.screen.clear(); if (this.screen.alt) this.screen.leaveAlt(); } this.io.output.write(PASTE_OFF + "\x1b[?25h"); this.io.input.setRawMode?.(false); this.io.input.pause?.(); this.io.input.off?.("data", this.onData); } catch { /* terminal already gone */ }
+    if (this.ui === "remote") return;
+    try { if (this.full) this.full.leave(); else { this.screen.clear(); if (this.screen.alt) this.screen.leaveAlt(); } this.io.output.write(PASTE_OFF + FOCUS_OFF + "\x1b[?25h"); this.io.input.setRawMode?.(false); this.io.input.pause?.(); this.io.input.off?.("data", this.onData); } catch { /* terminal already gone */ }
   };
   exit(code = 0) {
     this.stopWarm(); this.agent.procs?.killAllNow(); void this.tracer?.close();
@@ -189,15 +203,16 @@ export class App {
 
   // ------------------------------------------------------------------ output
   /** Raw pre-styled lines: scrollback in the inline UI, a "raw" block in the full-screen UI. */
-  commit(lines: string[]) { this.blocks.raw(lines); if (!this.full) this.out.push(...lines); }
+  commit(lines: string[]) { this.blocks.raw(lines); if (!this.structured) this.out.push(...lines); }
   /** Scrollback-only output for things the full-screen UI draws from structured blocks instead. */
-  private inlineOnly(lines: string[]) { if (!this.full) this.out.push(...lines); }
-  private notify(level: "info" | "warn" | "error" | "ok", text: string, inline: string[]) { if (this.full) this.blocks.notice(level, text); else this.out.push(...inline); }
+  private inlineOnly(lines: string[]) { if (!this.structured) this.out.push(...lines); }
+  private notify(level: "info" | "warn" | "error" | "ok", text: string, inline: string[]) { if (this.structured) this.blocks.notice(level, text); else this.out.push(...inline); }
   private addUser(text: string, note?: string, queued?: boolean) { this.blocks.addUser(text, note, queued); this.inlineOnly(userMessage(text, this.width, note ?? "")); }
   say(text: string | string[], paint: (s: string) => string = (s) => s) {
     for (const t of ([] as string[]).concat(text)) this.commit(["", ...t.split("\n").flatMap((p) => wrapAnsi(paint(p), this.width - 2)).map((l) => "  " + l)]);
   }
   note(text: string, ms = 3000) {
+    if (this.remote) { this.remote.toast("info", text); return; }
     if (this.full && ms <= 5000) { this.full.toast(text, "info", ms); this.render(); setTimeout(() => this.render(), ms + 40); return; }
     this.notice = text; this.noticeUntil = Date.now() + ms; this.render();
     setTimeout(() => { if (Date.now() >= this.noticeUntil) this.render(); }, ms + 30);               // redraw when it expires so the footer returns to normal
@@ -205,6 +220,7 @@ export class App {
 
   render = () => {
     if (this.stopped) return;
+    if (this.remote) { this.remote.changed(); return; }
     if (this.full) { clearTimeout(this.renderT); this.renderT = undefined; return this.full.draw(); }
     if (this.pager) return;
     clearTimeout(this.renderT); this.renderT = undefined;
@@ -236,7 +252,7 @@ export class App {
       live.push("");                                                              // breathing room above the input box
       if (this.sugg) live.push(...this.suggLines(w));
       live.push(gray("─".repeat(w)));
-      const r = this.editor.render(w), prompt = this.editor.text.startsWith("!") ? yellow("! ") : this.editor.text.startsWith("#") ? green("# ") : bold(cyan("❯ "));
+      const r = this.editor.render(w), prompt = this.vimNormal ? bold(magenta("N ")) : this.editor.text.startsWith("!") ? yellow("! ") : this.editor.text.startsWith("#") ? green("# ") : bold(cyan("❯ "));
       const at = live.length;
       live.push(...r.lines.map((l, i) => (i === 0 ? prompt + this.styleInput(l.slice(2)) : "  " + this.styleInput(l.slice(2)))));
       cursor = { row: at + r.cursor.row, col: r.cursor.col };
@@ -253,7 +269,7 @@ export class App {
     const p = this.ctxPct;
     return p !== null && p >= 75 ? (p >= 90 ? "context almost full · /compact" : "context filling up · /compact") : "? for shortcuts · ctrl+p commands";
   }
-  setTitle(t: string) { if (this.io.output.isTTY !== false) this.io.output.write(`\x1b]0;${t}\x07`); }
+  setTitle(t: string) { if (this.ui !== "remote" && this.io.output.isTTY !== false) this.io.output.write(`\x1b]0;${t}\x07`); }
   private suggLines(w: number): string[] {
     const s = this.sugg!, { rows, above, below } = menuRows(s.items, s.sel, Math.min(12, Math.max(4, this.screen.rows - 8)));
     const lines = rows.map((r) => {
@@ -276,10 +292,17 @@ export class App {
   };
 
   handleKey(k: Key) {
+    if (k.name === "focusin" || k.name === "focusout") { this.focused = k.name === "focusin"; return; }
     if (k.name === "mouse" && k.mouse) { this.full?.mouse(k.mouse); return; }
     if (this.pager) return this.pager.key(k);
     if (this.overlay) { this.overlay.key(k); this.schedule(); return; }
+    if (this.full?.find && this.full.findKey(k)) return this.render();
     const ed = this.editor;
+    if (this.cfg.vim && this.vim.mode === "normal" && !this.sugg) {                      // vim normal mode: keys move and edit instead of typing
+      const r = this.vim.key(ed, k);
+      if (r === "submit") return void this.submit();
+      if (r) { this.escAt = 0; return this.after(false); }
+    }
     if (this.full) {                                                        // full-screen only keys (scrolling, sidebar, details, theme)
       if (this.full.key(k.name, k.ctrl)) return;
       if (k.ctrl && k.name === "b") { this.full.showSidebar = !this.full.showSidebar; this.full.invalidate(); return this.render(); }
@@ -287,6 +310,11 @@ export class App {
       if (k.ctrl && k.name === "t") return void this.runCommand("/theme");
       if (k.ctrl && k.name === "l") { this.full.invalidate(); return this.render(); }
     }
+    if (k.ctrl && k.name === "f" && this.full) { this.full.openFind(); return this.render(); }
+    if (k.alt && (k.name === "up" || k.name === "down") && this.full) return this.full.jumpPrompt(k.name === "up" ? -1 : 1);
+    if (k.ctrl && k.name === "r") return void this.openHistorySearch();
+    if (k.ctrl && k.name === "g") return this.editInEditor();
+    if (k.ctrl && k.name === "v") return this.pasteImage();
     if (k.ctrl && k.name === "c") return this.ctrlC();
     if (k.ctrl && k.name === "d") { if (ed.empty) return this.exit(0); }
     if (k.ctrl && k.name === "o") return this.openTranscript();
@@ -294,6 +322,7 @@ export class App {
     if (k.alt && k.name === "char" && k.text === "m") return void this.runCommand("/model");
     if (k.ctrl && k.name === "l") { this.io.output.write("\x1b[2J\x1b[3J\x1b[H"); this.screen.height = 0; return this.render(); }
     if (k.name === "backtab") return this.cycleMode();
+    if (k.name === "escape" && this.cfg.vim && this.vim.mode === "insert" && !this.running && !this.sugg) { this.vim.toNormal(ed); return this.render(); }
     if (k.name === "escape") return this.escape();
     if (k.name === "tab" && this.sugg) return this.acceptSugg(false);
     if (k.name === "enter" && !k.alt && !k.shift) {
@@ -313,24 +342,33 @@ export class App {
   }
   private after(suggest = true) { if (suggest) this.updateSugg(); this.render(); }
 
-  private updateSugg() {
-    const text = this.editor.text, tok = tokenAtCursor(text, this.editor.cursorIndex), key = tok ? `${tok.kind}:${tok.query}` : "";
-    if (!tok || key === this.suggOff) { this.sugg = null; return; }
-    this.suggOff = "";
+  /**
+   * The completion menu for `text` with the cursor at `cursor`: slash commands, a command's arguments, or @files. Shared by the terminal input and the desktop composer.
+   * `later` is called once options that are still loading (model lists, file index) have arrived.
+   */
+  suggestionsFor(text: string, cursor: number, later?: () => void): { token: Token; items: Suggestion[] } | null {
+    const tok = tokenAtCursor(text, cursor); if (!tok) return null;
     let items: Suggestion[] = [];
     if (tok.kind === "slash") items = rankCommands(tok.query, this.cmds);
     else if (tok.kind === "arg") {
       const cmd = this.cmds.find((c) => c.name === tok.cmd || c.alias === tok.cmd);
       if (cmd) {
         const r = argOptions(this, cmd.name, tok.words ?? []), pk = `${cmd.name}|${(tok.words ?? []).join(" ")}`;
-        if (r.pending && !this.argPending.has(pk)) { this.argPending.add(pk); void r.pending.catch(() => {}).then(() => { this.argPending.delete(pk); this.updateSugg(); this.render(); }); }
+        if (r.pending && later && !this.argPending.has(pk)) { this.argPending.add(pk); void r.pending.catch(() => {}).then(() => { this.argPending.delete(pk); later(); }); }
         items = r.options.map((o) => ({ o, s: fuzzyScore(tok.query, o.value) })).filter((x): x is { o: typeof x.o; s: number } => x.s !== null)
           .sort((x, y) => (tok.query ? y.s - x.s : 0)).map(({ o }) => ({ label: o.value, insert: o.value + (o.more ? " " : ""), detail: o.detail, more: o.more, open: r.open }));
       }
     } else {
-      if (!this.files.fresh()) void this.files.ensure().then(() => this.updateSugg(), () => {});    // list still loading: fill the popup in once it arrives
+      if (!this.files.fresh() && later) void this.files.ensure().then(later, () => {});      // list still loading: fill the popup in once it arrives
       items = rankFiles(tok.query, this.files.files);
     }
+    return { token: tok, items };
+  }
+  private updateSugg() {
+    const text = this.editor.text, tok = tokenAtCursor(text, this.editor.cursorIndex), key = tok ? `${tok.kind}:${tok.query}` : "";
+    if (!tok || key === this.suggOff) { this.sugg = null; return; }
+    this.suggOff = "";
+    const items = this.suggestionsFor(text, this.editor.cursorIndex, () => { this.updateSugg(); this.render(); })?.items ?? [];
     const same = this.sugg && this.sugg.kind === tok.kind && this.sugg.token.query === tok.query, keep = same ? this.sugg!.sel : 0;
     this.sugg = items.length ? { items, sel: Math.min(keep, items.length - 1), token: tok, kind: tok.kind, nav: same ? this.sugg!.nav : false } : null;
     if (!this.sugg) return;
@@ -360,6 +398,8 @@ export class App {
     if (now - this.ctrlcAt < 2000) return this.exit(0);
     this.ctrlcAt = now; this.note("press ctrl-c again to exit");
   }
+  /** Stop the running turn after its current step (Esc in the terminal, Stop in the desktop). */
+  interrupt() { if (this.running) { this.ac?.abort(); this.note("interrupting after the current step…"); } }
   cycleMode() { this.setMode(MODES[(MODES.indexOf(this.mode) + 1) % MODES.length]); }
   setMode(m: PermMode) {
     if (m === this.mode) return;
@@ -375,6 +415,10 @@ export class App {
     const text = this.editor.submit(); this.sugg = null; this.suggOff = "";
     if (!text) return this.render();
     this.saveHistory();
+    await this.submitText(text);
+  }
+  /** A finished message from any front end: a command, !shell, #note or a chat turn; while a turn runs, chat waits in the queue and only live commands run. */
+  async submitText(text: string) {
     if (this.running) {
       if (text.startsWith("/")) { const n = text.slice(1).split(/\s+/)[0]; const c = this.cmds.find((x) => x.name === n); if (c?.live) return void (await this.runCommand(text)); this.note("finish or interrupt (esc) before running commands"); return; }
       const { text: full, attached } = expandMentions(text, this.cwd);
@@ -418,7 +462,7 @@ export class App {
     const mem = this.agent.memory;
     if (!note || !mem) return this.note("nothing to remember");
     const e = mem.save({ name: slugify(note.split(/\s+/).slice(0, 6).join(" ")), type: "project", description: one(note, 120), content: note });
-    if (this.full) this.blocks.notice("ok", `remembered: ${note}  (saved to ${e.scope} memory as "${e.name}")`); else this.commit(["", `  ${green("✓")} ${dim("remembered:")} ${note}`, `  ${dim(`saved to ${e.scope} memory as "${e.name}"`)}`]);
+    if (this.structured) this.blocks.notice("ok", `remembered: ${note}  (saved to ${e.scope} memory as "${e.name}")`); else this.commit(["", `  ${green("✓")} ${dim("remembered:")} ${note}`, `  ${dim(`saved to ${e.scope} memory as "${e.name}"`)}`]);
     this.render();
   }
 
@@ -433,11 +477,11 @@ export class App {
     if (!this.session.title) this.session.title = one(text, 60);
     const turn: Turn = { at: this.session.messages.length, text, t: Date.now(), snaps: {} };
     this.session.turns.push(turn);
-    this.running = true; this.ac = new AbortController(); this.runStart = Date.now(); this.runTokens = 0; this.todos = []; this.runSeries = []; this.phase = undefined; this.activity = [];
+    this.turnUsage0 = { ...this.session.usage }; this.running = true; this.ac = new AbortController(); this.runStart = Date.now(); this.runTokens = 0; this.todos = []; this.runSeries = []; this.phase = undefined; this.activity = [];
     this.setTitle(`● working · ${basename(this.cwd)}`);
     Object.assign(this.budget, { tokens: 0, cachedTokens: 0, calls: 0, t0: Date.now(), maxTokens: this.cfg.maxTokens, maxMs: 60 * 60_000 });
     this.ensureTimer(); this.render();
-    let ok = false;
+    let ok = false, badKey = false;
     try {
       const r = await this.agent.chat(this.session.messages, full, { images });
       this.session.messages = r.messages; ok = true;
@@ -446,18 +490,35 @@ export class App {
       else if (r.stopped === "maxSteps") this.notify("warn", "stopped after the maximum number of steps; send a message to continue", ["", `  ${yellow("!")} stopped after the maximum number of steps; send a message to continue`]);
     } catch (e) {
       this.session.turns.pop();
+      if (prefix) this.pendingContext.unshift(prefix);                              // the shell output or mode note this turn carried is not lost: the next message (or the retry) sends it again
       const msg = (e as Error).message;
-      this.notify("error", one(msg, 400) + (/40[13]|auth|api key|credential/i.test(msg) ? "  (check your key with /provider)" : ""), ["", `  ${red("✗")} ${one(msg, this.width * 2)}`, ...(/40[13]|auth|api key|credential/i.test(msg) ? [`  ${dim("check your key with /provider")}`] : [])]);
+      badKey = PROVIDERS[this.cfg.provider].needsKey && /\b401\b|unauthori[sz]ed|authentication[_ ]error|invalid[_ ]api[_ ]key|incorrect api key|(api[_ ]key|token|credential)s?\b.{0,30}\b(expired|revoked|invalid|disabled)/i.test(msg);   // not any 403 or "expired": those also mean region limits or an expired response id
+      this.notify("error", one(msg, 400) + (badKey ? "  (key rejected: enter a new one)" : ""), ["", `  ${red("✗")} ${one(msg, this.width * 2)}`]);
     }
     this.flushStream(true); this.blocks.endAssistant(); this.blocks.endThinking(); this.blocks.closeRunning(ok ? "ended without a result" : "interrupted");
     const secs = Date.now() - this.runStart;
-    if (ok && (secs > 4000 || this.runTokens > 2000)) this.inlineOnly([dim(`  ✻ Worked for ${fmtDuration(secs)} · ${fmtTokens(this.runTokens)} tokens`)]);
+    { const u = this.session.usage, u0 = this.turnUsage0; this.lastTurnCost = estimateCost(this.cfg.model, u.prompt - u0.prompt, u.completion - u0.completion, (u.cached ?? 0) - (u0.cached ?? 0)); }   // subagents included: their usage is added to the session too
+    const turnCost = this.lastTurnCost !== null ? fmtCost(this.lastTurnCost) : "";
+    if (ok && (secs > 4000 || this.runTokens > 2000)) this.inlineOnly([dim(`  ✻ Worked for ${fmtDuration(secs)} · ${fmtTokens(this.runTokens)} tokens${turnCost ? ` · ≈ ${turnCost}` : ""}`)]);
     if (this.todos.length && this.todos.some((t) => t.status !== "done")) this.inlineOnly(todoList(this.todos, this.width));
     this.todos = []; this.inflight.clear(); this.running = false; this.ac = undefined; this.thinkBuf = ""; this.scheduleWarm();
     this.setTitle(`${ok ? "✔" : "✗"} Amness · ${basename(this.cwd)}`);
-    if (secs > 20_000) this.io.output.write("\x07");                                  // a long turn finished: nudge the user, even if they switched tabs
+    if (secs > 20_000) { this.io.output.write("\x07"); this.notifyAway(ok ? "Amness finished" : "Amness stopped", `${this.session.title || basename(this.cwd)} · ${fmtDuration(secs)}${turnCost ? ` · ≈ ${turnCost}` : ""}`); }   // a long turn ended: nudge the user, even if they switched tabs
     this.saveSession(); this.refreshBranch(); this.idleTimer(); this.render();
+    if (badKey && await this.reconnect(text)) return;
     if (this.queued.length) { const q = this.queued.splice(0); await this.dispatch(q.map((m) => m.text).join("\n\n")); }
+  }
+
+  /** The provider rejected the key (expired or revoked): ask for a new one, save it, and send the message again. */
+  private async reconnect(text: string): Promise<boolean> {
+    const id = this.cfg.provider, label = PROVIDERS[id].label;
+    if (keyFor(id).source === "env") { this.note(`${label}: the key comes from an environment variable. Update it and restart, or unset it and use /connect.`); return false; }
+    const key = await this.askText(`${label} key was rejected. New API key (hidden; ${where()}), Esc to skip`, { secret: true });
+    if (!key) return false;
+    storeKey(id, key); this.cfg.apiKey = key; this.buildAgent();
+    this.note(`${label} reconnected (${noStore() ? "this session only" : where()}); sending your message again`);
+    await this.dispatch(text);
+    return true;
   }
 
   // ------------------------------------------------------------------ events from the agent
@@ -534,7 +595,7 @@ export class App {
   /** Stream assistant text: complete paragraphs are committed to scrollback immediately; the unfinished tail stays in the live region. */
   flushStream(final: boolean) {
     const w = this.width;
-    if (this.full) { if (final) { this.streamBuf = ""; this.msgOpen = false; this.streamedThisMsg = false; } return; }          // the full-screen UI draws the block store
+    if (this.structured) { if (final) { this.streamBuf = ""; this.msgOpen = false; this.streamedThisMsg = false; } return; }          // the full-screen UI draws the block store
     if (final) { const rest = this.streamBuf; this.streamBuf = ""; if (rest.trim()) { this.commit(assistantBlock(rest, w, !this.msgOpen).map((l, i) => (i === 0 && !this.msgOpen ? ["", l] : [l])).flat()); this.msgOpen = true; } this.msgOpen = false; this.streamedThisMsg = false; return; }
     const { done, rest } = takeCompleteBlocks(this.streamBuf);
     if (done.trim()) { this.commit(assistantBlock(done, w, !this.msgOpen).map((l, i) => (i === 0 && !this.msgOpen ? ["", l] : [l])).flat()); this.msgOpen = true; }
@@ -566,7 +627,7 @@ export class App {
       title = name; detail = { kind: "text", text: `${reason ?? "requires approval"}\n${JSON.stringify(args)}` }; body = [reason ?? "requires approval", ...(preview ? ["", preview] : []), "", dim(one(JSON.stringify(args), w - 8))];
       options = [{ label: "Yes" }, { label: `Yes, and don't ask again for ${bold(name)}`, hint: "this session" }, { label: "No, and tell Amness what to do instead", hint: "esc" }];
     }
-    this.ensureTimer();
+    this.ensureTimer(); this.notifyAway("Amness needs your approval", `${title}: ${question}`);
     const idx = await new Promise<number | undefined>((res) => { this.overlay = new ChoiceOverlay(title, body, question, options, res, paint, detail); this.render(); });
     this.overlay = null; this.render();
     if (idx === undefined) return "the user declined this action; take a different approach or ask what they want";
@@ -588,20 +649,67 @@ export class App {
   }
 
   // ------------------------------------------------------------------ helpers used by commands
-  pick<T>(title: string, items: PickItem<T>[], initial = 0, onMove?: (v: T | undefined) => void): Promise<T | undefined> {
-    return new Promise((res) => { const p = new PickerOverlay(title, items, (v) => { this.overlay = null; this.render(); res(v); }, initial); if (onMove) p.onMove = onMove; this.overlay = p; this.render(); });
+  pick<T>(title: string, items: PickItem<T>[], initial = 0, onMove?: (v: T | undefined) => void, preview?: (v: T) => string[]): Promise<T | undefined> {
+    return new Promise((res) => { const p = new PickerOverlay(title, items, (v) => { this.overlay = null; this.render(); res(v); }, initial); if (onMove) p.onMove = onMove; if (preview) p.preview = preview; this.overlay = p; this.render(); });
   }
   askText(prompt: string, o: { secret?: boolean; initial?: string } = {}): Promise<string | undefined> {
     return new Promise((res) => { this.overlay = new InputOverlay(prompt, (v) => { this.overlay = null; this.render(); res(v); }, o); this.render(); });
   }
   showText(lines: string[], title?: string) { return new Promise<void>((res) => { this.overlay = new TextOverlay(lines, () => { this.overlay = null; this.render(); res(); }, title); this.render(); }); }
   openPager(lines: string[], title = "transcript", start: "top" | "bottom" = title === "transcript" ? "bottom" : "top") {
-    if (this.full) { void this.showText(lines, title); return; }                       // the full-screen UI shows these as a scrollable modal
+    if (this.structured) { void this.showText(lines, title); return; }                 // the full-screen UI and the desktop show these as a scrollable dialog
     this.screen.enterAlt();
     this.pager = new Pager(lines, this.io.output, () => { this.pager = null; this.screen.leaveAlt(); this.render(); }, title, start);
   }
   openTranscript() { this.openPager(transcriptLines(this.session.messages, this.screen.cols - 1)); }
   /** Ctrl+P: every command in a filterable list. Commands that need an argument are typed into the input instead of run. */
+  /** ctrl+r: find one of your earlier messages by typing any part of it. */
+  async openHistorySearch() {
+    if (this.overlay || !this.editor.history.length) return;
+    const h = await this.pick("Your earlier messages (type to search)", this.editor.history.map((t) => ({ label: one(t, 100), value: t })));
+    if (h !== undefined) { this.editor.setText(h); this.after(); }
+  }
+  /** ctrl+g: write the message in your own editor ($VISUAL or $EDITOR), then come back with what you saved. */
+  editInEditor() {
+    this.suspendTerminal(); let out: string | undefined;
+    try { out = editExternally(this.editor.text); } finally { this.resumeTerminal(); }
+    if (out === undefined) this.note(`could not open ${editorCommand()}: set $VISUAL or $EDITOR to your editor (for example "code --wait")`); else this.editor.setText(out);
+    this.after();
+  }
+  /** Open a file named in a reply in the user's editor, at a line if one was given. A terminal editor takes the screen until it closes. Tests replace `runEditor`. */
+  openFile(path: string, line?: number) {
+    const abs = resolvePath(this.cwd, path), how = fileOpenCommand(process.env.VISUAL || process.env.EDITOR || "", abs, line ?? 1);
+    if (how.terminal) { this.suspendTerminal(); try { this.runEditor(how.cmd, true); } finally { this.resumeTerminal(); } }
+    else { this.runEditor(how.cmd, false); this.full?.toast(`opening ${path}${line ? ":" + line : ""}`, "info"); }
+    this.render();
+  }
+  runEditor: (cmd: string, wait: boolean) => void = (cmd, wait) => {
+    if (wait) spawnSync(cmd, { stdio: "inherit", shell: true });
+    else { try { const p = spawn(cmd, { shell: true, detached: true, stdio: "ignore" }); p.on("error", () => {}); p.unref(); } catch { /* no editor: nothing opens */ } }
+  };
+  /** Vim-style editing state (used when cfg.vim is on). */
+  vim = new Vim();
+  get vimNormal() { return !!this.cfg.vim && this.vim.mode === "normal"; }
+  /** Whether the terminal window has focus (focus reporting); undefined until the terminal says. */
+  focused: boolean | undefined;
+  /** What the last finished turn cost, subagents included (null when the model's price is unknown). */
+  lastTurnCost: number | null = null;
+  private turnUsage0 = { prompt: 0, completion: 0, calls: 0 } as App["session"]["usage"];
+  /** Shows a desktop notification (tests replace it). */
+  notifier: (title: string, body: string) => void = (title, body) => notify(this.io.output, title, body);
+  /** Notify only while the terminal is known to be in the background, so nothing pops up while you watch. */
+  notifyAway(title: string, body: string) { if (this.focused === false && this.cfg.notify !== "off") this.notifier(title, body); }
+  /** How ctrl+v reads an image from the clipboard (tests replace it). */
+  readClipboard: () => Buffer | undefined = readClipboardImage;
+  /** ctrl+v: an image on the clipboard is saved in the project and mentioned, so it goes with the next message. Text pastes still come from the terminal itself. */
+  pasteImage() {
+    const png = this.readClipboard();
+    if (!png) { this.note("no image on the clipboard (text is pasted with your terminal's own paste)"); return this.render(); }
+    const rel = savePastedImage(this.cwd, png); this.editor.insert(`@${rel} `); this.after(false);
+  }
+  /** Give the terminal to another program (an editor) and take it back. */
+  private suspendTerminal() { const { input, output } = this.io; this.full?.leave(); output.write(PASTE_OFF + FOCUS_OFF + "\x1b[?25h"); input.off?.("data", this.onData); input.setRawMode?.(false); input.pause?.(); }
+  private resumeTerminal() { const { input, output } = this.io; input.setRawMode?.(true); input.resume?.(); input.on("data", this.onData); output.write(PASTE_ON + FOCUS_ON); this.full?.enter(); this.full?.invalidate(); }
   async openPalette() {
     if (this.overlay) return;
     const pick = await this.pick("Commands", this.cmds.map((c) => ({ label: "/" + c.name, value: c, hint: c.help })));
@@ -646,7 +754,7 @@ export class App {
   saveHistory() { if (!this.persist) return; try { mkdirSync(home(), { recursive: true }); writeFileSync(join(home(), "history.json"), JSON.stringify(this.editor.history.slice(0, 200))); } catch { /* ignore */ } }
   saveConfig() { if (this.persist) saveConfig(this.cfg); }
   /** Put text on the clipboard (OSC 52 plus the platform tool). */
-  copyText(text: string) { if (this.full) this.full.copy(text); else copyToClipboard(this.io.output, text, this.persist); }
+  copyText(text: string) { if (this.remote?.copy) this.remote.copy(text); else if (this.full) this.full.copy(text); else copyToClipboard(this.io.output, text, this.persist); }
   // ---- cache keep-alive: Claude drops a cached prefix after ~5 idle minutes; a tiny re-send every ~4.5 minutes costs a cache read instead of a cold re-read.
   private warmTimer?: ReturnType<typeof setTimeout>; private warmCount = 0; private lastCached = 0;
   stopWarm() { if (this.warmTimer) clearTimeout(this.warmTimer); this.warmTimer = undefined; this.warmCount = 0; }

@@ -8,17 +8,19 @@ import { cellWidth, clipWidth, strip, wrapAnsi } from "./text.ts";
 import type { Theme } from "./themes.ts";
 import { toolLabel, argSummary } from "./view.ts";
 import { codeBlocks } from "./clipboard.ts";
+import { filesIn } from "./find.ts";
 
 export type RenderCtx = {
   theme: Theme; width: number; now: number; frame: number; expandAll: boolean; live: boolean;
   /** the steps a subagent card ran (full-screen view nests them inside the card) */ kids?: (callId: string) => ToolBlock[];
   brand: { icon: string; color: number }; diffMode: "auto" | "stacked" | "split";
+  /** whether a path names a real file in the project (file paths in replies become click targets) */ exists?: (path: string) => boolean;
   /** The block above is also a tool call: draw no blank line between them, so a run of tool calls reads as one unit. */
   tight?: boolean;
   /** this is the most recent tool call of the lead agent: its output stays open (a short preview) until the next one starts */
   last?: boolean;
 };
-export type Hit = { row: number; x0: number; x1: number; kind: "toggle" | "more" | "copy" | "link"; id: number; /** for "copy": what lands on the clipboard */ text?: string };
+export type Hit = { row: number; x0: number; x1: number; kind: "toggle" | "more" | "copy" | "link" | "file"; id: number; /** for "copy": what lands on the clipboard; for "link": the address; for "file": path or path:line */ text?: string };
 export type Rendered = { rows: Cell[][]; hits: Hit[]; text: string[] };
 
 const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -77,6 +79,7 @@ export function renderBlock(b: Block, c: RenderCtx): Rendered {
   const done = (linkSource?: string): Rendered => {
     const cells = rows.map((r) => padLeft(parseAnsi(" ".repeat(MARGIN) + r), c.width));
     if (linkSource) hits.push(...linkHits(linkSource, cells, b.id));
+    if (linkSource && c.exists) hits.push(...fileHits(cells, b.id, c.exists, hits));
     return { rows: cells, hits, text: cells.map((r) => r.map((x) => x.ch).join("").replace(/\s+$/, "")) };
   };
 
@@ -206,6 +209,20 @@ export function linkHits(source: string, cells: Cell[][], id: number): Hit[] {
     for (const seg of found) out.push({ row: seg.row, x0: xs[seg.row][seg.a], x1: xs[seg.row][seg.b], kind: "link", id, text: u });
     const last = found[found.length - 1]; row0 = last.row; col0 = last.b;
   }
+  return out;
+}
+/** File paths in a message's rows that name real files, as click targets (open in your editor). Text already covered by a link is skipped. */
+export function fileHits(cells: Cell[][], id: number, exists: (path: string) => boolean, taken: Hit[] = []): Hit[] {
+  const out: Hit[] = [];
+  cells.forEach((r, row) => {
+    const text = r.map((x) => x.ch).join(""), xs: number[] = []; let x = 0;
+    for (const cell of r) { for (let k = 0; k < Math.max(1, cell.ch.length); k++) xs.push(x); x += cell.w; } xs.push(x);
+    for (const f of filesIn(text, exists)) {
+      const x0 = xs[f.a], x1 = xs[f.b];
+      if (taken.some((h) => h.row === row && h.x0 < x1 && x0 < h.x1)) continue;
+      out.push({ row, x0, x1, kind: "file", id, text: f.line ? `${f.path}:${f.line}` : f.path });
+    }
+  });
   return out;
 }
 /** Does the URL start at text[row][col] and continue over the following rows (their indentation skipped)? Returns the piece on each row. */

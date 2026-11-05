@@ -150,7 +150,7 @@ export function formatReport(a: Analysis): string {
 }
 
 // ------------------------------------------------------------------------------------------------------------------ variants
-const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation"];
+const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation"];
 /** Features that are not loop guards but can be switched off the same way for ablations. */
 const FEATURES = ["index", "taint"] as const;
 export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · full+plugins (every loaded plugin active, needs --plugin) · prompt:<id> (a system prompt from .amness/prompts) · model:<id> (the full harness on another model) · chaos:tools|429|args|slow-tools (the full harness while things break on purpose) · strategy:<name> (the full harness with a loop strategy: plan-first, explore-then-act) · any variant a plugin defines · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");

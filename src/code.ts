@@ -101,7 +101,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
       schema: { type: "object", properties: { path: { type: "string" } } }, readOnly: true, cacheable: true,
       run: ({ path }) => path && !existsSync(abs(path)) ? `ERROR: ${path} does not exist.${suggest(path)}` : walk(abs(path ?? "."), []).join("\n") || "(empty)" }),
     defineTool<{ path: string; start?: number; end?: number }>({ name: "read_file", description: "Read a file with line numbers (optionally lines start..end).",
-      schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, start: { type: "integer" }, end: { type: "integer" } } }, readOnly: true, cacheable: true,
+      schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, start: { type: "integer" }, end: { type: "integer" } } }, readOnly: true, cacheable: true, overlap: true,
       stamp: ({ path }) => { try { const s = statSync(abs(path)); return `${s.size}:${s.mtimeMs}`; } catch { return "missing"; } },
       run: ({ path, start, end }) => {
         const a = abs(path); if (!existsSync(a)) throw new Error(`no such file: ${path}.${suggest(path)}`); readSet.add(a);
@@ -227,6 +227,8 @@ export type CodeAgentOptions = {
   permissions?: { mode: () => PermMode };
   /** Polled every turn for messages the user typed while the agent works. */
   inbox?: () => string[];
+  /** Rewrite old messages only where that saves more than the lost prompt cache costs (see Options.governRewrites); `cachedPrice` and `cacheTtlMs` tune it. */
+  governRewrites?: boolean; cachedPrice?: number; cacheTtlMs?: number;
   model: Model;
   cwd: string;
   /** Shell command that must exit 0 (e.g. "npm test") before `finish` is accepted. */
@@ -390,7 +392,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
           if (unknown) o.onEvent?.({ kind: "nudge", detail: `no agent named "${unknown}"; used the read-only explorer` });
           const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name, parent: ctx.callId } as unknown as Event);
           if (!d) {
-            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, contextBudget: 120_000, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
             const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";
             return note + clip(r.text || "(the explorer returned nothing)", 8000);                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
           }
@@ -441,7 +443,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, toolCache, finishChecks: [coverageCheck], compactSpecs: () => o.compactSchemas ?? small(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 

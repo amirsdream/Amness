@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-310 -310 620 620" width="620" height="620">
+  <!-- The Amness mark alone (title bar, page icon). -->
+  <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="-260" y1="-300" x2="260" y2="300"><stop offset="0" stop-color="#c2adff"/><stop offset=".48" stop-color="#7f8bff"/><stop offset="1" stop-color="#36dbe9"/></linearGradient></defs>
+  <path d="M0.0 -62.0 Q66.0 -162.0 0.0 -300.0 Q-66.0 -162.0 0.0 -62.0Z M43.8 -43.8 Q131.3 -55.0 161.2 -161.2 Q55.0 -131.3 43.8 -43.8Z M62.0 -0.0 Q162.0 66.0 300.0 -0.0 Q162.0 -66.0 62.0 -0.0Z M43.8 43.8 Q55.0 131.3 161.2 161.2 Q131.3 55.0 43.8 43.8Z M0.0 62.0 Q-66.0 162.0 0.0 300.0 Q66.0 162.0 0.0 62.0Z M-43.8 43.8 Q-131.3 55.0 -161.2 161.2 Q-55.0 131.3 -43.8 43.8Z M-62.0 0.0 Q-162.0 -66.0 -300.0 0.0 Q-162.0 66.0 -62.0 0.0Z M-43.8 -43.8 Q-55.0 -131.3 -161.2 -161.2 Q-131.3 -55.0 -43.8 -43.8Z" fill="url(#g)"/><circle r="34" fill="url(#g)"/>
+</svg>

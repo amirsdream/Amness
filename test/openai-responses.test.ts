@@ -224,3 +224,11 @@ test("compactAt: context_management is sent on official hosts only, and input be
   const { input } = toResponsesInput([{ role: "system", content: "S" }, { role: "user", content: "old question" }, raw([{ type: "message", role: "assistant", content: "old" }]), { role: "user", content: "newer" }, raw([{ type: "compaction", id: "c1", encrypted_content: "xx" }, { type: "message", role: "assistant", content: "after" }]), { role: "user", content: "latest" }], "gpt-5");
   assert.deepEqual(input.map((i: any) => i.type ?? i.role), ["compaction", "message", "user"]);
 });
+
+test("DeepSeek reports its prompt-cache hits as prompt_cache_hit_tokens, and that is read as cached tokens", async () => {
+  const s = await server({ "/v1/chat/completions": json(200, { choices: [{ message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 100, completion_tokens: 2, total_tokens: 102, prompt_cache_hit_tokens: 64, prompt_cache_miss_tokens: 36 } }) });
+  try {
+    const r = await openai({ baseUrl: s.url, model: "deepseek-chat", api: "chat" })([user("hi")], tools);
+    assert.equal(r.usage!.cached_tokens, 64);
+  } finally { s.close(); }
+});

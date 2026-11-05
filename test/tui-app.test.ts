@@ -317,9 +317,20 @@ test("resuming a saved conversation replays the tail and continues with full his
 test("errors from the model are shown, the conversation stays consistent, and the next message works", async () => {
   const t = rig([async () => { throw new Error("HTTP 401: invalid api key"); }, say("recovered")]); await t.start();
   await t.submit("hi"); assert.ok(await t.until(() => t.idle() && t.has("HTTP 401")));
-  assert.match(plain(t.text()), /check your key with \/provider/); assert.equal(t.app.session.turns.length, 0);
+  assert.doesNotMatch(plain(t.text()), /New API key/); assert.equal(t.app.session.turns.length, 0);   // a provider with no key has nothing to re-enter
   await t.submit("again"); assert.ok(await t.until(() => t.has("recovered") && t.idle()));
   await t.key(KEY.ctrlD);
+});
+
+test("an expired key is asked for again, saved, and the message is sent again", async () => {
+  const saved = process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY_FILE;
+  const t = rig([async () => { throw new Error("HTTP 401: token expired"); }, say("back again")], { cfg: { provider: "openai", baseUrl: "https://api.openai.com/v1", apiKey: "old" } }); await t.start();
+  try {
+    await t.submit("hi"); assert.ok(await t.until(() => t.has("New API key")));
+    await t.type("sk-new"); await t.key(KEY.enter);
+    assert.ok(await t.until(() => t.has("back again") && t.idle()));
+    assert.equal(t.app.cfg.apiKey, "sk-new");
+  } finally { if (saved) process.env.OPENAI_API_KEY = saved; await t.key(KEY.ctrlD); }
 });
 
 test("# saves a memory note; ! runs a shell command now and feeds its output to the next turn", async () => {
@@ -509,4 +520,10 @@ test("full-screen sidebar: LOOP shows the steps of the run, then LAST RUN after 
   assert.doesNotMatch(s, /step \d+\/\d+/);                   // the old "step 3/30" progress bar is gone
   assert.doesNotMatch(s, /○ think|● think/);                 // and so are the three fixed stages
   await t.key(KEY.ctrlD);
+});
+
+test("a 403 that is not about the key (region, model access) does not ask for a new key", async () => {
+  const t = rig([async () => { throw new Error("HTTP 403: this model is not available in your region"); }], { cfg: { provider: "openai", baseUrl: "https://api.openai.com/v1", apiKey: "k" } }); await t.start();
+  try { await t.submit("hi"); assert.ok(await t.until(() => t.idle() && t.has("HTTP 403"))); assert.ok(!t.has("New API key")); }
+  finally { await t.key(KEY.ctrlD); }
 });

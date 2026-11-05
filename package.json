@@ -2,7 +2,7 @@
   "name": "amness",
   "version": "0.1.7",
   "type": "module",
-  "description": "A terminal coding agent for any model: streaming chat TUI, permission modes, plan mode, undo, memory, MCP, with a small reliability harness underneath. OpenAI (Responses API), Claude, and local models.",
+  "description": "A coding agent for any model, in your terminal or as a desktop app: streaming chat TUI, permission modes, plan mode, undo, memory, MCP, with a small reliability harness underneath. OpenAI (Responses API), Claude, and local models.",
   "license": "MIT",
   "author": "amirhossein jofreh <366054+amirsdream@users.noreply.github.com>",
   "homepage": "https://github.com/amirsdream/Amness#readme",
@@ -40,17 +40,21 @@
     }
   },
   "bin": {
-    "amness": "./dist/cli/amness.js"
+    "amness": "./dist/cli/amness.js",
+    "amness-desktop": "./dist/cli/desktop.js"
   },
   "scripts": {
     "start": "node cli/amness.ts",
     "chat": "node cli/amness.ts",
     "demo": "node cli/amness.ts demo",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node -e \"const f=require('fs');f.cpSync('cli/desktop/ui','dist/cli/desktop/ui',{recursive:true});f.cpSync('cli/desktop/assets','dist/cli/desktop/assets',{recursive:true});for(const x of ['electron-main.cjs','electron-preload.cjs'])f.copyFileSync('cli/desktop/'+x,'dist/cli/desktop/'+x)\"",
     "test": "node --test --test-timeout=180000 \"test/**/*.test.ts\"",
     "test:pty": "python3 test/pty/tui.py",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "desktop": "node cli/desktop.ts",
+    "test:desktop-ui": "node test/desktop-ui/run.ts && node test/desktop-ui/agents.ts && node test/desktop-ui/run.ts test/desktop-ui/narrow-check.js --size 1100x720 && node test/desktop-ui/run.ts test/desktop-ui/prefs-check.js",
+    "desktop:icons": "electron scripts/desktop-icons.cjs"
   },
   "optionalDependencies": {
     "@anthropic-ai/sdk": "^1.3.0"
@@ -64,5 +68,8 @@
     "docs",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "dependencies": {
+    "electron": "44.9.2"
+  }
 }

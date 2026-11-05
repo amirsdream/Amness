@@ -143,7 +143,7 @@ export function footer(f: FooterInfo, width: number): string {
 export const COMMAND_HELP_WIDTH = 14;
 export function helpLines(cmds: { name: string; help: string }[], width: number): string[] {
   const keys: [string, string][] = [["Enter", "send · queue while working"], ["\\ + Enter / Alt+Enter / Ctrl+J", "new line"], ["Esc", "interrupt · close popup · Esc Esc rewind"],
-    ["Ctrl+C", "interrupt · clear input · exit (twice)"], ["Shift+Tab", "cycle permissions: ask → accept edits → plan"], ["↑ ↓", "history · menu"], ["Tab", "accept suggestion"],
+    ["Ctrl+C", "interrupt · clear input · exit (twice)"], ["Shift+Tab", "cycle permissions: ask → accept edits → plan"], ["↑ ↓", "history · menu"], ["Ctrl+R", "search your earlier messages"], ["Ctrl+Z / Ctrl+Y", "undo / redo typing"], ["Ctrl+G", "write the message in $EDITOR"], ["Ctrl+V", "paste an image from the clipboard"], ["Ctrl+F", "find in the conversation (full screen)"], ["Alt+↑ / Alt+↓", "jump between your messages (full screen)"], ["Tab", "accept suggestion"],
     ["@path", "mention a file"], ["!cmd", "run a command now (for example !ls)"], ["#note", "remember a note"], ["Ctrl+P", "command palette"], ["Alt+M", "switch model"], ["Ctrl+O", "full transcript"], ["Ctrl+L", "redraw"], ["drag / dbl / triple click", "select and copy (Shift+drag: terminal selection)"], ["/copy", "copy the last reply (code · all)"]];
   return [bold("Keys"), ...keys.map(([k, d]) => `  ${cyan(k.padEnd(31))} ${dim(d)}`), "", bold("Commands"),
     ...cmds.map((c) => `  ${cyan(("/" + c.name).padEnd(COMMAND_HELP_WIDTH))} ${dim(c.help)}`)].flatMap((l) => wrapAnsi(l, width - 2, 33));

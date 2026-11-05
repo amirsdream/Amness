@@ -29,6 +29,8 @@ The provider ids you can pass to `--provider` are `anthropic`, `openai`, `openro
 
 The model list in `/model` (with prices per million tokens as shown in the picker) is in `cli/config.ts`. Costs shown in Amness are estimates.
 
+**Prompt cache figures.** Amness reads the cached part of each request from the provider's answer, and the sidebar shows it as "cache". OpenAI and OpenAI-compatible servers report it as `cached_tokens`. Claude reports `cache_read_input_tokens`. DeepSeek reports `prompt_cache_hit_tokens`. Amness reads all three, so the cache and the cost are right on DeepSeek too. Covered by automated tests.
+
 ## Set your API key
 
 **What it is.** A key is a secret text that proves you can use a provider.

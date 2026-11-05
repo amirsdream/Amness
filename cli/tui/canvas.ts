@@ -1,7 +1,7 @@
 // A character-cell canvas. Draw into it freely, then `flush()` emits only the cells that changed since the last frame
 // (inside synchronized-output markers), which is what makes a full-screen UI flicker-free and cheap over SSH.
 import { A, DEFAULT, mix, parseAnsi, sgrFor, toRgb, type Cell } from "./ansi.ts";
-import { cpWidth } from "./text.ts";
+import { graphemeWidth, graphemes } from "./text.ts";
 
 export type Style = { fg?: number; bg?: number; attr?: number };
 export const BORDERS = {
@@ -68,7 +68,7 @@ export class Canvas {
   /** Draw a plain string with one style. */
   text(x: number, y: number, s: string, st: Style = {}, maxW = this.w - x): number {
     const cells: Cell[] = [];
-    for (const g of s) { const w = cpWidth(g.codePointAt(0)!); if (w === 0) continue; cells.push({ ch: g, w, fg: st.fg ?? DEFAULT, bg: st.bg ?? DEFAULT, attr: st.attr ?? 0 }); }
+    for (const g of graphemes(s)) { const w = graphemeWidth(g); if (w === 0) continue; cells.push({ ch: g, w, fg: st.fg ?? DEFAULT, bg: st.bg ?? DEFAULT, attr: st.attr ?? 0 }); }
     return this.put(x, y, cells, maxW);
   }
   /** Draw an ANSI string (as produced by the renderers). */

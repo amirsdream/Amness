@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCodeAgent, createHarness, defineTool, type Event, type Message, type Model } from "../src/index.ts";
-import { ToolCache, isPointer, repairPointers, stillAbove } from "../src/cache.ts";
+import { ReadLedger, ToolCache, isPointer, repairMarkers, repairPointers, stillAbove } from "../src/cache.ts";
 import { supersede } from "../src/harness.ts";
 
 let n = 0;
@@ -103,4 +103,69 @@ test("prefixCacheRate reads vLLM's metrics page and says nothing when the server
   const ok = (async (url: string) => (String(url).endsWith("/metrics") ? ({ ok: true, text: async () => page } as Response) : ({ ok: false } as Response))) as unknown as typeof fetch;
   assert.equal(await prefixCacheRate("http://h:8000/v1", ok), 0.86);
   assert.equal(await prefixCacheRate("http://h:8000/v1", (async () => ({ ok: false }) as Response) as unknown as typeof fetch), undefined);
+});
+
+// ------------------------------------------------------------------------------------------------ read overlap (ReadLedger)
+const numbered = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => `${a + i}\tline ${a + i}`).join("\n");
+const always = () => true;
+
+test("ReadLedger: a second read of an unchanged file gets only the lines it did not have, with a marker for the rest", () => {
+  const l = new ReadLedger();
+  assert.equal(l.dedupe("f", "s1", numbered(1, 20), "c1", always), numbered(1, 20));
+  const out = l.dedupe("f", "s1", numbered(10, 30), "c2", always);
+  const rows = out.split("\n"); assert.equal(rows[0], "(lines 10-20 unchanged: already above in the output of call c1)"); assert.equal(rows[1], "21\tline 21"); assert.equal(rows.length, 11);
+  assert.ok(l.saved > 50);
+});
+
+test("ReadLedger: a short overlap is sent again, a changed file or a shortened earlier output is never marked", () => {
+  const l = new ReadLedger(); l.dedupe("f", "s1", numbered(1, 10), "c1", always);
+  assert.equal(l.dedupe("f", "s1", numbered(8, 14), "c2", always), numbered(8, 14));                // only 3 shared lines: not worth a marker
+  const l2 = new ReadLedger(); l2.dedupe("f", "s1", numbered(1, 30), "c1", always);
+  assert.equal(l2.dedupe("f", "s2", numbered(1, 30), "c2", always), numbered(1, 30));               // the file changed (new stamp)
+  assert.equal(l2.dedupe("f", "s2", numbered(1, 30), "c3", (id) => id !== "c2"), numbered(1, 30));  // c2's output has been shortened since
+});
+
+test("ReadLedger: non-numbered lines (a guidance note, a cut marker) and a second file are left alone", () => {
+  const l = new ReadLedger(); l.dedupe("a", "s", numbered(1, 12), "c1", always);
+  const text = numbered(1, 12) + "\n\n[AGENTS.md note]";
+  assert.equal(l.dedupe("a", "s", text, "c2", always), "(lines 1-12 unchanged: already above in the output of call c1)\n\n[AGENTS.md note]");
+  assert.equal(l.dedupe("b", "s", numbered(1, 12), "c3", always), numbered(1, 12));
+});
+
+test("repairMarkers: a marker whose source output was shortened says to read again instead of pointing at nothing", () => {
+  const msgs: Message[] = [{ role: "tool", tool_call_id: "c1", content: numbered(1, 12) }, { role: "tool", tool_call_id: "c2", content: "(lines 1-12 unchanged: already above in the output of call c1)\n13\tx" }];
+  assert.equal(repairMarkers(msgs), 0);
+  msgs[0].content = "[old output elided, 90 chars]";
+  assert.equal(repairMarkers(msgs), 1); assert.match(msgs[1].content!, /^\(lines 1-12: the earlier output was shortened; read them again/); assert.match(msgs[1].content!, /13\tx$/);
+});
+
+test("in a run, reading a file in overlapping pieces sends each line once; the guard can be switched off", async () => {
+  const dir = tmp(); writeFileSync(join(dir, "f.txt"), Array.from({ length: 60 }, (_, i) => `row ${i + 1}`).join("\n") + "\n");
+  const run = async (off: string[]) => {
+    const { model, seen } = scripted(call(["read_file", { path: "f.txt", start: 1, end: 30 }]), call(["read_file", { path: "f.txt", start: 10, end: 45 }]), fin);
+    await createCodeAgent({ model, cwd: dir, off, stagnationTurns: 0 } as never).run("go"); return toolMsgs(seen);
+  };
+  const on = await run([]), off = await run(["readdelta"]);
+  assert.match(on[1], /^\(lines 10-30 unchanged: already above in the output of call k\d+\)\n31\trow 31/); assert.ok(!/10\trow 10/.test(on[1]));
+  assert.match(off[1], /10\trow 10/); assert.ok(on[1].length < off[1].length);
+});
+
+test("ReadLedger: lines from two earlier calls get two markers, each naming its own call", () => {
+  const l = new ReadLedger(); l.dedupe("f", "s", numbered(1, 10), "A", always); l.dedupe("f", "s", numbered(11, 20), "B", always);
+  const out = l.dedupe("f", "s", numbered(1, 20), "C", always).split("\n");
+  assert.deepEqual(out, ["(lines 1-10 unchanged: already above in the output of call A)", "(lines 11-20 unchanged: already above in the output of call B)"]);
+});
+
+test("supersede keeps a read that a later marker points at; a tool with overlap but no stamp is never deduped", async () => {
+  const msgs: Message[] = [
+    { role: "assistant", content: null, tool_calls: [{ id: "A", function: { name: "read_file", arguments: '{"path":"f"}' } }] }, { role: "tool", tool_call_id: "A", content: numbered(1, 40) },
+    { role: "assistant", content: null, tool_calls: [{ id: "B", function: { name: "read_file", arguments: '{"path":"f"}' } }] }, { role: "tool", tool_call_id: "B", content: "(lines 1-40 unchanged: already above in the output of call A)" },
+    ...Array.from({ length: 8 }, (_, i): Message => ({ role: "user", content: `pad ${i}` })),
+  ];
+  supersede(msgs, 6, () => true); assert.match(msgs[1].content!, /^1\tline 1/);
+  const dir = tmp(); writeFileSync(join(dir, "f.txt"), "x\n".repeat(40));
+  const t = defineTool<{ path: string }>({ name: "rd", description: "", schema: { type: "object" }, readOnly: true, overlap: true, run: () => numbered(1, 40) });
+  const { model, seen } = scripted(call(["rd", { path: "f" }]), call(["rd", { path: "f" }]), fin);
+  await createHarness({ model, tools: [t], toolCache: false, stagnationTurns: 0 }).run("go");
+  assert.match(toolMsgs(seen)[1], /^1\tline 1/);
 });

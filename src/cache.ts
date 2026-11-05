@@ -19,6 +19,7 @@ export class ToolCache {
     if (e) this.m.delete(key);
     return undefined;
   }
+  drop(key: string) { this.m.delete(key); }
   set(key: string, e: Omit<Entry, "at">, now = Date.now()) { this.m.set(key, { ...e, at: now }); if (this.m.size > 200) this.m.delete(this.m.keys().next().value!); }
   clear() { this.m.clear(); }
   stats() { return { hits: this.hits, pointers: this.pointers, misses: this.misses, saved: this.saved }; }
@@ -34,6 +35,45 @@ export function repairPointers(msgs: Message[]): number {
     if (!isPointer(m)) continue;
     const id = POINTER.exec(m.content!)![1];
     if (!stillAbove(msgs, id)) { m.content = "[old output elided; call the tool again if you need it]"; n++; }
+  }
+  return n;
+}
+
+// Read overlap. A model often reads a file in pieces (lines 1-120, then 90-220, then the whole file), so about 30% of the text of file reads is lines it was already given
+// (measured on 632 recorded reads, file unedited in between). `ReadLedger` remembers which line numbers were delivered, and by which call. A later read of the same unchanged file gets only the
+// new lines; each run of lines already above is replaced by one marker line. The marker names the call that holds those lines, and `repairMarkers` rewrites it if that output is shortened later.
+const MARKER = /^\(lines (\d+)-(\d+) unchanged: already above in the output of call (\S+)\)$/;
+/** The call a read marker points at (global: use with matchAll). */
+export const MARKER_REF = /^\(lines \d+-\d+ unchanged: already above in the output of call (\S+)\)$/gm;
+const NUMBERED = /^(\d+)\t/;
+export class ReadLedger {
+  /** characters the model did not have to receive again */ saved = 0;
+  private files = new Map<string, { stamp: string; lines: Map<number, string> }>();
+  /** `result` is a numbered file read (`N<TAB>text` per line). Returns it with runs of at least `minRun` already-delivered lines replaced by a marker, and records what this result now delivers. */
+  dedupe(path: string, stamp: string, result: string, callId: string, isAbove: (callId: string) => boolean, minRun = 6): string {
+    const seen = new Map<string, boolean>(), above = (id: string) => { let v = seen.get(id); if (v === undefined) { v = isAbove(id); seen.set(id, v); } return v; };   // one transcript scan per call id, not per line
+    let f = this.files.get(path); if (!f || f.stamp !== stamp) { f = { stamp, lines: new Map() }; this.files.set(path, f); }
+    const rows = result.split("\n"), out: string[] = [], delivered: number[] = [];
+    for (let i = 0; i < rows.length; ) {
+      const n = NUMBERED.exec(rows[i]) ? Number(NUMBERED.exec(rows[i])![1]) : undefined, prior = n === undefined ? undefined : f.lines.get(n);
+      if (n === undefined || !prior || !above(prior)) { out.push(rows[i]); if (n !== undefined) delivered.push(n); i++; continue; }
+      let j = i + 1;                                                                                  // extend the run while the next line is the next number and also delivered earlier
+      while (j < rows.length) { const m = NUMBERED.exec(rows[j]); const p = m ? f.lines.get(Number(m[1])) : undefined; if (!m || Number(m[1]) !== n + (j - i) || p !== prior) break; j++; }      // one marker, one source call
+      if (j - i >= minRun) { out.push(`(lines ${n}-${n + (j - i) - 1} unchanged: already above in the output of call ${prior})`); this.saved += rows.slice(i, j).join("\n").length - out[out.length - 1].length; i = j; }
+      else { for (let k = i; k < j; k++) { out.push(rows[k]); delivered.push(n + (k - i)); } i = j; }                                // too short to be worth a marker: send the lines again
+    }
+    for (const n of delivered) f.lines.set(n, callId);
+    return out.join("\n");
+  }
+}
+
+/** A marker whose source output was shortened since says so instead of pointing at nothing. Returns how many it rewrote. */
+export function repairMarkers(msgs: Message[]): number {
+  let n = 0;
+  for (const m of msgs) {
+    if (m.role !== "tool" || !m.content?.includes("(lines ")) continue;
+    const next = m.content.split("\n").map((row) => { const k = MARKER.exec(row); return k && !stillAbove(msgs, k[3]) ? `(lines ${k[1]}-${k[2]}: the earlier output was shortened; read them again if you need them)` : row; });
+    const joined = next.join("\n"); if (joined !== m.content) { m.content = joined; n++; }
   }
   return n;
 }

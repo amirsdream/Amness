@@ -456,6 +456,7 @@ async function main() {
   if (quick === "tune") { process.exitCode = await runTune(argv.slice(1), { model: makeModel, modelName: cfg.model, maxTokens: cfg.maxTokens, confirm }); return; }
   if (quick === "traces") { process.exitCode = traces(argv.slice(1)); return; }
   if (quick === "replay") { process.exitCode = await runReplay(argv.slice(1)); return; }
+  if (quick === "desktop") { const { runDesktop } = await import("./desktop.ts"); process.exitCode = await runDesktop(argv.slice(1)); return; }
   if (quick === "run") { process.exitCode = await runHeadless(argv.slice(1)); return; }
   if (quick === "-p" || quick === "--print") { process.exitCode = await runHeadless(argv.slice(1)); return; }
   if (quick && quick in screens) return void (await screens[quick]().catch((e) => { if (!(e instanceof Cancel)) throw e; }));

@@ -18,6 +18,8 @@ export type SidebarData = {
   /** skills: loaded in this conversation (uses > 0), available, or switched off */ skills?: { name: string; uses: number; off: boolean }[];
   /** the token cap for the current/last turn: tokens counted (cached input at a tenth), the cap, and whether usage was estimated */ budget?: { used: number; max: number };
   procs?: { id: string; name: string; status: string; secs: number }[];
+  /** what the last finished turn cost (subagents included) */ lastTurnCost?: number | null;
+  /** subagents working right now: their brief, what they are doing, how far along */ agents?: { task: string; doing: string; steps: number; secs: number }[];
   tools: number; mcp: number; memory: number; running: boolean; elapsedMs: number; tip?: string;
 };
 export type SideHit = { row: number; kind: "change" | "todos" | "step"; blockId?: number; step?: number };
@@ -35,6 +37,13 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
     head(lp.title, lp.right);
     for (const h of lp.hits) hits.push({ row: out.length + h.line, kind: "step", step: h.step });
     for (const l of lp.lines) push(l);
+  }
+  if (d.agents?.length) {
+    head("AGENTS", F(t.accent2, `${d.agents.length} working`));
+    for (const a of d.agents) {
+      push(F(t.accent2, "● ") + F(t.text, clipWidth(a.task || "subagent", inner - 2)));
+      push(F(t.faint, "  " + clipWidth(`${a.doing} · ${a.steps} step${a.steps === 1 ? "" : "s"} · ${a.secs}s`, inner - 2)));
+    }
   }
   head("SESSION");
   for (const l of wrap(d.title || "New conversation", inner, 2)) push(BOLD(F(t.text, l)));
@@ -54,7 +63,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
   push(F(t.dim, "in ") + F(t.text, fmtTokens(d.usage.prompt)) + F(t.dim, "  out ") + F(t.text, fmtTokens(d.usage.completion)) + F(t.dim, "  ") + F(t.faint, `${d.usage.calls} req`));
   if (d.budget && Number.isFinite(d.budget.max) && d.budget.used > 0) { const pct = Math.min(100, Math.round((d.budget.used / d.budget.max) * 100)); push(F(t.dim, "budget ") + F(pct >= 90 ? t.err : pct >= 75 ? t.warn : t.text, `${pct}%`) + F(t.faint, ` of ${fmtTokens(d.budget.max)} this turn`)); }
   if (d.usage.cached) push(F(t.dim, "cache ") + F(t.ok, `${Math.round((d.usage.cached / Math.max(1, d.usage.prompt)) * 100)}%`) + (d.usage.reasoning ? F(t.dim, "  reasoning ") + F(t.text, fmtTokens(d.usage.reasoning)) : ""));
-  push(F(t.dim, "cost ") + (d.cost === null ? F(t.faint, "n/a") : BOLD(F(t.text, "≈ " + fmtCost(d.cost)))));
+  push(F(t.dim, "cost ") + (d.cost === null ? F(t.faint, "n/a") : BOLD(F(t.text, "≈ " + fmtCost(d.cost)))) + (d.lastTurnCost != null && !d.running ? F(t.faint, `  last turn ${fmtCost(d.lastTurnCost)}`) : ""));
 
   if (d.todos.length) {
     const done = d.todos.filter((x) => x.status === "done").length;

@@ -1,5 +1,5 @@
 // Slash commands. Each gets the running App and the raw argument string.
-import { relatives } from "./session.ts";
+import { previewLines, relatives } from "./session.ts";
 import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
@@ -165,9 +165,14 @@ export function buildCommands(): Cmd[] {
     { name: "resume", help: "continue an earlier conversation", alias: "sessions", run: async (a) => {
       const list = a.store.list().filter((s) => s.id !== a.session.id);
       if (!list.length) return void a.say("no earlier conversations in this project", dim);
-      const id = await a.pick("Resume", list.map((s) => ({ label: s.title || "(untitled)", value: s.id, hint: `${s.turns} turns · ${s.updated.slice(0, 16).replace("T", " ")} · ${s.model}` })));
+      const seen = new Map<string, string[]>(), preview = (id: string) => { let v = seen.get(id); if (!v) { const s = a.store.load(id); v = s ? previewLines(s) : []; seen.set(id, v); } return v; };
+      const id = await a.pick("Resume (type to search)", list.map((s) => ({ label: s.title || "(untitled)", value: s.id, hint: `${s.turns} turns · ${s.updated.slice(0, 16).replace("T", " ")} · ${s.model}` })), 0, undefined, preview);
       const s = id && a.store.load(id); if (!s) return;
       a.loadSession(s); a.rebuildBlocks(); a.commit(["", `  ${green("↻")} ${dim(`resumed "${s.title}" (${s.turns.length} turns)`)}`]);
+    } },
+    { name: "rename", help: "name this conversation (find it in /resume, or start with: amness chat --resume <name>)", args: "<name>", run: (a, arg) => {
+      const name = arg.trim().replace(/\s+/g, " "); if (!name) return void a.say(`this conversation is called "${a.session.title || "(untitled)"}". /rename <name> to change it`, dim);
+      a.session.title = name.slice(0, 80); a.saveSession(); a.full?.invalidate(); a.say(`renamed to "${a.session.title}"`, dim);
     } },
     { name: "branch", help: "fork the conversation from an earlier turn (the current one stays available in /branches)", args: "[turn]", run: async (a, arg) => {
       if (a.running) return void a.say("wait for the current turn to finish", dim);
@@ -238,6 +243,15 @@ export function buildCommands(): Cmd[] {
       else text = last && "text" in last ? last.text : "";
       if (!text) return void a.say("nothing to copy yet", dim);
       a.copyText(text); a.say(`copied ${text.length} characters to the clipboard`, dim);
+    } },
+    { name: "vim", help: "vim-style editing in the input box (Esc for normal mode: hjkl w b e 0 $ x dd dw cw yy p u, i/a/o to type)", args: "[on|off]", run: (a, arg) => {
+      const on = arg === "on" ? true : arg === "off" ? false : !a.cfg.vim;
+      a.cfg.vim = on || undefined; a.vim.mode = "insert"; a.saveConfig(); a.say(`vim mode ${on ? "on: Esc switches to normal mode" : "off"}`, dim);
+    } },
+    { name: "notify", help: "desktop notification when a long turn ends or approval is needed while you are in another window", args: "[on|off|test]", run: (a, arg) => {
+      if (arg === "test") { a.notifier("Amness", "notifications work"); return void a.say("sent a test notification", dim); }
+      if (arg === "on" || arg === "off") { a.cfg.notify = arg; a.saveConfig(); return void a.say(`notifications ${arg}`, dim); }
+      a.say(`notifications are ${a.cfg.notify === "off" ? "off" : "on"}${a.focused === undefined ? " (this terminal has not reported focus yet, so none are sent)" : ""}. /notify on|off|test`, dim);
     } },
     { name: "keepwarm", help: "keep the Claude prompt cache alive while you are away (costs a few cache reads)", args: "[on|off]", run: (a, arg) => {
       if (!arg) return void a.say(`keep-warm is ${a.cfg.keepWarm ? "on" : "off"}. Claude drops its prompt cache after 5 idle minutes; with this on, a tiny re-send every ~4.5 minutes (at most 3 per break) keeps it. Only affects Claude.`, dim);

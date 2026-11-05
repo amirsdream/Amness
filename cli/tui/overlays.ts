@@ -1,5 +1,6 @@
 // Modal pieces drawn in the live region in place of the input box: choices, pickers, text input, help.
 import { bold, cyan, dim, gray } from "../ui.ts";
+import { fuzzyScore } from "./complete.ts";
 import { Editor } from "./editor.ts";
 import type { Key } from "./keys.ts";
 import { cellWidth, clipWidth, strip } from "./text.ts";
@@ -28,6 +29,7 @@ export function editKey(ed: Editor, k: Key): boolean {
       case "a": ed.home(); return true; case "e": ed.end(); return true; case "b": ed.left(); return true; case "f": ed.right(); return true;
       case "k": ed.killToEnd(); return true; case "u": ed.killToStart(); return true; case "w": ed.deleteWordBack(); return true; case "h": ed.backspace(); return true;
       case "j": ed.newline(); return true; case "d": if (!ed.empty) { ed.del(); return true; } return false;
+      case "z": case "_": ed.undo(); return true; case "y": ed.redo(); return true;
       case "left": ed.wordLeft(); return true; case "right": ed.wordRight(); return true;
     }
   }
@@ -68,9 +70,15 @@ export class PickerOverlay<T> implements Overlay {
   sel = 0; filter = "";
   title: string; items: PickItem<T>[]; done: (v: T | undefined) => void; max: number;
   constructor(title: string, items: PickItem<T>[], done: (v: T | undefined) => void, initial = 0, max = 10) { this.title = title; this.items = items; this.done = done; this.sel = initial; this.max = max; }
-  visible() { const f = this.filter.toLowerCase(); return f ? this.items.filter((i) => `${i.label} ${i.hint ?? ""}`.toLowerCase().includes(f)) : this.items; }
+  /** The items matching the typed filter, best match first (fuzzy: "gpsol" finds "gpt-6.1-sol"); all items in their own order when nothing is typed. */
+  visible() {
+    if (!this.filter) return this.items;
+    return this.items.map((it, i) => ({ it, i, s: fuzzyScore(this.filter, `${it.label} ${it.hint ?? ""}`) })).filter((x) => x.s !== null).sort((a, b) => b.s! - a.s! || a.i - b.i).map((x) => x.it);
+  }
   /** Called whenever the highlighted item changes (live theme preview). */
   onMove?: (v: T | undefined) => void;
+  /** Lines describing the highlighted item, drawn under the list (a conversation's last messages in /resume). */
+  preview?: (v: T) => string[];
   /** Choose the i-th visible item (mouse click). */
   pick(i: number) { const it = this.visible()[i]; if (it) this.done(it.value); }
   private moved() { this.onMove?.(this.visible()[this.sel]?.value); }
@@ -84,7 +92,8 @@ export class PickerOverlay<T> implements Overlay {
       return cellWidth(strip(line)) > width - 1 ? line.slice(0, width + 10) : line;
     });
     const head = bold(this.title) + (this.filter ? "  " + cyan("/") + this.filter : dim(this.items.length > this.max ? "  (type to filter)" : ""));
-    return { lines: [head, ...(top > 0 ? [dim(`  ↑ ${top} more`)] : []), ...rows, ...(top + this.max < list.length ? [dim(`  ↓ ${list.length - top - this.max} more`)] : []), ...(list.length ? [] : [dim("  no matches")]), dim("  ↑/↓ move · enter select · esc cancel")] };
+    const pv = this.preview && list[this.sel] ? this.preview(list[this.sel].value).slice(0, 6).map((l) => "  " + dim(clipWidth(l, Math.max(10, width - 4)))) : [];
+    return { lines: [head, ...(top > 0 ? [dim(`  ↑ ${top} more`)] : []), ...rows, ...(pv.length ? ["", ...pv, ""] : []), ...(top + this.max < list.length ? [dim(`  ↓ ${list.length - top - this.max} more`)] : []), ...(list.length ? [] : [dim("  no matches")]), dim("  ↑/↓ move · enter select · esc cancel")] };
   }
   key(k: Key) {
     const list = this.visible();

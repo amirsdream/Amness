@@ -57,7 +57,8 @@ export function drawModal(c: Canvas, t: Theme, o: Overlay, frame: number): Modal
     const list = o.visible(), w = Math.min(c.w - 8, 84), inner = w - 4, maxRows = Math.max(3, Math.min(14, c.h - 10, list.length || 1));
     o.sel = Math.max(0, Math.min(o.sel, list.length - 1));
     const top = Math.max(0, Math.min(o.sel - Math.floor(maxRows / 2), list.length - maxRows)), shown = list.slice(top, top + maxRows);
-    const h = shown.length + 6, { x, y } = card(w, h, t.accent, o.title, "⌘");
+    const pv = o.preview && list[o.sel] ? o.preview(list[o.sel].value).slice(0, 6) : [];
+    const h = shown.length + 6 + (pv.length ? pv.length + 1 : 0), { x, y } = card(w, h, t.accent, o.title, "⌘");
     const field = fit(" " + F(t.accent, "›") + " " + (o.filter ? F(t.text, o.filter) : F(t.faint, "type to filter…")) + F(t.accent, "▌"), inner, t.surface2);
     c.ansi(x + 2, y + 1, split(field.replace(/\s+$/, ""), "", inner, t.surface2), {}, inner);
     c.ansi(x + 2 + inner - 12, y + 1, fit(F(t.faint, `${list.length}/${o.items.length}`.padStart(11)), 12, t.surface2));
@@ -69,6 +70,7 @@ export function drawModal(c: Canvas, t: Theme, o: Overlay, frame: number): Modal
     if (!shown.length) c.ansi(x + 2, y + 3, F(t.faint, "  no matches"), { bg: t.surface }, inner);
     if (top > 0) c.ansi(x + w - 10, y + 2, F(t.faint, `↑ ${top} more`), { bg: t.surface });
     if (top + maxRows < list.length) c.ansi(x + w - 12, y + h - 3, F(t.faint, `↓ ${list.length - top - maxRows} more`), { bg: t.surface });
+    if (pv.length) { const py = y + 3 + shown.length + 1; c.ansi(x + 2, py - 1, F(t.border, "─".repeat(inner)), { bg: t.surface }, inner); pv.forEach((l, i) => c.ansi(x + 2, py + i, fit(" " + F(t.dim, clipWidth(l, inner - 2)), inner, t.surface), {}, inner)); }
     c.ansi(x + 2, y + h - 2, F(t.faint, "↑↓ move  ·  enter select  ·  esc cancel  ·  click to choose"), { bg: t.surface }, inner);
     return { hits, box: { x, y, w, h }, cursor: { x: x + 5 + cellWidth(o.filter), y: y + 1 } };
   }

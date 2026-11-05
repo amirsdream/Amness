@@ -63,6 +63,7 @@ export class KeyParser {
         const len = 2 + m[0].length, [p0 = "", p1 = ""] = m[1].split(";"), fin = m[2];
         if (m[1] === "200" && fin === "~") { this.pasting = ""; return { len }; }
         if (m[1].startsWith("<") && (fin === "M" || fin === "m")) { const mouse = mouseFrom(m[1], fin); return { len, key: mouse ? { name: "mouse", mouse } : undefined }; }
+        if ((fin === "I" || fin === "O") && !m[1]) return { len, key: { name: fin === "I" ? "focusin" : "focusout" } };   // focus reporting (CSI ? 1004 h)
         const mod = p1 ? Number(p1.split(":")[0]) : 1;
         if (fin === "u") {                                   // kitty keyboard protocol
           const code = Number(p0), name = code === 13 ? "enter" : code === 9 ? "tab" : code === 27 ? "escape" : code === 127 ? "backspace" : "char";
@@ -98,6 +99,7 @@ export class KeyParser {
       case "\x08": return { name: "backspace", ctrl: true };
       case "\x1b": return { name: "escape" };
       case "\x00": return { name: "space", ctrl: true };
+      case "\x1f": return { name: "_", ctrl: true };                    // ctrl+_ (ctrl+/ in many terminals): undo
     }
     const code = c.codePointAt(0)!;
     if (code >= 1 && code <= 26) return { name: String.fromCharCode(96 + code), ctrl: true };

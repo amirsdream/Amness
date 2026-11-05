@@ -12,6 +12,13 @@ export type SessionData = {
 };
 export type SessionInfo = { id: string; title: string; updated: string; turns: number; model: string };
 
+/** The last few exchanges of a conversation as short lines, for a preview. */
+export function previewLines(s: Pick<SessionData, "messages">, n = 6): string[] {
+  const said = s.messages.filter((m) => (m.role === "user" || m.role === "assistant") && m.content?.trim() && !m.content.startsWith("<"))
+    .map((m) => `${m.role === "user" ? "you" : "amness"}  ${m.content!.split("\n\n<attached>")[0].replace(/\s+/g, " ").trim()}`);
+  return said.slice(-n);
+}
+
 export const newSession = (cwd: string, model: string): SessionData => ({
   id: new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14) + "-" + Math.random().toString(36).slice(2, 6),
   created: new Date().toISOString(), updated: new Date().toISOString(), title: "", cwd, model, messages: [], turns: [], usage: { prompt: 0, completion: 0, calls: 0, series: [] },
@@ -28,6 +35,12 @@ export class SessionStore {
     return readdirSync(this.dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
       try { const s = JSON.parse(readFileSync(join(this.dir, f), "utf8")) as SessionData; return s.turns.length ? [{ id: s.id, title: s.title, updated: s.updated, turns: s.turns.length, model: s.model }] : []; } catch { return []; }
     }).sort((a, b) => b.updated.localeCompare(a.updated));
+  }
+  /** A conversation by its name: the exact title first (any case), else the only one whose title contains `q`. */
+  find(q: string): SessionData | undefined {
+    const l = this.list(), n = q.trim().toLowerCase(); if (!n) return undefined;
+    const hit = l.find((s) => s.title.toLowerCase() === n) ?? (() => { const m = l.filter((s) => s.title.toLowerCase().includes(n)); return m.length === 1 ? m[0] : undefined; })();
+    return hit ? this.load(hit.id) : undefined;
   }
   latest() { const l = this.list()[0]; return l ? this.load(l.id) : undefined; }
   remove(id: string) { rmSync(this.file(id), { force: true }); }
