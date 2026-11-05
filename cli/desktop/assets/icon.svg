@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Amness app icon: the ✻ mark on a dark rounded square (macOS icon grid: 824px body, 100px margin). Rendered to PNG by scripts/desktop-icons.cjs. -->
+  <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="-260" y1="-300" x2="260" y2="300"><stop offset="0" stop-color="#c2adff"/><stop offset=".48" stop-color="#7f8bff"/><stop offset="1" stop-color="#36dbe9"/></linearGradient>
+    <radialGradient id="bg" cx="0.3" cy="0.16" r="1.1"><stop offset="0" stop-color="#2a3350"/><stop offset="0.55" stop-color="#141a2a"/><stop offset="1" stop-color="#090c13"/></radialGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#8b8cff" stop-opacity=".32"/><stop offset="1" stop-color="#8b8cff" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="185" fill="none" stroke="#ffffff" stroke-opacity=".1" stroke-width="3"/>
+  <circle cx="512" cy="512" r="300" fill="url(#halo)"/>
+  <g transform="translate(512 512) scale(1.03)"><path d="M0.0 -62.0 Q66.0 -162.0 0.0 -300.0 Q-66.0 -162.0 0.0 -62.0Z M43.8 -43.8 Q131.3 -55.0 161.2 -161.2 Q55.0 -131.3 43.8 -43.8Z M62.0 -0.0 Q162.0 66.0 300.0 -0.0 Q162.0 -66.0 62.0 -0.0Z M43.8 43.8 Q55.0 131.3 161.2 161.2 Q131.3 55.0 43.8 43.8Z M0.0 62.0 Q-66.0 162.0 0.0 300.0 Q66.0 162.0 0.0 62.0Z M-43.8 43.8 Q-131.3 55.0 -161.2 161.2 Q-55.0 131.3 -43.8 43.8Z M-62.0 0.0 Q-162.0 -66.0 -300.0 0.0 Q-162.0 66.0 -62.0 0.0Z M-43.8 -43.8 Q-55.0 -131.3 -161.2 -161.2 Q-131.3 -55.0 -43.8 -43.8Z" fill="url(#g)"/><circle r="34" fill="url(#g)"/></g>
+</svg>

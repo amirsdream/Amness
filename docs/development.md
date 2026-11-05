@@ -57,6 +57,10 @@ node --test test/permissions.test.ts
 - The tests do not call real model APIs. They use scripted models and mock HTTP servers (see below). Use `amness eval` against a real model to measure behavior. See [Evaluating the harness](evaluation.md).
 - Some tests set `AMNESS_HOME` to a temporary folder. If you run Amness by hand while testing, set `AMNESS_HOME` too, so you do not change your real `~/.amness`.
 
+### Check the desktop window
+
+`npm run test:desktop-ui` opens the real Electron window with a scripted model. It types, clicks and checks what a person relies on: commands, dialogs, approvals, folding, the panel, Preferences and a small window. It needs a screen, so it is not part of `npm test` or CI. It prints one line per check and exits with 1 when a check fails.
+
 ## Know what CI runs
 
 The file `.github/workflows/ci.yml` has these jobs:

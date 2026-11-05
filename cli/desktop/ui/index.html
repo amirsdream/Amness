@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Amness</title>
+  <link rel="icon" href="mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app" class="app panel-open sidebar-open">
+    <header class="topbar" id="topbar">
+      <button id="toggleSidebar" class="icon-btn" title="Sidebar (Ctrl/⌘ B)" aria-label="Toggle sidebar">☰</button>
+      <button id="projectBtn" class="crumb project" title="Project">
+        <img class="logo" src="mark.svg" alt="" width="18" height="18"><span id="projectName">…</span><span class="caret">▾</span>
+      </button>
+      <span class="crumb-sep">/</span>
+      <button id="titleBtn" class="crumb title" title="Rename this conversation"><span id="sessionTitle">New conversation</span></button>
+      <div class="spacer"></div>
+      <div class="segmented" id="modeSwitch" role="radiogroup" aria-label="Permission mode">
+        <button data-mode="default" title="Ask before edits and commands">Ask</button>
+        <button data-mode="acceptEdits" title="Edits apply automatically; commands still ask">Auto-edit</button>
+        <button data-mode="plan" title="Read and plan only; no changes">Plan</button>
+        <button data-mode="yolo" title="Everything runs without asking (the safety floor still applies)">Yolo</button>
+      </div>
+      <button id="modelBtn" class="model-chip" title="Model and provider"><span class="model-dot"></span><span id="modelName">…</span><span class="caret">▾</span></button>
+      <button id="paletteBtn" class="icon-btn" title="All commands (Ctrl/⌘ K)" aria-label="Commands">⌘</button>
+      <button id="expandBtn" class="icon-btn" title="Expand all tool output and thinking (Ctrl/⌘ E)" aria-label="Expand all">⇕</button>
+      <button id="newBtn" class="icon-btn" title="New conversation (Ctrl/⌘ N)" aria-label="New conversation">✎</button>
+      <button id="prefsBtn" class="icon-btn" title="Preferences (Ctrl/⌘ ,)" aria-label="Preferences">⚙</button>
+      <button id="togglePanel" class="icon-btn" title="Workspace panel (Ctrl/⌘ J)" aria-label="Toggle workspace panel">▥</button>
+    </header>
+
+    <aside class="sidebar" id="sidebar">
+      <div class="tabs" role="tablist">
+        <button data-tab="chats" class="on" role="tab">Chats</button>
+        <button data-tab="files" role="tab">Files</button>
+      </div>
+      <div class="tab-body" id="chatsTab">
+        <div class="search"><input id="sessionSearch" type="search" placeholder="Search conversations" autocomplete="off"></div>
+        <div id="sessionList" class="list"></div>
+        <div id="sessionPreview" class="preview hidden"></div>
+      </div>
+      <div class="tab-body hidden" id="filesTab">
+        <div class="search"><input id="fileFilter" type="search" placeholder="Filter files" autocomplete="off"></div>
+        <div id="fileTree" class="tree"></div>
+      </div>
+    </aside>
+
+    <main class="main" id="main">
+      <div class="transcript" id="transcript">
+        <div class="transcript-inner">
+          <div id="empty" class="empty hidden">
+            <img class="empty-logo" src="mark.svg" alt="" width="56" height="56">
+            <h1>What should we work on?</h1>
+            <p class="muted" id="emptyProject"></p>
+            <div class="starters" id="starters"></div>
+          </div>
+          <div id="blocks"></div>
+        </div>
+      </div>
+      <button id="jumpBottom" class="jump hidden">↓ Jump to latest</button>
+      <div class="composer-wrap">
+        <div class="status hidden" id="status">
+          <div class="status-row"><span class="spinner"></span><span id="statusText" class="status-text">Working…</span><span class="spacer"></span><button id="stopBtn" class="btn small danger">Stop</button></div>
+          <div id="statusQueue"></div>
+        </div>
+        <div class="composer" id="composer">
+          <div id="mentionMenu" class="menu hidden" role="listbox"></div>
+          <textarea id="input" rows="1" placeholder="Ask anything…" spellcheck="true"></textarea>
+          <div class="composer-row">
+            <button id="attachBtn" class="ghost-btn" title="Attach an image (or paste / drop one)">＋ Image</button>
+            <span class="muted small" id="composerHint">/ commands · @ files · !shell · #remember · Shift+Enter new line · Shift+Tab mode</span>
+            <span class="spacer"></span>
+            <button id="sendBtn" class="send" title="Send (Enter)">Send ↵</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <section class="viewer hidden" id="viewer" aria-label="File">
+      <header>
+        <span class="viewer-path" id="viewerPath"></span>
+        <span class="muted small" id="viewerMeta"></span>
+        <span class="spacer"></span>
+        <button id="viewerMention" class="btn small" title="Mention this file in your message">@ Mention</button>
+        <button id="viewerEditor" class="btn small">Open in editor</button>
+        <button id="viewerClose" class="icon-btn" aria-label="Close file">✕</button>
+      </header>
+      <div class="code-view" id="viewerCode"></div>
+    </section>
+
+    <aside class="panel" id="panel" aria-label="Workspace"></aside>
+    <div class="scrim for-panel" id="scrimPanel"></div>
+    <div class="scrim for-side" id="scrimSide"></div>
+  </div>
+
+  <div id="modalRoot"></div>
+  <div id="toasts" class="toasts"></div>
+  <input type="file" id="fileInput" accept="image/*" hidden>
+  <script src="app.js"></script>
+</body>
+</html>
