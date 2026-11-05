@@ -1,6 +1,6 @@
 {
   "name": "amness",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "type": "module",
   "description": "A coding agent for any model, in your terminal or as a desktop app: streaming chat TUI, permission modes, plan mode, undo, memory, MCP, with a small reliability harness underneath. OpenAI (Responses API), Claude, and local models.",
   "license": "MIT",
@@ -40,8 +40,8 @@
     }
   },
   "bin": {
-    "amness": "./dist/cli/amness.js",
-    "amness-desktop": "./dist/cli/desktop.js"
+    "amness": "dist/cli/amness.js",
+    "amness-desktop": "dist/cli/desktop.js"
   },
   "scripts": {
     "start": "node cli/amness.ts",

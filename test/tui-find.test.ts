@@ -44,6 +44,6 @@ test("a file path in a reply opens in the editor on click, at its line", async (
     await t.submit("where?"); assert.ok(await t.until(() => t.idle() && t.has("src/app.ts:2")));
     const rows = t.screen().split("\n"), y = rows.findIndex((r) => r.includes("src/app.ts:2")), x = rows[y].indexOf("src/app.ts:2");
     await t.key(mouse(0, x + 3, y + 1)); await t.key(mouse(0, x + 3, y + 1, true)); await t.settle();
-    assert.equal(ran.length, 1, t.screen()); assert.match(ran[0], /^code -g ".*src\/app\.ts:2"$/);
+    assert.equal(ran.length, 1, t.screen()); assert.match(ran[0], /^code -g ".*src[\\/]+app\.ts:2"$/);                // Windows paths use \ (JSON-escaped as \\)
   } finally { if (saved === undefined) delete process.env.VISUAL; else process.env.VISUAL = saved; await t.key(KEY.ctrlD); }
 });

@@ -83,4 +83,6 @@ To check the window the way a person uses it (typing, clicking, dialogs, panels)
 
 ## Size
 
-Electron comes with the package, so `npm install -g amness` downloads about 100 MB more than before (about 300 MB unpacked). If the Electron download fails, `amness-desktop` opens the same app in a Chrome or Edge app window, or in your browser.
+Electron comes with the package as a dependency, but its program (about 100 MB) is downloaded only the first time you start `amness-desktop`. That first start takes a little longer. If you only use the terminal app, nothing is downloaded.
+
+Set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` to prevent the download. If Electron cannot start, `amness-desktop` opens the same app in a Chrome or Edge app window, or in your browser.

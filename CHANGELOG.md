@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-05)
+
+**Upgrade note:** Electron is now a dependency, for the desktop app. Installing stays small: Electron downloads its program (about 100 MB) only the first time you start `amness-desktop`, so the first start takes a little longer. If you never use the desktop app, nothing is downloaded. Set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` to prevent the download; `amness-desktop` then opens in a Chrome/Edge window or your browser.
 
 - **Desktop app:** `amness-desktop` (or `amness desktop`) opens Amness in a window. The window runs the terminal app's own `App` (new `ui: "remote"` mode), so every command, dialog, approval, plugin, MCP server, hook, memory and budget works the same in both, and new features reach both. It adds: all commands with the terminal's completion and a command palette, command output in colour, expandable tool cards with input and output, live thinking, a live status line (time, tokens, step, reasoning, queue), the full side panel including the agent loop, conversations with search and preview, a project file tree with a live file view, project switching, and desktop notifications. The agent runs in Node; Electron (now a dependency, pinned to 44.9.2) only draws the window, on a token-protected 127.0.0.1 server. `npm run test:desktop-ui` checks the real window. See [docs/desktop.md](docs/desktop.md).
 - **Desktop layout:** thinking shows in the conversation where it happens, open while it forms and folded to one line once the next step starts. The step happening now is open and earlier steps fold; a finished turn folds its work into one "Worked …" line with changed-file chips, and the answer stays in full. Steps sit on a timeline. The panel has four tiles (context, cost, tokens, cache) and sections that fold. Below 1280/1000 pixels the panel and the sidebar become drawers. The run panel opens the step happening now, in the terminal sidebar too.
@@ -14,7 +16,7 @@
 - **Emoji:** joined emoji (👨‍👩‍👧), skin tones, flags, ✅ and newer emoji are measured as the terminal draws them, so borders and the cursor no longer shift.
 
 - **Less repeated file text:** when the agent reads a file again in a different line range, lines it already received (and that are still in the conversation, in a file that has not changed) are replaced by one marker line, so each line is sent once. On 632 recorded reads about 30% of the text was lines already sent. Switch off with `off: ["readdelta"]` (ablation variant `full-readdelta`).
-- **Expired key:** when a provider rejects your API key (401/403), the chat asks for a new key, saves it, and sends your message again. A key from an environment variable is not replaced; you are told to update it.
+- **Expired key:** when a provider rejects your API key (a 401, or a message that the key is invalid, expired or revoked), the chat asks for a new key, saves it, and sends your message again. A key from an environment variable is not replaced; you are told to update it.
 - **DeepSeek cache:** `prompt_cache_hit_tokens` is now read as cached tokens, so the cache figure and the cost are right on DeepSeek.
 - **`amness replay` shows an input-cost estimate** (requests, tokens, share shared with the request before, cost at 10% and 50% cached price), so a change to history handling can be compared offline.
 - **Library:** `governRewrites` rewrites old messages only where the saving beats the cache it loses (`src/rewrite.ts`). Off by default: on 21 replayed sessions it was neither clearly better nor worse.

@@ -119,6 +119,6 @@ test("desktop server: files are listed and read inside the project only; images 
   } finally { await d.close(); }
 });
 
-test("desktop: the Electron binary comes with the package", () => {
-  assert.ok(electronBinary(), "npm install should have downloaded Electron");
+test("desktop: the Electron program can be found (Electron downloads it the first time it is loaded)", () => {
+  assert.ok(electronBinary(), "Electron could not be loaded or downloaded");
 });
