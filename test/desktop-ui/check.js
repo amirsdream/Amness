@@ -42,8 +42,15 @@
   $("#modelBtn").click(); await sleep(100);
   const pop = $$(".popover .opt").find((o) => o.textContent.startsWith("Change model")); r.modelMenu = !!pop; pop?.click();
   r.pickerDialog = await until(() => $(".modal .pick-list .opt") !== null);
-  document.querySelector(".modal input")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  // choose another model the way a mouse does: hover it, pass over its neighbour, come back, click. The items must survive the hover.
+  const opts = $$(".modal .pick-list .opt"), target = opts.find((o) => !/gpt-6\.1-sol|Other/.test(o.textContent)), other = opts.find((o) => o !== target);
+  const wanted = target?.querySelector(".lab")?.textContent;
+  for (const el of [target, other, target]) el?.dispatchEvent(new MouseEvent("mouseenter"));
+  r.hoverKeepsItems = !!target?.isConnected && target.classList.contains("on");
+  target?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); target?.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); target?.click();
   r.pickerClosed = await until(() => !$(".modal"));
+  const tok = sessionStorage.getItem("amness-token");
+  r.modelChanged = await until(() => $("#modelName").textContent === wanted) && (await fetch("/api/state", { headers: { "x-amness-token": tok } }).then((x) => x.json())).model === wanted;
   // command palette lists all commands
   $("#paletteBtn").click(); r.palette = await until(() => $$(".modal .pick-list .opt").length > 50); document.querySelector(".modal input")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await sleep(100);

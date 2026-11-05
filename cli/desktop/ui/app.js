@@ -634,18 +634,24 @@ function showDialog(d) {
   } else if (d.kind === "pick") {
     const q = h("input", { type: "search", placeholder: "Type to search", autofocus: true }), list = h("div", { class: "pick-list" }), pv = h("div", { class: "pick-preview hidden" });
     let sel = 0, shown = [], pvFor = -1;
+    /** Move the highlight in place. Hovering must not rebuild the list: a click needs the press and the release on the same element. */
+    const highlight = (scroll) => {
+      [...list.children].forEach((el, k) => el.classList?.toggle("on", k === sel));
+      if (scroll) list.children[sel]?.scrollIntoView({ block: "nearest" });
+      const cur = shown[sel]?.i;
+      if (d.preview && cur !== undefined && cur !== pvFor) { pvFor = cur; api(`/api/dialog-preview?id=${d.id}&i=${cur}`).then((lines) => { if (pvFor !== cur) return; pv.classList.toggle("hidden", !lines.length); pv.replaceChildren(...lines.map((l) => h("div", {}, ansi(l)))); }).catch(() => {}); }
+    };
+    /** Rebuild the list for the search text. */
     const draw = () => {
       const f = q.value.trim().toLowerCase();
       shown = d.items.map((it, i) => ({ it, i, s: f ? fuzzy(f, stripAnsi(`${it.label} ${it.hint || ""}`)) : 0 })).filter((x) => x.s !== null).sort((a, b) => (f ? b.s - a.s : 0) || a.i - b.i);
       sel = Math.max(0, Math.min(sel, shown.length - 1));
-      list.replaceChildren(...shown.map((x, k) => h("button", { class: `opt${k === sel ? " on" : ""}`, onclick: () => answer(d.id, x.i), onmouseenter: () => { sel = k; draw(); } }, h("span", { class: "lab" }, ansi(x.it.label)), x.it.hint ? h("span", { class: "d" }, ansi(x.it.hint)) : null)));
+      list.replaceChildren(...shown.map((x, k) => h("button", { class: "opt", onclick: () => answer(d.id, x.i), onmouseenter: () => { if (sel !== k) { sel = k; highlight(false); } } }, h("span", { class: "lab" }, ansi(x.it.label)), x.it.hint ? h("span", { class: "d" }, ansi(x.it.hint)) : null)));
       if (!shown.length) list.append(h("div", { class: "muted small pad", text: "no matches" }));
-      list.querySelector(".on")?.scrollIntoView({ block: "nearest" });
-      const cur = shown[sel]?.i;
-      if (d.preview && cur !== undefined && cur !== pvFor) { pvFor = cur; api(`/api/dialog-preview?id=${d.id}&i=${cur}`).then((lines) => { if (pvFor !== cur) return; pv.classList.toggle("hidden", !lines.length); pv.replaceChildren(...lines.map((l) => h("div", {}, ansi(l)))); }).catch(() => {}); }
+      highlight(true);
     };
     q.oninput = () => { sel = 0; draw(); };
-    q.onkeydown = (e) => { if (e.key === "ArrowDown") { sel = Math.min(shown.length - 1, sel + 1); draw(); e.preventDefault(); } else if (e.key === "ArrowUp") { sel = Math.max(0, sel - 1); draw(); e.preventDefault(); } else if (e.key === "Enter") { e.preventDefault(); if (shown[sel]) answer(d.id, shown[sel].i); } else if (e.key === "Escape") { e.preventDefault(); answer(d.id, null); } };
+    q.onkeydown = (e) => { if (e.key === "ArrowDown") { sel = Math.min(shown.length - 1, sel + 1); highlight(true); e.preventDefault(); } else if (e.key === "ArrowUp") { sel = Math.max(0, sel - 1); highlight(true); e.preventDefault(); } else if (e.key === "Enter") { e.preventDefault(); if (shown[sel]) answer(d.id, shown[sel].i); } else if (e.key === "Escape") { e.preventDefault(); answer(d.id, null); } };
     modal(h("div", { class: "modal narrow" }, h("header", {}, h("span", { text: stripAnsi(d.title) }), h("span", { class: "sub", text: `${d.items.length}` })), h("div", { class: "body" }, q, list, pv), h("footer", {}, h("span", { class: "muted small", text: "↑↓ move · Enter choose · Esc cancel" }))), { onCancel: () => answer(d.id, null) });
     sel = Math.max(0, d.sel || 0); draw(); dialogOpen = d.id;
   } else if (d.kind === "input") {
