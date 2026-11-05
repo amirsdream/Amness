@@ -16,9 +16,11 @@
 You need **Node 22.18+**, git, and an API key (OpenAI or Anthropic) or a local model server.
 
 ```bash
-npm install -g amness                 # gives you the `amness` command
+npm install -g amness                 # gives you the `amness` and `amness-desktop` commands
 cd ~/your-project && amness           # first start: pick a provider and paste your key (see below)
 ```
+
+Prefer a window? `amness-desktop` opens the same agent as a [desktop app](docs/desktop.md).
 
 Or try it without installing: `npx amness`. To run the latest `main` from source (or to work on Amness), see [Run from source](#run-from-source).
 
@@ -61,6 +63,10 @@ Update the npm version with `npm install -g amness@latest`. Contributors: see [D
 ## What it looks like
 
 <p align="center"><img src="docs/images/approval.png" alt="An edit waiting for your approval, with the diff" width="780"></p>
+
+The same agent as a desktop app (`amness-desktop`): the step happening now is open, finished steps fold, and the side panel shows the agent loop, context, cost and changes.
+
+<p align="center"><img src="docs/images/desktop.png" alt="The Amness desktop app during a turn" width="780"></p>
 
 This is the screen you will see most. The agent wants to change a file, shows you the exact diff, and waits. More screenshots (subagents, the loop view, themes) are in the [step-by-step guide](docs/getting-started.md).
 
@@ -192,12 +198,12 @@ More plugin ideas (finish gates, policies, loop strategies, custom metrics) are 
 |---|---|
 | **A loop that checks itself** | A finish is compared with a record of what really ran (edits, commands, exit codes). Your `verify` command must pass. An optional independent reviewer can object. Loops, stalls and malformed calls are caught. Token budget notes and a final report mean a long run ends with an answer, not a bare "budget exhausted". |
 | **Guardrails you control** | Permission rules (allow / ask / deny) with a safety floor that holds even in `yolo`, an OS sandbox (macOS, Linux), secrets masked before the model sees them, commands copied from untrusted text need approval, `/undo` also reverts what shell commands changed. |
-| **Cost under control** | Staged context trimming that keeps the provider's prompt cache valid, a shared rate limiter for parallel agents (honours `Retry-After`), subagent budget slices, optional routing of exploration to a cheaper model, optional server-side compaction. |
+| **Cost under control** | Staged context trimming that keeps the provider's prompt cache valid, each file line sent once (a re-read sends only new lines), a shared rate limiter for parallel agents (honours `Retry-After`), subagent budget slices, optional routing of exploration to a cheaper model, optional server-side compaction. |
 | **Make it yours** | [Plugins](docs/plugins.md) (in-process hooks on 8 loop events, tools, prompt rewrites, eval graders and variants), shell hooks, skills, custom subagents, MCP servers, your own slash commands, `AGENTS.md`, a library API. |
 | **Evaluate and improve** | `amness eval` (ablations, SWE-bench-format suites, injection suite, leak audit), trace replay, failure mining, `amness tune` (changes kept only if they hold on unseen tasks). |
-| **Works where you work** | Full-screen and inline terminal UI, headless mode, git worktree sessions with `/review` and `/pr`, scheduled runs, a GitHub Action, an editor server (`amness acp`), image input, session branching. |
+| **Works where you work** | A desktop app (`amness-desktop`), full-screen and inline terminal UI, headless mode, git worktree sessions with `/review` and `/pr`, scheduled runs, a GitHub Action, an editor server (`amness acp`), image input, session branching. |
 
-Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local server. No required dependencies (the Claude SDK is an optional one that npm installs for you).
+Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local server. The one required dependency is Electron, for the desktop app (the Claude SDK is an optional one that npm installs for you).
 
 ## Choose Amness if, choose something else if
 
@@ -207,7 +213,7 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 
 ## Status: what is and is not proven
 
-- **Tested:** about 375 automated tests (scripted models, mock servers, real git repositories, a pseudo-terminal), CI on Linux and Windows, and a Docker and npm-package smoke test.
+- **Tested:** about 540 automated tests (scripted models, mock servers, real git repositories, a pseudo-terminal), plus 50 checks that drive the real desktop window (`npm run test:desktop-ui`, run on macOS only so far), CI on Linux and Windows, and a Docker and npm-package smoke test.
 - **Measured on real models (small):** the guards and the reviewer showed no detectable pass-rate effect on [these tasks and models](docs/evaluation.md#measured-results-so-far); the guards and reviewer cost extra tokens, most visibly on strong models. Every newer feature (routing, `tune`, best-of-n, parallel parts, language-server diagnostics, the approval reviewer) is implemented and unit-tested but **not yet shown to help on real work**. The [roadmap](ROADMAP.md) lists the measurements still to run.
 - **Platforms:** developed on macOS and Linux. Windows runs the test suite but has no OS sandbox. Installed from npm; the Claude SDK comes with it.
 - Cost figures are estimates. Small local models vary widely in tool-calling quality.
@@ -219,6 +225,7 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 | [Getting started](docs/getting-started.md) | a step-by-step first session, with screenshots |
 | [Cookbook](docs/cookbook.md) | 12 task-based recipes: CI, best-of-n, budgets, plugins, evals, schedules |
 | [Using the chat](docs/usage.md) | commands, keys, modes, mentions, images |
+| [The desktop app](docs/desktop.md) | `amness-desktop`: the same agent in a window |
 | [Features in depth](docs/features.md) | everything above, one section each |
 | [Plugins: the harness as code](docs/plugins.md) | write your own loop rules, guardrails, tools and graders |
 | [Evaluating the harness](docs/evaluation.md) | `amness eval`, statistics, measured results |
