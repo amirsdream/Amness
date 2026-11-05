@@ -40,6 +40,8 @@ Context and cost
 - [Memory](#memory)
 - [Code index](#code-index)
 - [Editing](#editing)
+- [Send each file line once](#send-each-file-line-once)
+- [Rewrite old messages only when it pays (library, opt-in)](#rewrite-old-messages-only-when-it-pays-library-opt-in)
 - [Language-server diagnostics (opt-in)](#language-server-diagnostics-opt-in)
 - [Background processes](#background-processes)
 - [Image input](#image-input)
@@ -63,6 +65,7 @@ Integrations
 
 - [Editors: `amness acp`](#editors-amness-acp)
 - [Scheduled runs and the GitHub Action](#scheduled-runs-and-the-github-action)
+- [The desktop app](desktop.md)
 
 ---
 
@@ -708,6 +711,59 @@ Re-read the files if they may differ from what you assumed.
 
 **Related pages.** [Permission rules and the safety floor](#permission-rules-and-the-safety-floor), [Agent loop](agent-loop.md).
 
+## Send each file line once
+
+**What it is.** A model often reads a file in pieces: lines 1 to 120, then 90 to 220, then the whole file. When it reads lines it already has, Amness sends one short line in their place, for example `(lines 10-30 unchanged: already above in the output of call k3)`. Only the new lines are sent again.
+
+**Why you would use it.** It is on by default. File reads are most of what a coding agent reads. In 632 recorded reads from real sessions, about 30% of the read text was lines the model had already received, in a file that had not changed.
+
+**How it works.**
+
+1. Amness remembers which line numbers each read delivered, for each file.
+2. A later read of the same file, while the file has not changed, replaces each run of 6 or more lines that are still in the conversation with one marker line.
+3. If that earlier output is shortened later (to keep the context small), the marker is changed to say so: `read them again if you need them`.
+
+**Example.** The model reads `src/app.ts` lines 1 to 30, then lines 10 to 45. The second result is:
+
+```text
+(lines 10-30 unchanged: already above in the output of call k1)
+31	export function main() {
+…
+```
+
+**Limits and common problems.**
+
+- A file that changed since the first read (different size or time) is always sent in full.
+- Only `read_file` uses it. A tool of your own can use it with `overlap: true`, but only together with `stamp`.
+- To switch it off: `off: ["readdelta"]` in the library, or the ablation variant `full-readdelta` in `amness eval`.
+- Status: covered by automated tests. The 30% figure is from recorded sessions. Not measured yet: whether models solve tasks as well, or read more often, with the markers.
+
+**Related pages.** [Replay](#replay-test-harness-changes-offline), [Budgets](budgets.md).
+
+## Rewrite old messages only when it pays (library, opt-in)
+
+**What it is.** To keep a long run small, Amness shortens old tool output. But any change to an old message also stops the provider's prompt cache from matching from that point on. Then everything after it is read again at the full price. With `governRewrites: true`, Amness only shortens old messages when the tokens saved in later requests are worth more than the cache lost.
+
+**Why you would use it.** To try it on your own sessions. It is off by default because it did not help clearly in our measurement.
+
+**How to use it.**
+
+1. Pass the option to the library:
+
+   ```ts
+   const agent = createCodeAgent({ model, cwd, governRewrites: true, cachedPrice: 0.1 });
+   ```
+
+2. `cachedPrice` is the price of cached input as a share of fresh input (default `0.1`). `cacheTtlMs` is how long the provider keeps the cache (default 5 minutes). After a longer pause, the cache is gone anyway, so a rewrite costs nothing extra.
+
+**Limits and common problems.**
+
+- Measured with `amness replay` on 21 recorded sessions: compared with the fixed rule, the total cost changed between -0.7% and +5.6%, with no clear direction. On one long session, never shortening old messages cost 20% more. So shortening does pay on average.
+- When the context window is almost full, Amness shortens anyway.
+- Not available as a chat setting.
+
+**Related pages.** [Replay](#replay-test-harness-changes-offline), [Library](library.md).
+
 ## Language-server diagnostics (opt-in)
 
 **What it is.** A *language server* is a program that knows a programming language and reports its errors. With this feature, the result of each edit also lists the errors that the language server reports for the file that was just changed.
@@ -1093,6 +1149,14 @@ run 1: 14 model turn(s), 2 difference(s)
 ```
 
 With no change to the harness, you see `identical harness behaviour`.
+
+Each run also shows what its requests would cost to read. The part each request shares with the request before it counts as cached:
+
+```text
+  input: 22 request(s), 293594 tokens, 79% shared with the request before (cache), cost 85166 fresh-token units if cached input costs 10%, 177801 if 50%
+```
+
+Use it to compare a change (for example `--off compact`) with the current behaviour. The figures are estimates from message sizes, not a bill.
 
 **Limits and common problems.**
 

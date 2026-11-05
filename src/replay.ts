@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { canonicalCall, createHarness, defineTool, type Event, type Message, type Model, type Options, type RunResult, type Tool } from "./harness.ts";
 import { Tracer, type TraceLine } from "./trace.ts";
+import { estimateTokens } from "./context.ts";
 
 export type TraceRun = { messages: Message[]; models: Message[]; results: Map<string, string[]>; tools: string[]; lines: TraceLine[] };
 const SIGNIFICANT = new Set(["nudge", "loop", "repair", "rejected", "denied", "hook", "trim", "cachebreak", "review", "audit", "finish", "aborted", "budget", "rollover", "tools", "steer"]);
@@ -29,19 +30,30 @@ export function readTrace(file: string): TraceRun[] {
 
 const sig = (l: { kind: string; [k: string]: unknown }) => { const d = String(l.detail ?? l.summary ?? l.reason ?? "").replace(/\s+/g, " ").slice(0, 80); return `${l.kind}${d ? " · " + d : ""}`; };
 
-export type ReplayReport = { run: number; turns: number; recorded: string[]; replayed: string[]; onlyRecorded: string[]; onlyReplayed: string[]; same: boolean; result: RunResult };
+/** What the requests of a run would cost to read: the tokens shared with the previous request count as cached (a provider caches a prefix), the rest as fresh. An estimate from message sizes, not a bill. */
+export type ReplayCost = { requests: number; prompt: number; cached: number };
+/** Cost in "fresh input token" units when cached input costs `cachedPrice` of fresh input (0.1 for most hosted providers). */
+export const replayUnits = (c: ReplayCost, cachedPrice = 0.1): number => Math.round(c.prompt - c.cached + c.cached * cachedPrice);
+
+export type ReplayReport = { cost: ReplayCost; run: number; turns: number; recorded: string[]; replayed: string[]; onlyRecorded: string[]; onlyReplayed: string[]; same: boolean; result: RunResult };
 
 /** Feed one recorded run back through the harness with `o` as its options (the thing you changed). */
 export async function replayRun(run: TraceRun, o: Partial<Options> = {}): Promise<ReplayReport> {
   const models = [...run.models], results = new Map([...run.results].map(([k, v]) => [k, [...v]]));
-  const model: Model = async () => models.shift() ?? { role: "assistant", content: "(replay: the recorded trace ends here)" };
+  const cost: ReplayCost = { requests: 0, prompt: 0, cached: 0 }; let prev: string[] = [];
+  const model: Model = async (msgs) => {
+    const cur = msgs.map((m) => JSON.stringify(m)), sizes = msgs.map((m) => estimateTokens([m]));
+    let k = 0; while (k < cur.length && k < prev.length && cur[k] === prev[k]) k++;
+    cost.requests++; cost.prompt += sizes.reduce((a, b) => a + b, 0); cost.cached += sizes.slice(0, k).reduce((a, b) => a + b, 0); prev = cur;
+    return models.shift() ?? { role: "assistant", content: "(replay: the recorded trace ends here)" };
+  };
   const tools: Tool[] = run.tools.map((name) => defineTool({ name, description: "", schema: { type: "object" }, readOnly: true, run: (args: unknown) => results.get(canonicalCall(name, args))?.shift() ?? "ERROR: (replay) no recorded result for this call: the harness diverged from the recording here" }));
   const replayed: TraceLine[] = [], tracer = new Tracer({ sessionId: "replay", sink: (l) => replayed.push(l) });
   const result = await createHarness({ maxSteps: 60, approve: () => true, ...o, model, tools, onEvent: (e: Event) => tracer.event(e) }).run("", { resume: run.messages });
   const A = run.lines.map(sig), B = replayed.filter((l) => SIGNIFICANT.has(l.kind)).map(sig);
   const left = (xs: string[], ys: string[]) => { const c = new Map<string, number>(); for (const y of ys) c.set(y, (c.get(y) ?? 0) + 1); return xs.filter((x) => { const n = c.get(x) ?? 0; if (n > 0) { c.set(x, n - 1); return false; } return true; }); };
   const onlyRecorded = left(A, B), onlyReplayed = left(B, A);
-  return { run: 0, turns: run.models.length, recorded: A, replayed: B, onlyRecorded, onlyReplayed, same: !onlyRecorded.length && !onlyReplayed.length, result };
+  return { cost, run: 0, turns: run.models.length, recorded: A, replayed: B, onlyRecorded, onlyReplayed, same: !onlyRecorded.length && !onlyReplayed.length, result };
 }
 
 export async function replayFile(file: string, o: Partial<Options> = {}): Promise<ReplayReport[]> {
@@ -55,6 +67,7 @@ export function formatReplay(reports: ReplayReport[]): string {
   const out: string[] = [];
   for (const r of reports) {
     out.push(`run ${r.run}: ${r.turns} model turn(s), ${r.same ? "identical harness behaviour" : `${r.onlyRecorded.length + r.onlyReplayed.length} difference(s)`}`);
+    out.push(`  input: ${r.cost.requests} request(s), ${r.cost.prompt} tokens, ${r.cost.prompt ? Math.round((r.cost.cached / r.cost.prompt) * 100) : 0}% shared with the request before (cache), cost ${replayUnits(r.cost)} fresh-token units if cached input costs 10%, ${replayUnits(r.cost, 0.5)} if 50%`);
     for (const s of r.onlyRecorded) out.push(`  - recorded only: ${s}`);
     for (const s of r.onlyReplayed) out.push(`  + replay only:   ${s}`);
     if (!r.same) out.push("  (after the first difference the recording no longer matches what the model would have said, so later lines are indicative)");

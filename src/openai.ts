@@ -134,7 +134,7 @@ async function readChatStream(r: Response, onText: (d: string) => void): Promise
       const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
       if (!line.startsWith("data:") || line.includes("[DONE]")) continue;
       let j: any; try { j = JSON.parse(line.slice(5)); } catch { continue; }
-      if (j.usage) usage = { prompt_tokens: j.usage.prompt_tokens, completion_tokens: j.usage.completion_tokens, total_tokens: j.usage.total_tokens, cached_tokens: j.usage.prompt_tokens_details?.cached_tokens, reasoning_tokens: j.usage.completion_tokens_details?.reasoning_tokens };
+      if (j.usage) usage = { prompt_tokens: j.usage.prompt_tokens, completion_tokens: j.usage.completion_tokens, total_tokens: j.usage.total_tokens, cached_tokens: j.usage.prompt_tokens_details?.cached_tokens ?? j.usage.prompt_cache_hit_tokens, reasoning_tokens: j.usage.completion_tokens_details?.reasoning_tokens };
       const d = j.choices?.[0]?.delta;
       if (!d) continue;
       if (d.content) { content += d.content; onText(d.content); }
@@ -223,7 +223,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
     const j = await r.json(), m = j.choices[0].message;                           // server ignored `stream`, or we did not ask
     if (stream && m.content) o.onText!(m.content);
     const u = j.usage ?? {};
-    return { ...m, usage: { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens, total_tokens: u.total_tokens, cached_tokens: u.prompt_tokens_details?.cached_tokens, reasoning_tokens: u.completion_tokens_details?.reasoning_tokens } };
+    return { ...m, usage: { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens, total_tokens: u.total_tokens, cached_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens, reasoning_tokens: u.completion_tokens_details?.reasoning_tokens } };
   }
 
   const call: Model = async (messages, tools, o2) => {

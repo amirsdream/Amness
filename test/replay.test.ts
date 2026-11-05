@@ -41,3 +41,9 @@ test("replay: traces without recorded messages say so", async () => {
   const f = join(mkdtempSync(join(tmpdir(), "amness-rp2-")), "old.jsonl"); writeFileSync(f, '{"kind":"turn","t":"x","ms":1}\n');
   assert.match(formatReplay(await replayFile(f)), /no recorded runs/);
 });
+
+test("replay: counts what the requests would cost to read, with the part shared with the previous request as cached", async () => {
+  const [r] = await replayFile(await record());
+  assert.equal(r.cost.requests, 5); assert.ok(r.cost.prompt > 0 && r.cost.cached > 0 && r.cost.cached < r.cost.prompt);
+  assert.match(formatReplay([r]), /input: 5 request\(s\)/);
+});
