@@ -9,6 +9,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { Model } from "./harness.ts";
 import { words } from "./plancache.ts";
+import { slash } from "./shell.ts";
 import type { Skill } from "./skills.ts";
 
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -49,8 +50,9 @@ export function rankSkills(skills: Skill[], task: string, k = 8, stats: Record<s
 export type Found = { name: string; description: string; dir: string; files: string[]; scripts: string[]; problems: string[] };
 const front = (text: string) => { const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text); const meta: Record<string, string> = {}; if (m) for (const l of m[1].split(/\r?\n/)) { const kv = /^([\w-]+):\s*(.*)$/.exec(l); if (kv) meta[kv[1]] = kv[2].replace(/^["']|["']$/g, "").trim(); } return meta; };
 
+/** Every file under `dir`, relative to `base`, with "/" between folders on every system (the list is shown to people and to the model). */
 function walk(dir: string, base = dir, out: string[] = []): string[] {
-  for (const e of readdirSync(dir)) { if (e === ".git") continue; const p = join(dir, e), st = lstatSync(p); if (st.isSymbolicLink()) { out.push(`${p.slice(base.length + 1)} (symbolic link)`); continue; } if (st.isDirectory()) walk(p, base, out); else out.push(p.slice(base.length + 1)); }
+  for (const e of readdirSync(dir)) { if (e === ".git") continue; const p = join(dir, e), st = lstatSync(p); if (st.isSymbolicLink()) { out.push(`${slash(p.slice(base.length + 1))} (symbolic link)`); continue; } if (st.isDirectory()) walk(p, base, out); else out.push(slash(p.slice(base.length + 1))); }
   return out;
 }
 
