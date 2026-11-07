@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import { onRateLimitWait } from "../model.ts";
 import { STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
-import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { PROVIDERS, home, keyFor, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
@@ -12,6 +12,7 @@ import { editExternally, editorCommand, readClipboardImage, savePastedImage } fr
 import { fileOpenCommand } from "./find.ts";
 import { FOCUS_OFF, FOCUS_ON, notify } from "./notify.ts";
 import { Vim } from "./vim.ts";
+import { harnessView } from "./harnessinfo.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
 import { createModel } from "../model.ts";
@@ -28,7 +29,7 @@ import { KeyParser, PASTE_OFF, PASTE_ON, type Key } from "./keys.ts";
 import { renderMarkdown, takeCompleteBlocks } from "./markdown.ts";
 import { expandMentions, attachedNote } from "./mentions.ts";
 import { copyToClipboard } from "./clipboard.ts";
-import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, editKey, type ChoiceDetail, type Overlay, type PickItem } from "./overlays.ts";
+import { LongTextOverlay, ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, editKey, type ChoiceDetail, type Overlay, type PickItem } from "./overlays.ts";
 import { Pager, transcriptLines } from "./pager.ts";
 import { TIPS, at, brandOf, fg, palette, shimmer, sparkline } from "./theme.ts";
 import { contextWindow, estimateCost, fmtCost, fmtDuration, fmtTokens, priceOf } from "./pricing.ts";
@@ -139,7 +140,7 @@ export class App {
     }
     this.agent = createCodeAgent({
       model: this.model, modelById: (id) => make({ ...this.cfg, model: id }), cwd: this.cwd, chat: true, plans: this.cfg.plans || undefined, contextWindow: () => windowFor(this.cfg), onWindow: (w) => { rememberWindow(this.cfg, w); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`, [dim(`  context window learned: ${w.toLocaleString()} tokens`)]); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.profileOptions(), embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
     if (!windowFor(this.cfg)) void detectWindow({ provider: this.cfg.provider, baseUrl: this.cfg.baseUrl, apiKey: this.cfg.apiKey, model: this.cfg.model }).then((w) => { if (w && !windowFor(this.cfg)) { rememberWindow(this.cfg, w); this.notify("info", `context window detected: ${w.toLocaleString()} tokens`, [dim(`  context window detected: ${w.toLocaleString()} tokens`)]); } });   // a local server states it
@@ -264,6 +265,7 @@ export class App {
   schedule() { if (!this.renderT) this.renderT = setTimeout(this.render, 12); }
   private styleInput(l: string) { return l.replace(/(@[^\s]+)/g, (m) => cyan(m)).replace(/\[Pasted text #\d+ \+\d+ lines?\]/g, (m) => magenta(m)); }
   private hint() {
+    if (this.editing) return `editing your message ${this.editing.turn + 1} · enter resends it from there · esc cancels`;
     if (!this.editor.empty) return this.running ? "enter queues your message" : undefined;
     if (this.running) return "type to steer · esc to interrupt";
     const p = this.ctxPct;
@@ -322,6 +324,7 @@ export class App {
     if (k.alt && k.name === "char" && k.text === "m") return void this.runCommand("/model");
     if (k.ctrl && k.name === "l") { this.io.output.write("\x1b[2J\x1b[3J\x1b[H"); this.screen.height = 0; return this.render(); }
     if (k.name === "backtab") return this.cycleMode();
+    if (k.name === "escape" && this.editing && !this.sugg && !this.running) { this.editing = undefined; ed.clear(); this.note("edit cancelled"); return this.render(); }
     if (k.name === "escape" && this.cfg.vim && this.vim.mode === "insert" && !this.running && !this.sugg) { this.vim.toNormal(ed); return this.render(); }
     if (k.name === "escape") return this.escape();
     if (k.name === "tab" && this.sugg) return this.acceptSugg(false);
@@ -415,6 +418,7 @@ export class App {
     const text = this.editor.submit(); this.sugg = null; this.suggOff = "";
     if (!text) return this.render();
     this.saveHistory();
+    if (this.editing && !text.startsWith("/")) { const t = this.editing.turn; this.editing = undefined; await this.editMessage(t, text); return; }
     await this.submitText(text);
   }
   /** A finished message from any front end: a command, !shell, #note or a chat turn; while a turn runs, chat waits in the queue and only live commands run. */
@@ -611,7 +615,7 @@ export class App {
     let paint: ((s: string) => string) | undefined, detail: ChoiceDetail | undefined;
     if (name === "exit_plan_mode") {
       title = "Ready to code?"; body = renderMarkdown(String(args.plan ?? preview ?? ""), w - 6); question = "Would you like to proceed?"; detail = { kind: "plan", md: String(args.plan ?? preview ?? "") };
-      options = [{ label: "Yes, and accept edits automatically" }, { label: "Yes, and ask before each edit" }, { label: "No, keep planning", hint: "tell it what to change" }];
+      options = [{ label: "Yes, and accept edits automatically" }, { label: "Yes, and ask before each edit" }, { label: "Yes, after I edit the plan", hint: "opens the plan to change" }, { label: "No, keep planning", hint: "tell it what to change" }];
     } else if (name === "write_file" || name === "edit_file" || name === "apply_patch") {
       const target = name === "apply_patch" ? `${(String(args.patch).match(/^(?:\*\*\* (?:Update|Add|Delete) File:|\+\+\+ )/gm) ?? []).length || "?"} file(s)` : String(args.path);
       title = `${name === "write_file" ? "Write" : name === "apply_patch" ? "Patch" : "Edit"} ${target}`; body = preview ? renderDiff(preview, w - 4, 18).map((l) => l.slice(5)) : [String(args.path)];
@@ -633,7 +637,12 @@ export class App {
     if (idx === undefined) return "the user declined this action; take a different approach or ask what they want";
     const last = idx === options.length - 1;
     if (last) { const note = await this.askText("What should Amness do instead?"); return note || "the user declined this action"; }
-    if (name === "exit_plan_mode") this.setMode(idx === 0 ? "acceptEdits" : "default");
+    if (name === "exit_plan_mode" && idx === 2) {                                  // edit the plan first; the tool tells the agent to follow your version
+      const plan = String(args.plan ?? preview ?? ""), edited = await this.editLongText("Edit the plan", plan, "Change, reorder, add or delete steps. Amness follows your version.");
+      if (edited === undefined) return "the user did not approve the plan yet; ask what they want to change";
+      if (edited.trim() && edited.trim() !== plan.trim()) this.planEdit = edited;
+      this.setMode("default");
+    } else if (name === "exit_plan_mode") this.setMode(idx === 0 ? "acceptEdits" : "default");
     else if (idx === 1 && (name === "write_file" || name === "edit_file" || name === "apply_patch")) this.setMode("acceptEdits");
     else if (idx === 1 && name === "sh") this.shRules.add(shPrefix(String(args.cmd)));
     else if (idx === 2 && name === "sh") {
@@ -689,6 +698,49 @@ export class App {
   };
   /** Vim-style editing state (used when cfg.vim is on). */
   vim = new Vim();
+  /** The earlier message being edited in the input box (/edit): Enter resends it from that point. */
+  editing: { turn: number } | undefined;
+  /** The plan as the user edited it at approval, handed to the agent once (see CodeAgentOptions.editedPlan). */
+  planEdit: string | undefined;
+
+  /** Edit a longer text: the desktop shows an editor (an overlay it draws); the terminal opens $VISUAL / $EDITOR. Undefined when cancelled. */
+  editLongText(title: string, text: string, hint = ""): Promise<string | undefined> {
+    if (this.remote) return new Promise((res) => { this.overlay = new LongTextOverlay(title, text, (v) => { this.overlay = null; this.render(); res(v); }, hint); this.render(); });
+    this.suspendTerminal(); let out: string | undefined;
+    try { out = editExternally(text); } finally { this.resumeTerminal(); this.render(); }
+    if (out === undefined) this.note(`could not open ${editorCommand()}: set $VISUAL or $EDITOR`);
+    return Promise.resolve(out);
+  }
+  /** Start editing your message `turn` (0-based) in the input box (the terminal); Enter then resends it from there. */
+  startEditing(turn: number) {
+    const t = this.session.turns[turn]; if (!t || this.running) return;
+    this.editing = { turn }; this.editor.setText(t.text); this.render();
+  }
+  /**
+   * Resend your message `turn` (0-based) with new text. The conversation as it was is kept as a branch (/branches); this one goes back to before that
+   * message (the files Amness changed after it too, as /rewind does), then the new text runs.
+   */
+  async editMessage(turn: number, text: string) {
+    if (this.running) { this.note("wait for the current turn to finish (or stop it)"); return; }
+    if (!this.session.turns[turn] || !text.trim()) return;
+    if (this.persist) try { const keep = forkSession(this.session, this.session.turns.length - 1); keep.title = (this.session.title || "(untitled)") + " (before edit)"; this.store.save(keep); } catch { /* not saved: the edit still goes ahead */ }
+    await this.rewindTo(turn);
+    await this.submitText(text.trim());
+  }
+  /** Edit the agent's todo list as text ("- [x] done", "- [~] doing", "- [ ] to do"); the agent is told about the new list. */
+  async editTodos() {
+    const mark = (s: string) => (s === "done" ? "x" : s === "in_progress" ? "~" : " ");
+    const text = this.todos.map((t) => `- [${mark(t.status)}] ${t.content}`).join("\n") || "- [ ] ";
+    const edited = await this.editLongText("Edit the todo list", text, "One item per line: - [ ] to do, - [~] doing, - [x] done.");
+    if (edited === undefined) return;
+    const todos = edited.split("\n").map((l) => /^\s*[-*]?\s*\[( |x|X|~)\]\s*(.+?)\s*$/.exec(l)).filter((m): m is RegExpExecArray => !!m && !!m[2].trim())
+      .map((m) => ({ content: m[2], status: m[1] === " " ? "pending" : m[1] === "~" ? "in_progress" : "done" }));
+    this.todos = todos;
+    const note = `[I changed the todo list. Use this list from now on (send it in full with todo_write when you update it):\n${todos.map((t) => `- [${mark(t.status)}] ${t.content}`).join("\n") || "(empty)"}]`;
+    if (this.running) this.queued.push({ text: "(todo list edited)", full: note }); else this.pendingContext.push(note);
+    this.say(`todo list updated (${todos.length} item${todos.length === 1 ? "" : "s"})`, dim);
+    this.render();
+  }
   get vimNormal() { return !!this.cfg.vim && this.vim.mode === "normal"; }
   /** Whether the terminal window has focus (focus reporting); undefined until the terminal says. */
   focused: boolean | undefined;
@@ -823,7 +875,13 @@ export class App {
   }
   /** The harness profile for the current model (guards switched off, limits retuned): .amness/profile.json and ~/.amness/profile.json. */
   profile: { profile: Profile; sources: string[] } = { profile: {}, sources: [] };
-  private profileOptions() {
+/** The loop's settings: the model profile's, then yours from /harness (guards you switch off are added to the profile's). */
+  harnessOptions() {
+    const p = this.profileOptions(), v = harnessView(this.cfg, { off: p.off, maxSteps: p.maxSteps, stagnationTurns: p.stagnationTurns }), h = this.cfg.harness ?? {};
+    const off = v.guards.filter((g) => !g.on).map((g) => g.name) as Guard[];
+    return { ...p, ...(off.length && { off }), maxSteps: v.maxSteps, stagnationTurns: v.stagnationTurns, ...(h.contextBudget && { contextBudget: h.contextBudget }), ...(h.governRewrites && { governRewrites: true }) };
+  }
+  private profileOptions(): { off?: Guard[]; stagnationTurns?: number; maxSteps?: number } {
     try { this.profile = loadProfile(this.cwd, this.cfg.model); } catch (e) { this.profile = { profile: {}, sources: [] }; this.note(`profile ignored: ${(e as Error).message}`); }
     const p = this.profile.profile; return { ...(p.off?.length && { off: p.off }), ...(p.stagnationTurns !== undefined && { stagnationTurns: p.stagnationTurns }), ...(p.maxSteps !== undefined && { maxSteps: p.maxSteps }) };
   }

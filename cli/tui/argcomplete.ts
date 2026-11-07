@@ -1,6 +1,7 @@
 // Completion for the words after a slash command: `/mode ` lists the modes, `/model ` the models your provider offers, `/theme ` the themes, and so on.
 // A completer returns its options now and, when it needs the network, a promise that settles when the list has been filled in (the menu refreshes then).
 import { effortsFor, loadPrompts, SANDBOX_MODES, SHELL_CHOICES, STRATEGIES } from "../../src/index.ts";
+import { GUARDS } from "./harnessinfo.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS } from "../config.ts";
 import { fetchModels } from "../models.ts";
 import { listDrafts } from "../../src/index.ts";
@@ -34,6 +35,9 @@ export function argOptions(a: App, cmd: string, words: string[]): ArgResult {
     case "model": return first ? modelOptions(a) : ok([]);
     case "models": return first ? ok([...["explore", "compact", "review", "cheap"].map((r) => ({ value: r, detail: `model for ${r} steps`, more: true })), { value: "fallback", detail: "answer from this model when the main one is down", more: true }])
       : words.length === 1 ? modelOptions(a, [{ value: "off", detail: "use the main model" }]) : ok([]);
+    case "harness": return first ? ok(opts(["on", "switch a guard on"], ["off", "switch a guard off"], ["steps", "step limit"], ["stagnation", "no-progress limit"], ["budget", "context budget in characters"], ["rewrites", "cost-aware rewrites on or off"], ["reset", "back to the defaults"]).map((o) => ({ ...o, more: o.value !== "reset" })))
+      : words.length === 1 && (words[0] === "on" || words[0] === "off") ? ok(GUARDS.map((g) => ({ value: g.name, detail: g.label }))) : words.length === 1 && words[0] === "rewrites" ? ok(opts(["on", ""], ["off", ""])) : ok([]);
+    case "todos": return first ? ok(opts(["edit", "change the agent's checklist"])) : ok([]);
     case "theme": return first ? ok(themeNames().map((n) => ({ value: n, detail: THEMES[n].label }))) : ok([]);
     case "shell": return first ? ok(SHELL_CHOICES.map((n) => ({ value: n, detail: n === "auto" ? "detect from your system" : undefined }))) : ok([]);
     case "strategy": return first ? ok([...Object.keys(STRATEGIES).map((n) => ({ value: n })), { value: "off", detail: "the default loop" }]) : ok([]);

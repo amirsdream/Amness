@@ -1,8 +1,15 @@
 # Changelog
 
-## 0.2.1 (2026-11-05)
+## 0.3.0 (2026-11-07)
 
-- **Desktop: a slimmer conversation list.** One line per conversation with a short time (`4m`, `3h`, `Tue`), grouped by recency (Today, Yesterday, Previous 7 days…). The open one has a dot that pulses while it works. Hovering shows the last messages in a card beside the list. The sidebar is a little narrower.
+0.2.0 was staged but not published; this release replaces it.
+
+- **Edit an earlier message:** `/edit [n]` (or **✎ Edit** on your message in the desktop app) changes a message you sent and sends it again. Amness goes back to before it, files included, and keeps the old version as a branch.
+- **Edit the plan and the todo list:** when Amness shows a plan, **Yes, after I edit the plan** opens it in your editor (desktop: an editor window) and Amness follows your version. `/todos edit` changes its checklist.
+- **Harness settings:** `/harness` (desktop: Preferences → Harness) switches each guard of the agent loop on or off and sets the step limit, the no-progress limit and the context budget. Saved in the config file.
+
+- **Desktop: a slimmer conversation list.** One line per conversation with a short time (`4m`, `3h`, `Tue`), grouped by recency (Today, Yesterday, Previous 7 days…). Older groups are folded to a count, an open group shows 5 and "Show N more", and what you fold is remembered. The open one has a dot that pulses while it works. Hovering shows the last messages in a card beside the list. The sidebar is a little narrower.
+- **Desktop: remembered layout choices with spaces in their names** (folded panel sections such as "Last run", conversation groups) were not saved; they are now.
 - **Desktop: clicking an item in a picker chooses it.** In 0.2.0, hovering a list item rebuilt the list, so a mouse click was often lost: the model button opened the model list, but clicking a model did not change it (the keyboard worked). This affected every picker in the desktop app (`/model`, `/resume`, `/theme`, `/mode`…). The window checks now hover like a mouse.
 
 ## 0.2.0 (2026-11-05)

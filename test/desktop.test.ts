@@ -122,3 +122,54 @@ test("desktop server: files are listed and read inside the project only; images 
 test("desktop: the Electron program can be found (Electron downloads it the first time it is loaded)", () => {
   assert.ok(electronBinary(), "Electron could not be loaded or downloaded");
 });
+
+test("desktop: preferences are saved, including names with spaces (\"fold:Last run\"); names with other characters are refused", async () => {
+  const d = await boot([]);
+  try {
+    const r = await d.api("/api/prefs", { "fold:Last run": true, "chats:Previous 30 days": false, theme: "light", "bad<name>": 1, ["x".repeat(81)]: 1 });
+    assert.equal(r.json["fold:Last run"], true); assert.equal(r.json["chats:Previous 30 days"], false); assert.equal(r.json.theme, "light");
+    assert.ok(!("bad<name>" in r.json)); assert.equal(Object.keys(r.json).length, 3);
+    assert.deepEqual((await d.api("/api/prefs")).json, r.json);
+    await d.api("/api/prefs", { theme: null }); assert.ok(!("theme" in (await d.api("/api/prefs")).json));   // null removes a preference
+  } finally { await d.close(); }
+});
+
+test("desktop: editing a message by its bubble goes back to before it and resends the new text", async () => {
+  const d = await boot([say("first answer"), say("second answer"), say("answer to the edit")]);
+  try {
+    await d.api("/api/send", { text: "first question" }); assert.ok(await d.until(() => d.srv.bridge.state().session.turns === 1 && !d.srv.bridge.state().running));
+    await d.api("/api/send", { text: "second question" }); assert.ok(await d.until(() => d.srv.bridge.state().session.turns === 2 && !d.srv.bridge.state().running));
+    const firstBubble = d.srv.bridge.app.blocks.blocks.find((b) => b.kind === "user" && b.text === "first question")!;
+    const r = await d.api("/api/edit", { blockId: firstBubble.id, text: "a better first question" }); assert.equal(r.status, 200);
+    assert.ok(await d.until(() => !d.srv.bridge.state().running && d.srv.bridge.app.session.turns.length === 1));
+    assert.deepEqual(d.srv.bridge.app.session.turns.map((t) => t.text), ["a better first question"]);
+    assert.ok(d.srv.bridge.app.blocks.blocks.some((b) => b.kind === "assistant" && b.text === "answer to the edit"));
+    assert.equal((await d.api("/api/edit", { blockId: 99999, text: "x" })).status, 400);
+  } finally { await d.close(); }
+});
+
+test("desktop: /todos edit and plan edits open the long-text dialog; harness settings are in Preferences' data", async () => {
+  const d = await boot([call("exit_plan_mode", { plan: "1. Rewrite everything." }), say("ok")]);
+  try {
+    d.srv.bridge.app.todos = [{ content: "read", status: "pending" }];
+    await d.api("/api/send", { text: "/todos edit" });
+    assert.ok(await d.until(() => d.events.some((e) => e.type === "dialog" && e.dialog.kind === "longtext")));
+    const dlg = d.events.find((e) => e.type === "dialog" && e.dialog.kind === "longtext").dialog;
+    assert.equal(dlg.text, "- [ ] read");
+    await d.api("/api/dialog", { id: dlg.id, value: "- [x] read\n- [ ] write" });
+    assert.ok(await d.until(() => d.srv.bridge.app.todos.length === 2));
+    d.srv.bridge.setMode("plan");
+    await d.api("/api/send", { text: "plan it" });
+    assert.ok(await d.until(() => d.events.some((e) => e.type === "dialog" && e.dialog.kind === "choice" && e.dialog.detail?.kind === "plan")));
+    const choice = d.events.filter((e) => e.type === "dialog" && e.dialog.kind === "choice").at(-1).dialog;
+    await d.api("/api/dialog", { id: choice.id, value: choice.options.findIndex((o: any) => /edit the plan/.test(o.label)) });
+    assert.ok(await d.until(() => d.events.filter((e) => e.type === "dialog" && e.dialog.kind === "longtext").length === 2));
+    const planDlg = d.events.filter((e) => e.type === "dialog" && e.dialog.kind === "longtext").at(-1).dialog;
+    assert.equal(planDlg.text, "1. Rewrite everything.");
+    await d.api("/api/dialog", { id: planDlg.id, value: "1. Only fix the bug." });
+    assert.ok(await d.until(() => !d.srv.bridge.state().running && d.srv.bridge.app.session.messages.some((m) => m.role === "tool" && /Only fix the bug/.test(m.content ?? ""))));
+    await d.api("/api/command", { text: "/harness off loop" });
+    const st = (await d.api("/api/settings")).json;
+    assert.equal(st.harness.guards.find((g: any) => g.name === "loop").on, false); assert.equal(st.harness.maxSteps, 60);
+  } finally { await d.close(); }
+});

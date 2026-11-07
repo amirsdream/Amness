@@ -1,6 +1,6 @@
 {
   "name": "amness",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "A coding agent for any model, in your terminal or as a desktop app: streaming chat TUI, permission modes, plan mode, undo, memory, MCP, with a small reliability harness underneath. OpenAI (Responses API), Claude, and local models.",
   "license": "MIT",
@@ -53,7 +53,7 @@
     "test:pty": "python3 test/pty/tui.py",
     "prepack": "npm run build",
     "desktop": "node cli/desktop.ts",
-    "test:desktop-ui": "node test/desktop-ui/run.ts && node test/desktop-ui/agents.ts && node test/desktop-ui/run.ts test/desktop-ui/narrow-check.js --size 1100x720 && node test/desktop-ui/run.ts test/desktop-ui/prefs-check.js && node test/desktop-ui/run.ts test/desktop-ui/chats-check.js --chats",
+    "test:desktop-ui": "node test/desktop-ui/run.ts && node test/desktop-ui/agents.ts && node test/desktop-ui/run.ts test/desktop-ui/narrow-check.js --size 1100x720 && node test/desktop-ui/run.ts test/desktop-ui/prefs-check.js && node test/desktop-ui/run.ts test/desktop-ui/chats-check.js --chats && node test/desktop-ui/run.ts test/desktop-ui/edit-check.js",
     "desktop:icons": "electron scripts/desktop-icons.cjs"
   },
   "optionalDependencies": {
