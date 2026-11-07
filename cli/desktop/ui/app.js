@@ -352,7 +352,7 @@ function unitKey(u, auto) {
   const b = u.b;
   if (b.kind === "tool") return `t${b.id}:${b.status}:${b.ms ?? ""}:${b.result?.length ?? -1}:${!!b.edit}:${userOpen.get(b.id)}:${showAll.has(b.id)}:${a}${E}`;
   if (b.kind === "assistant") return `a${b.id}:${b.text.length}:${b.streaming}:${fileSet.size}`;
-  if (b.kind === "user") return `u${b.id}:${b.queued}`;
+  if (b.kind === "user") return `u${b.id}:${b.queued}:${editingBlock === b.id}:${!!state?.running}`;
   if (b.kind === "summary") return `s${b.id}:${fileSet.size}`;
   return `${b.kind}${b.id}`;
 }
@@ -401,13 +401,27 @@ function doRender() {
   if (atBottom) sc.scrollTop = sc.scrollHeight;
   updateJump();
 }
+/** Your earlier message, open for editing in place: Save & resend goes back to before it (files too) and sends the new text; the old version is kept as a branch. */
+let editingBlock = null;
+function messageEditor(b) {
+  const ta = h("textarea", { class: "edit-area", rows: String(Math.min(12, Math.max(2, b.text.split("\n").length + 1))) }); ta.value = b.text;
+  const cancel = () => { editingBlock = null; render(true); };
+  const save = async () => { const text = ta.value.trim(); if (!text) return; editingBlock = null; render(true); await tryApi("/api/edit", { blockId: b.id, text }); };
+  ta.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); cancel(); } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); } };
+  setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 30);
+  return h("div", { class: "msg user editing" }, h("div", { class: "edit-box" }, ta,
+    h("div", { class: "edit-row" }, h("span", { class: "muted small", text: "Goes back to before this message (files too) and sends it again. The old version stays in /branches." }), h("span", { class: "spacer" }),
+      h("button", { class: "btn small", onclick: cancel }, "Cancel"), h("button", { class: "btn small primary", onclick: save }, "Save & resend ⌘↵"))));
+}
 function blockEl(b) {
   switch (b.kind) {
     case "user": {
+      if (editingBlock === b.id) return messageEditor(b);
       const bubble = h("div", { class: "bubble" }, b.text.split(/(@[^\s@]+)/g).map((part) => (/^@[^\s@]+$/.test(part) ? h("span", { class: "mention", text: part }) : part)));
       if (b.queued) bubble.append(h("span", { class: "tag", text: "queued" }));
       if (b.note) bubble.append(h("span", { class: "note", text: b.note }));
-      return h("div", { class: "msg user" }, bubble);
+      const editable = !b.queued && !b.note && !state?.running;
+      return h("div", { class: "msg user" }, editable ? h("button", { class: "msg-edit", title: "Edit and send again from here (the old version is kept as a branch)", onclick: () => { editingBlock = b.id; render(true); } }, "✎ Edit") : null, bubble);
     }
     case "assistant": return h("div", { class: `msg assistant${b.streaming ? " streaming" : ""}` }, md(b.text));
     case "notice": return h("div", { class: `notice ${b.level}`, text: b.text });
@@ -504,7 +518,8 @@ function renderPanel() {
     const hit = s.loop.hits.find((x) => x.line === i);
     return h(hit ? "button" : "div", { class: `tl${hit ? " step" : ""}`, onclick: hit ? () => api("/api/step", { n: hit.step }) : undefined }, ansi(l));
   }))));
-  if (d.todos?.length) { const done = d.todos.filter((t) => t.status === "done").length; out.push(sec("Todos", `${done}/${d.todos.length}`, h("div", { class: "meter thin" }, h("div", { style: `width:${Math.round((done / d.todos.length) * 100)}%` })), ...d.todos.map((t) => h("div", { class: `todo ${t.status === "done" ? "done" : t.status === "in_progress" ? "doing" : ""}` }, h("span", { class: "ck", text: t.status === "done" ? "✓" : t.status === "in_progress" ? "◐" : "○" }), h("span", { text: t.content }))))); }
+  if (d.todos?.length) { const done = d.todos.filter((t) => t.status === "done").length; out.push(sec("Todos", `${done}/${d.todos.length}`, h("div", { class: "meter thin" }, h("div", { style: `width:${Math.round((done / d.todos.length) * 100)}%` })), ...d.todos.map((t) => h("div", { class: `todo ${t.status === "done" ? "done" : t.status === "in_progress" ? "doing" : ""}` }, h("span", { class: "ck", text: t.status === "done" ? "✓" : t.status === "in_progress" ? "◐" : "○" }), h("span", { text: t.content }))),
+    h("div", { class: "row-btns" }, h("button", { class: "btn xs", title: "Change, reorder, add or remove items; Amness follows your list", onclick: () => run("/todos edit") }, "Edit list…")))); }
   out.push(sec("Changes", d.changes.length ? String(d.changes.length) : "", ...(d.changes.length ? d.changes.map((c) => h("button", { class: "change", title: c.path, onclick: () => openFile(c.path) }, h("span", { class: "p" }, h("span", { class: "dir", text: c.path.slice(0, c.path.length - c.path.split("/").pop().length) }), c.path.split("/").pop()), c.created ? h("span", { class: "new", text: "new" }) : null, h("span", { class: "ad", text: `+${c.added}` }), h("span", { class: "rm", text: `−${c.removed}` })))
     : [h("div", { class: "empty-note", text: "No files changed yet." })]),
     h("div", { class: "row-btns" }, h("button", { class: "btn xs", disabled: !s.session.turns || s.running, onclick: () => run("/rewind") }, "Rewind…"), h("button", { class: "btn xs", disabled: !d.changes.length, onclick: () => run("/diff") }, "Diff"), h("button", { class: "btn xs", disabled: s.running || !s.session.turns, onclick: () => run("/undo") }, "Undo turn"))));
@@ -661,6 +676,13 @@ function showDialog(d) {
     modal(h("div", { class: "modal narrow" }, h("header", {}, h("span", { text: stripAnsi(d.prompt) })), h("div", { class: "body" }, inp, h("div", { class: "muted small pad", text: stripAnsi(d.hint) })),
       h("footer", {}, h("span", { class: "spacer" }), h("button", { class: "btn", onclick: () => answer(d.id, null) }, "Cancel"), h("button", { class: "btn primary", onclick: ok }, "OK"))), { onCancel: () => answer(d.id, null) });
     dialogOpen = d.id;
+  } else if (d.kind === "longtext") {
+    const ta = h("textarea", { class: "long-edit", spellcheck: "true" }); ta.value = d.text;
+    const ok = () => answer(d.id, ta.value);
+    ta.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ok(); } else if (e.key === "Escape") { e.preventDefault(); answer(d.id, null); } };
+    modal(h("div", { class: "modal wide" }, h("header", {}, h("span", { text: stripAnsi(d.title) })), h("div", { class: "body" }, d.hint ? h("div", { class: "muted small pad", text: d.hint }) : null, ta),
+      h("footer", {}, h("span", { class: "muted small", text: "⌘/Ctrl+Enter saves · Esc cancels" }), h("span", { class: "spacer" }), h("button", { class: "btn", onclick: () => answer(d.id, null) }, "Cancel"), h("button", { class: "btn primary", onclick: ok }, "Save"))), { sticky: true });
+    setTimeout(() => ta.focus(), 40); dialogOpen = d.id;
   } else if (d.kind === "text") {
     const m = h("div", { class: "modal wide" }, h("header", {}, h("span", { text: stripAnsi(d.title).replace(/^./, (c) => c.toUpperCase()) }), h("span", { class: "spacer" }), h("button", { class: "copy", onclick: () => copy(d.lines.map(stripAnsi).join("\n")) }, "Copy")),
       h("div", { class: "body" }, ansiLines(d.lines, "term dialog-term")), h("footer", {}, h("span", { class: "spacer" }), h("button", { class: "btn primary", autofocus: true, onclick: () => answer(d.id, null) }, "Close")));
@@ -757,19 +779,37 @@ function recency(iso) {
   const days = Math.floor((today.getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86400000);
   return days <= 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? "Previous 7 days" : days < 30 ? "Previous 30 days" : "Older";
 }
-/** The conversation list: one slim line each, grouped by recency. Hover a line for its last messages; the open one has a dot that pulses while it works. */
-async function loadSessions() {
-  const list = (await tryApi(`/api/sessions?q=${encodeURIComponent($("sessionSearch").value)}`)) || [];
+/**
+ * The conversation list: one slim line each, grouped by recency. Recent groups are open, older ones folded to a line with a count (your choice is remembered);
+ * an open group shows its 5 newest, then "Show N more". The open conversation is always visible; a search shows every match.
+ */
+const CHATS_OPEN_BY_DEFAULT = new Set(["Today", "Yesterday"]), CHATS_CAP = 5, chatsShowAll = new Set();
+let chatsList = [];
+async function loadSessions() { chatsList = (await tryApi(`/api/sessions?q=${encodeURIComponent($("sessionSearch").value)}`)) || []; drawSessions(); }
+function drawSessions() {
+  const searching = !!$("sessionSearch").value.trim();
   const rows = [h("button", { class: `chat-row new${state && !state.session.turns ? " on" : ""}`, onclick: () => newChat() }, h("span", { class: "cdot plus", text: "+" }), h("span", { class: "ct", text: "New chat" }), h("span", { class: "ctime kbd-hint", text: /Mac/.test(navigator.platform) ? "⌘N" : "Ctrl N" }))];
-  let group = "";
-  for (const c of [...list].sort((x, y) => Date.parse(y.updated) - Date.parse(x.updated))) {
-    const g = recency(c.updated); if (g !== group) { group = g; rows.push(h("div", { class: "chat-group", text: g })); }
+  const groups = new Map();
+  for (const c of [...chatsList].sort((x, y) => Date.parse(y.updated) - Date.parse(x.updated))) { const g = recency(c.updated); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(c); }
+  const row = (c) => {
     const current = c.id === state?.session.id;
-    rows.push(h("button", { class: `chat-row${current ? " on" : ""}${current && state?.running ? " running" : ""}`, title: `${c.title || "(untitled)"}\n${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.model} · ${ago(c.updated)}`,
+    return h("button", { class: `chat-row${current ? " on" : ""}${current && state?.running ? " running" : ""}`, title: `${c.title || "(untitled)"}\n${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.model} · ${ago(c.updated)}`,
       onmouseenter: (e) => showPreview(c, e.currentTarget), onmouseleave: hidePreview, onclick: () => { hidePreview(); resume(c.id); } },
-      h("span", { class: "cdot" }), h("span", { class: "ct", text: c.title || "(untitled)" }), h("span", { class: "ctime", text: shortAgo(c.updated) })));
+      h("span", { class: "cdot" }), h("span", { class: "ct", text: c.title || "(untitled)" }), h("span", { class: "ctime", text: shortAgo(c.updated) }));
+  };
+  for (const [g, list] of groups) {
+    const hasCurrent = list.some((c) => c.id === state?.session.id), folded = !searching && !hasCurrent && pref(`chats:${g}`, !CHATS_OPEN_BY_DEFAULT.has(g));
+    rows.push(h("button", { class: `chat-group${folded ? " folded" : ""}`, "aria-expanded": String(!folded), disabled: searching || hasCurrent, onclick: () => { setPref(`chats:${g}`, !folded); drawSessions(); } },
+      h("span", { class: "chev" }), h("span", { text: g }), h("span", { class: "gcount", text: String(list.length) })));
+    if (folded) continue;
+    const all = searching || chatsShowAll.has(g) || list.length <= CHATS_CAP + 1;            // never hide just one: "Show 1 more" is longer than the row
+    let shown = all ? list : list.slice(0, CHATS_CAP);
+    const cur = list.find((c) => c.id === state?.session.id); if (cur && !shown.includes(cur)) shown = [...shown, cur];
+    rows.push(...shown.map(row));
+    if (shown.length < list.length) rows.push(h("button", { class: "chat-more", onclick: () => { chatsShowAll.add(g); drawSessions(); } }, `Show ${list.length - shown.length} more`));
+    else if (chatsShowAll.has(g) && !searching) rows.push(h("button", { class: "chat-more", onclick: () => { chatsShowAll.delete(g); drawSessions(); } }, "Show less"));
   }
-  if (!list.length && $("sessionSearch").value) rows.push(h("div", { class: "chat-empty", text: "No conversations match." }));
+  if (!chatsList.length && searching) rows.push(h("div", { class: "chat-empty", text: "No conversations match." }));
   $("sessionList").replaceChildren(...rows);
 }
 let previewTimer, previewFor = null, hoverRow = null;
@@ -864,7 +904,7 @@ const onoff = (v) => (v ? "on" : "off");
 async function showPrefs() {
   const s = (await tryApi("/api/settings")) || {};
   const nav = h("nav", { class: "prefs-nav" }), body = h("div", { class: "prefs-body" });
-  const TABS = [["appearance", "◐", "Appearance"], ["chat", "✉", "Chat"], ["model", "◆", "Model"], ["safety", "⛨", "Safety & quality"], ["advanced", "⚙", "Advanced"], ["about", "ⓘ", "About"]];
+  const TABS = [["appearance", "◐", "Appearance"], ["chat", "✉", "Chat"], ["model", "◆", "Model"], ["harness", "⟳", "Harness"], ["safety", "⛨", "Safety & quality"], ["advanced", "⚙", "Advanced"], ["about", "ⓘ", "About"]];
   const draw = () => {
     nav.replaceChildren(...TABS.map(([id, ic, l]) => h("button", { class: id === prefsTab ? "on" : "", onclick: () => { prefsTab = id; draw(); } }, h("span", { class: "ic", text: ic }), l)));
     const P = (k, d) => pref(k, d), set = (k) => (v) => { setPref(k, v); applyPrefs(); render(true); };
@@ -892,6 +932,14 @@ async function showPrefs() {
         ...["explore", "compact", "review", "cheap"].map((r) => row(`Model for ${r}`, { explore: "The read-only explorer subagents.", compact: "Handoff notes and /compact.", review: "The independent reviewer.", cheap: "Cheap steps when the router is on." }[r], txt(s.models?.[r], "same as the main model", (v) => setting(`/models ${r} ${v || "off"}`)))),
         row("Router", "Send exploration steps to the cheap model when that pays off.", sw(!!s.router, (v) => setting(`/router ${onoff(v)}`))),
         ...(s.openai ? [row("Wire API", "OpenAI-compatible providers only.", sel([["auto", "Auto"], ["responses", "Responses"], ["chat", "Chat completions"]], s.api, (v) => setting(`/api ${v}`)))] : [])],
+      harness: (() => { const hv = s.harness ?? { guards: [] }, refresh = async (cmd) => { await setting(cmd); const n = await tryApi("/api/settings"); if (n) { Object.assign(s, n); draw(); } };
+        return [h("h2", { text: "Harness" }), h("div", { class: "lead", text: "The agent loop's own checks and limits. The same as /harness in the terminal. Each guard can be switched off; together they were not measured to change the pass rate yet, so leave them on unless you are testing." }),
+          ...hv.guards.map((g) => row(g.label, `${g.what}${g.byProfile ? " (off in this model's profile)" : ""} · ${g.name}`, sw(g.on, (v) => refresh(`/harness ${v ? "on" : "off"} ${g.name}`)))),
+          row("Step limit", "The most model turns in one run.", txt(String(hv.maxSteps ?? ""), "60", (v) => v && refresh(`/harness steps ${v}`))),
+          row("No-progress limit", "Turns without measurable progress before the run stops.", txt(String(hv.stagnationTurns ?? ""), "8", (v) => v && refresh(`/harness stagnation ${v}`))),
+          row("Context budget", "Characters of history before old tool output is shortened (used when the model's context window is not known).", txt(String(hv.contextBudget ?? ""), "60000", (v) => v && refresh(`/harness budget ${v}`))),
+          row("Cost-aware rewrites", "Shorten old output only when that saves more than the lost prompt cache costs. Not measured to help.", sw(!!hv.governRewrites, (v) => refresh(`/harness rewrites ${v ? "on" : "off"}`))),
+          row("Defaults", "Switch every guard back on and reset the limits.", h("button", { class: "btn small", onclick: () => refresh("/harness reset") }, "Reset"))]; })(),
       safety: [h("h2", { text: "Safety & quality" }), h("div", { class: "lead", text: "What protects your machine and what checks the work." }),
         row("Sandbox", "Shell commands run in an OS sandbox: workspace (no writes outside the project) or strict (no network either).", sel([["off", "Off"], ["workspace", "Workspace"], ["strict", "Strict"]], s.sandbox, (v) => setting(`/sandbox ${v}`))),
         row("Verify command", "Must pass before Amness may say it is done (for example npm test).", txt(s.verify, "none", (v) => setting(`/verify ${v || "off"}`))),

@@ -11,7 +11,8 @@ import { loadState, saveState } from "../state.ts";
 import { App } from "../tui/app.ts";
 import type { Block } from "../tui/blocks.ts";
 import { groupOf } from "../tui/complete.ts";
-import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay } from "../tui/overlays.ts";
+import { ChoiceOverlay, InputOverlay, LongTextOverlay, PickerOverlay, TextOverlay } from "../tui/overlays.ts";
+import { harnessView } from "../tui/harnessinfo.ts";
 import { newPanelState, sidebarData, toggleStep, type PanelState } from "../tui/panel.ts";
 import { previewLines } from "../tui/session.ts";
 import type { SidebarData } from "../tui/sidebar.ts";
@@ -26,7 +27,8 @@ export type DialogView =
   | { id: number; kind: "choice"; title: string; body: string[]; question: string; options: { label: string; hint?: string }[]; detail?: ChoiceOverlay["detail"] }
   | { id: number; kind: "pick"; title: string; items: { label: string; hint?: string }[]; sel: number; preview: boolean }
   | { id: number; kind: "input"; prompt: string; secret: boolean; initial: string; hint: string }
-  | { id: number; kind: "text"; title: string; lines: string[] };
+  | { id: number; kind: "text"; title: string; lines: string[] }
+  | { id: number; kind: "longtext"; title: string; text: string; hint: string };
 
 export type StateView = {
   version: string; cwd: string; project: string; provider: string; providerLabel: string; model: string; mode: string; ready: boolean;
@@ -113,6 +115,7 @@ export class DesktopBridge {
     else if (o instanceof PickerOverlay) d = { id, kind: "pick", title: o.title, items: o.items.map((x) => ({ label: x.label, hint: x.hint })), sel: o.sel, preview: !!o.preview };
     else if (o instanceof InputOverlay) d = { id, kind: "input", prompt: o.prompt, secret: o.secret, initial: o.ed.text, hint: o.hint };
     else if (o instanceof TextOverlay) d = { id, kind: "text", title: o.title, lines: o.lines };
+    else if (o instanceof LongTextOverlay) d = { id, kind: "longtext", title: o.title, text: o.text, hint: o.hint };
     if (d) this.emit({ type: "dialog", dialog: d });
   }
 
@@ -121,7 +124,8 @@ export class DesktopBridge {
   prefs(): Record<string, unknown> { return { ...(this.app.cfg.desktop ?? {}) }; }
   setPrefs(patch: Record<string, unknown>): Record<string, unknown> {
     const cur: Record<string, unknown> = { ...(this.app.cfg.desktop ?? {}) };
-    for (const [k, v] of Object.entries(patch)) { if (!/^[\w:.-]{1,80}$/.test(k)) continue; if (v === null) delete cur[k]; else cur[k] = v; }
+    // names may contain spaces ("fold:Last run", "chats:Previous 30 days"); anything else odd is refused
+    for (const [k, v] of Object.entries(patch)) { if (!/^[\w:. -]{1,80}$/.test(k)) continue; if (v === null) delete cur[k]; else cur[k] = v; }
     this.app.cfg.desktop = cur; if (this.o.persist !== false) try { saveConfig(this.app.cfg); } catch { /* read-only home */ }
     return cur;
   }
@@ -135,6 +139,7 @@ export class DesktopBridge {
       sandbox: c.sandbox ?? "off", verify: this.app.verify ?? "", check: this.app.check ?? "", lsp: !!c.lsp, review: !!c.review, approvalReviewer: !!c.approvalReviewer,
       shell: c.shell ?? "auto", shells: ["auto", ...SHELL_CHOICES.filter((x) => x !== "auto")], strategy: c.strategy ?? "off", strategies: ["off", ...Object.keys(STRATEGIES)],
       keepWarm: !!c.keepWarm, plans: !!c.plans, notify: c.notify !== "off", configFile: "~/.amness/config.json",
+      harness: harnessView(c, this.app.profile?.profile),
     };
   }
   /** Run a terminal command without showing its output in the conversation (Preferences uses this); returns what it said, as plain lines. */
@@ -155,6 +160,7 @@ export class DesktopBridge {
     else if (o instanceof PickerOverlay) o.done(typeof value === "number" && o.items[value] ? o.items[value].value : undefined);
     else if (o instanceof InputOverlay) o.done(typeof value === "string" ? value : undefined);
     else if (o instanceof TextOverlay) o.done();
+    else if (o instanceof LongTextOverlay) o.done(typeof value === "string" ? value : undefined);
     this.changed();
   }
   /** Lines describing item `i` of the open picker (a conversation's last messages in /resume). */
@@ -172,6 +178,21 @@ export class DesktopBridge {
   sessionPreview(id: string) { const s = this.app.store.load(id); return s ? previewLines(s, 8) : []; }
   async resume(id: string) { if (this.app.running) throw new Error("wait for the current turn to finish"); await this.app.resumeById(id); this.fullSync(); this.changed(); }
   newConversation() { if (this.app.running) throw new Error("wait for the current turn to finish"); this.app.newConversation(); this.fullSync(); this.changed(); }
+  /** Which of your turns a message bubble is: your messages and the session's turns, matched in order by their text (messages sent while Amness worked are not turns). */
+  turnOfBlock(blockId: number): number | undefined {
+    const turns = this.app.session.turns; let t = 0;
+    for (const b of this.app.blocks.blocks) {
+      if (b.kind !== "user" || b.queued) continue;
+      if (t < turns.length && turns[t].text.trim() === b.text.trim()) { if (b.id === blockId) return t; t++; }
+      else if (b.id === blockId) return undefined;
+    }
+    return undefined;
+  }
+  /** Edit your message (by its bubble) and resend it from there; the old version is kept as a branch. */
+  async editMessage(blockId: number, text: string) {
+    const t = this.turnOfBlock(blockId); if (t === undefined) throw new Error("this message cannot be edited (it was sent while Amness was working)");
+    await this.app.editMessage(t, text); this.fullSync(); this.changed();
+  }
   turns() { return this.app.session.turns.map((t, i) => ({ index: i, text: t.text.replace(/\s+/g, " ").slice(0, 120), files: Object.keys(t.snaps).length })); }
   async rewind(idx: number) { if (this.app.running) throw new Error("wait for the current turn to finish"); await this.app.rewindTo(idx); this.fullSync(); this.changed(); }
 

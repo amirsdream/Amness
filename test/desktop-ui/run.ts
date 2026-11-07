@@ -32,6 +32,7 @@ if (process.argv.includes("--chats")) {                                         
   mk("Add retry to webhook sender", 3 * H, 5, ["Webhooks drop when the receiver is slow.", "Added backoff with jitter, capped at 5 tries."]);
   mk("Speed up CI with test sharding", 4 * 24 * H, 6, ["CI takes 18 minutes.", "Split into 4 shards; it now takes 6."]);
   mk("Rename customer to account across the API", 40 * 24 * H, 9, ["Rename customer to account.", "Renamed in 41 files, with an alias."]);
+  for (let d = 10; d < 18; d++) mk(`Older task from ${d} days ago`, d * 24 * H, 2, ["An older request.", "An older answer."]);   // always "Previous 30 days": folded, and more than the cap
 }
 const srv = await startDesktopServer({ cfg: { provider: "openai", baseUrl: "http://x/v1", model: "gpt-6.1-sol", maxTokens: 300000, apiKey: "sk-test" } as any, cwd: dir, version: "0.1.8", persist: false, makeModel: () => model });
 const env: NodeJS.ProcessEnv = { ...process.env, AMNESS_DESKTOP_URL: srv.url, AMNESS_DESKTOP_EVAL: evalFile, ...(size ? { AMNESS_DESKTOP_SIZE: size } : {}), ...(shot ? { AMNESS_DESKTOP_SCREENSHOT: shot } : {}) }; delete env.ELECTRON_RUN_AS_NODE;

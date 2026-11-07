@@ -128,6 +128,13 @@ export class InputOverlay implements Overlay {
 }
 
 /** Static text (help) closed by any key. */
+/** A longer text to edit (a plan, the todo list). The desktop shows it as an editor; the terminal hands it to $EDITOR instead (see App.editLongText). */
+export class LongTextOverlay implements Overlay {
+  title: string; text: string; hint: string; done: (v: string | undefined) => void;
+  constructor(title: string, text: string, done: (v: string | undefined) => void, hint = "") { this.title = title; this.text = text; this.done = done; this.hint = hint; }
+  render(): Drawn { return { lines: [bold(this.title), dim("  editing in the desktop window…")] }; }
+  key(k: Key) { if (k.name === "escape" || (k.ctrl && k.name === "c")) this.done(undefined); }
+}
 export class TextOverlay implements Overlay {
   lines: string[]; done: () => void; scroll = 0; title: string;
   constructor(lines: string[], done: () => void, title = "Help") { this.lines = lines; this.done = done; this.title = title; }

@@ -55,6 +55,7 @@ export async function startDesktopServer(o: { cfg: Config; cwd: string; version:
     "POST /api/resume": async (b) => { await bridge.resume(String(b.id)); return { ok: true }; },
     "POST /api/new": () => { bridge.newConversation(); return { ok: true }; },
     "GET /api/turns": () => bridge.turns(),
+    "POST /api/edit": async (b) => { await bridge.editMessage(Number(b.blockId), String(b.text ?? "")); return { ok: true }; },
     "POST /api/rewind": async (b) => { await bridge.rewind(Number(b.index)); return { ok: true }; },
     "GET /api/files": () => bridge.fileList(),
     "GET /api/file": (_b, q) => bridge.readFile(q.get("path") ?? ""),

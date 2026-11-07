@@ -242,6 +242,70 @@ The file is attached to your message. In the transcript you see a note such as "
 
 **Related pages.** [Features: Undoing what commands did](features.md#undoing-what-commands-did), [Features: Branches, review and pull requests](features.md#branches-review-and-pull-requests).
 
+## Edit an earlier message
+
+**What it is.** `/edit` lets you change a message you sent earlier and send it again. Amness goes back to before that message, then runs your new version.
+
+**Why you would use it.** You asked for the wrong thing, or you want to try the same step with clearer words, without starting a new conversation.
+
+**How to use it.**
+
+1. Type `/edit`, or `/edit 2` for your second message. Without a number, a list of your messages opens.
+2. The message appears in the input box. Change it.
+3. Press `Enter`. Amness goes back to before that message, including the files it changed after it, and sends your new text. Press `Esc` to cancel.
+
+In the desktop app, hover your message and click **✎ Edit**. Change the text, then click **Save & resend** (or press `⌘/Ctrl+Enter`).
+
+**Limits and common problems.**
+
+- The conversation as it was is kept as a branch named "… (before edit)". Find it with `/resume` or `/branches`.
+- Messages you typed while Amness was working are not separate turns, so you cannot edit them.
+- Shell commands that cannot be undone are not undone. Amness says so, as with `/rewind`.
+- Status: covered by automated tests (terminal, desktop server and the desktop window).
+
+## Change the plan or the todo list
+
+**What it is.** In plan mode, Amness shows its plan and asks if it may start. You can choose **Yes, after I edit the plan**. While Amness works, `/todos edit` changes its checklist.
+
+**How to use it.**
+
+1. When the plan appears, press `3` (**Yes, after I edit the plan**). The plan opens in your editor (`$VISUAL` or `$EDITOR`); in the desktop app, in an editor window. Change, reorder, add or delete steps. Save and close.
+2. Amness follows your version. It starts in `default` mode, so it asks before each edit.
+3. For the checklist, type `/todos edit`. Each line is one item: `- [ ] to do`, `- [~] doing`, `- [x] done`. In the desktop app, click **Edit list…** in the Todos section.
+
+**Limits.** Amness receives the new todo list with your next message, or between its steps while it works. Status: covered by automated tests.
+
+## Tune the agent loop (`/harness`)
+
+**What it is.** The *harness* is the loop around the model: its guards (checks such as the repeated-call guard) and its limits. `/harness` shows them and lets you change them.
+
+**Why you would use it.** To test whether a guard helps on your work, or to give a long task more steps.
+
+**How to use it.**
+
+1. Type `/harness` for a list. Choose a guard to switch it on or off, or a limit to change it.
+2. Or type it directly:
+
+   ```text
+   /harness off loop
+   /harness steps 80
+   /harness stagnation 6
+   /harness budget 90000
+   /harness reset
+   ```
+
+In the desktop app, open **Preferences → Harness**.
+
+| Setting | Default | What it does |
+|---|---|---|
+| guards (`loop`, `stagnation`, `stuck`, `nudge`, `wrapup`, `ledger`, `coverage`, `compact`, `condense`, `readdelta`, `toolcache`, `schedule`, `redact`) | all on | each one is explained in the list |
+| `steps` | 60 | the most model turns in one run |
+| `stagnation` | 8 | turns without measurable progress before the run stops |
+| `budget` | 60000 | characters of history before old tool output is shortened (when the context window is not known) |
+| `rewrites` | off | shorten old output only when it pays (see [Features](features.md#rewrite-old-messages-only-when-it-pays-library-opt-in)) |
+
+**Limits.** Settings are saved in `~/.amness/config.json`. A model profile can also switch guards off; `/harness` shows that. The guards together were not measured to change the pass rate on real tasks yet. Leave them on unless you are testing.
+
 ## Slash commands
 
 Type `/` in the input box to see the popup. It lists **every** command, grouped under titles: Conversation, Model & keys, Safety, Quality, Project, Extend and Interface. Your own and plugin commands go under Custom.
@@ -313,6 +377,7 @@ When you start the chat, Amness picks a first `/verify` command for you if it ca
 | `/resume` (alias `/sessions`) | Continues an earlier conversation. Type to search. The list shows the last messages of the conversation you highlight. |
 | `/rename <name>` | Names this conversation. You can then start with it: `amness chat --resume <name>`. |
 | `/undo`, `/rewind`, `/diff` | Revert the last turn, go back to a turn, review all changes. |
+| `/edit [n]` | Edit an earlier message and send it again from there. See [Edit an earlier message](#edit-an-earlier-message). |
 | `/branch [n]`, `/branches` | Fork the conversation after turn n, or switch between branches. |
 | `/export [file]`, `/import <file>` | Write a portable session bundle, or continue from one. |
 | `/copy [code\|all]` | Copies the last reply, its last code block, or the conversation. |
@@ -321,7 +386,8 @@ When you start the chat, Amness picks a first `/verify` command for you if it ca
 
 | Command | What it does |
 |---|---|
-| `/help` (alias `/?`), `/status`, `/tools`, `/todos` | Help, session facts, tools the agent can use, the agent's checklist. |
+| `/help` (alias `/?`), `/status`, `/tools`, `/todos` | Help, session facts, tools the agent can use, the agent's checklist. `/todos edit` changes the checklist. |
+| `/harness` | The agent loop's guards and limits. See [Tune the agent loop](#tune-the-agent-loop-harness). |
 | `/cache` | What the harness reused instead of repeating: reads answered from the store, plans, and (on a vLLM server) the share of prompt tokens the server served from its prefix cache. |
 | `/plans [on\|off]` | Offers the plan of a similar finished task as a starting point (off until measured). With no argument it shows how many plans are stored and how often they helped. |
 | `/tokens` (alias `/cost`) | The context gauge, what fills it, tokens, cache hits and estimated cost. |

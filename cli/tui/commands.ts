@@ -1,5 +1,6 @@
 // Slash commands. Each gets the running App and the raw argument string.
 import { previewLines, relatives } from "./session.ts";
+import { GUARDS, harnessView } from "./harnessinfo.ts";
 import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
@@ -234,7 +235,57 @@ export function buildCommands(): Cmd[] {
       a.commit(tokenReport({ model: a.cfg.model, window: a.window, messages: a.session.messages, usage: a.session.usage, series: a.session.usage.series ?? [], lastPrompt: a.lastPrompt, turnTokens: a.runTokens, turnBudget: a.running ? a.cfg.maxTokens : 0, width: a.width,
         toolDefChars: JSON.stringify(a.agent.registry.visible({ step: 0, messages: [] }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }))).length }));
     } },
-    { name: "todos", help: "show the agent's checklist", live: true, run: (a) => a.commit(["", ...(a.todos.length ? todoList(a.todos, a.width) : [dim("  no todo list right now")])]) },
+    { name: "todos", help: "show the agent's checklist, or change it: /todos edit", args: "[edit]", live: true, run: async (a, arg) => {
+      if (arg.trim() === "edit") return void (await a.editTodos());
+      a.commit(["", ...(a.todos.length ? todoList(a.todos, a.width) : [dim("  no todo list right now")]), ...(a.todos.length ? [dim("  /todos edit changes it")] : [])]);
+    } },
+    { name: "edit", help: "edit one of your earlier messages and send it again from there (the old version is kept as a branch)", args: "[n]", run: async (a, arg) => {
+      if (a.running) return void a.say("wait for the current turn to finish", dim);
+      if (!a.session.turns.length) return void a.say("nothing to edit yet", dim);
+      const n = arg.trim() ? Number(arg) - 1 : await a.pick("Edit which message?", a.session.turns.map((t, i) => ({ label: `${i + 1}. ${t.text.replace(/\s+/g, " ").slice(0, 70)}`, value: i })).reverse());
+      if (n === undefined || !Number.isInteger(n) || !a.session.turns[n]) return void (arg.trim() && a.say(`no message ${arg}`, red));
+      if (a.remote) {                                                              // no input box to edit in: an editor dialog instead
+        const text = await a.editLongText(`Edit message ${n + 1}`, a.session.turns[n].text, "Amness goes back to before this message (files too) and sends your new version. The old version is kept in /branches.");
+        if (text !== undefined && text.trim()) await a.editMessage(n, text);
+        return;
+      }
+      a.startEditing(n);
+    } },
+    { name: "harness", help: "the agent loop's settings: guards on or off, step limit, no-progress limit, context budget", args: "[on|off <guard> · steps <n> · stagnation <n> · budget <chars> · rewrites on|off · reset]", run: async (a, arg) => {
+      const h = { ...(a.cfg.harness ?? {}) }, words = arg.trim().split(/\s+/).filter(Boolean), save = (msg: string) => { a.cfg.harness = h; a.saveConfig(); a.buildAgent(); a.say(msg, dim); };
+      const offSet = new Set(h.off ?? []), num = (v: string | undefined, min: number) => { const n = Number(String(v ?? "").replace(/k$/i, "000")); return Number.isFinite(n) && n >= min ? Math.round(n) : undefined; };
+      if (words[0] === "on" || words[0] === "off") {
+        const g = GUARDS.find((x) => x.name === words[1]); if (!g) return void a.say(`unknown guard "${words[1] ?? ""}". Guards: ${GUARDS.map((x) => x.name).join(", ")}`, red);
+        if (words[0] === "off") offSet.add(g.name); else offSet.delete(g.name); h.off = [...offSet]; if (!h.off.length) delete h.off;
+        return void save(`${g.label} (${g.name}) ${words[0]}`);
+      }
+      if (words[0] === "steps" || words[0] === "stagnation" || words[0] === "budget") {
+        const v = num(words[1], words[0] === "budget" ? 4000 : 1); if (v === undefined) return void a.say(`give a number, for example /harness ${words[0]} ${words[0] === "budget" ? "80000" : words[0] === "steps" ? "80" : "6"}`, red);
+        if (words[0] === "steps") h.maxSteps = v; else if (words[0] === "stagnation") h.stagnationTurns = v; else h.contextBudget = v;
+        return void save(`${words[0] === "steps" ? "step limit" : words[0] === "stagnation" ? "no-progress limit" : "context budget"} → ${v}`);
+      }
+      if (words[0] === "rewrites") { h.governRewrites = words[1] === "on" || undefined; return void save(`cost-aware rewrites ${h.governRewrites ? "on" : "off"}`); }
+      if (words[0] === "reset") { a.cfg.harness = undefined; a.saveConfig(); a.buildAgent(); return void a.say("harness settings back to the defaults", dim); }
+      if (words.length) return void a.say("usage: /harness [on|off <guard> · steps <n> · stagnation <n> · budget <chars> · rewrites on|off · reset]", red);
+      for (;;) {                                                                    // no arguments: an interactive list, changed one item at a time
+        const v = harnessView(a.cfg, a.profile.profile);
+        const pick = await a.pick<string>("Harness   ● on   ○ off", [
+          ...v.guards.map((g) => ({ label: `${g.on ? "●" : "○"} ${g.label}`, value: `g:${g.name}`, hint: g.byProfile ? "off in the model profile" : g.what })),
+          { label: `Step limit: ${v.maxSteps}`, value: "n:steps", hint: "the most model turns in one run" },
+          { label: `No-progress limit: ${v.stagnationTurns}`, value: "n:stagnation", hint: "turns without measurable progress before it stops" },
+          { label: `Context budget: ${v.contextBudget.toLocaleString()} characters`, value: "n:budget", hint: "when old tool output starts to be shortened (when no context window is known)" },
+          { label: `${v.governRewrites ? "●" : "○"} Cost-aware rewrites`, value: "rewrites", hint: "shorten old output only when it saves more than the lost cache costs (not measured to help)" },
+          { label: "Reset to the defaults", value: "reset" },
+        ]);
+        if (!pick) return;
+        if (pick.startsWith("g:")) { const name = pick.slice(2), cur = v.guards.find((g) => g.name === name)!; await a.runCommand(`/harness ${cur.on ? "off" : "on"} ${name}`); continue; }
+        if (pick === "rewrites") { await a.runCommand(`/harness rewrites ${v.governRewrites ? "off" : "on"}`); continue; }
+        if (pick === "reset") { await a.runCommand("/harness reset"); continue; }
+        const key = pick.slice(2), now = key === "steps" ? v.maxSteps : key === "stagnation" ? v.stagnationTurns : v.contextBudget;
+        const typed = await a.askText(key === "steps" ? "Step limit" : key === "stagnation" ? "No-progress limit (turns)" : "Context budget (characters)", { initial: String(now) });
+        if (typed) await a.runCommand(`/harness ${key} ${typed}`);
+      }
+    } },
     { name: "copy", help: "copy the last reply to the clipboard (or: code, all)", args: "[code|all]", live: true, run: (a, arg) => {
       const bs = a.blocks.blocks, last = [...bs].reverse().find((b) => b.kind === "assistant" || b.kind === "summary");
       let text = "";
