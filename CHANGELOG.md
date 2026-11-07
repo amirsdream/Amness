@@ -2,7 +2,7 @@
 
 ## 0.3.0 (2026-11-07)
 
-0.2.0 was staged but not published; this release replaces it.
+**Update from 0.2.0:** in the 0.2.0 desktop app, clicking an item in a list (the model button, `/resume`, `/theme`…) often did nothing; the keyboard worked. This release fixes it (see below).
 
 - **Edit an earlier message:** `/edit [n]` (or **✎ Edit** on your message in the desktop app) changes a message you sent and sends it again. Amness goes back to before it, files included, and keeps the old version as a branch.
 - **Edit the plan and the todo list:** when Amness shows a plan, **Yes, after I edit the plan** opens it in your editor (desktop: an editor window) and Amness follows your version. `/todos edit` changes its checklist.
