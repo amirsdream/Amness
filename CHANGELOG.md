@@ -2,6 +2,7 @@
 
 ## 0.2.1 (2026-11-05)
 
+- **Desktop: a slimmer conversation list.** One line per conversation with a short time (`4m`, `3h`, `Tue`), grouped by recency (Today, Yesterday, Previous 7 days…). The open one has a dot that pulses while it works. Hovering shows the last messages in a card beside the list. The sidebar is a little narrower.
 - **Desktop: clicking an item in a picker chooses it.** In 0.2.0, hovering a list item rebuilt the list, so a mouse click was often lost: the model button opened the model list, but clicking a model did not change it (the keyboard worked). This affected every picker in the desktop app (`/model`, `/resume`, `/theme`, `/mode`…). The window checks now hover like a mouse.
 
 ## 0.2.0 (2026-11-05)

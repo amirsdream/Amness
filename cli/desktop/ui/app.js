@@ -745,21 +745,52 @@ async function projectMenu() {
 }
 
 // ------------------------------------------------------------------ conversations (sidebar)
+/** "now", "4m", "3h", "Tue", "Oct 12": how long ago, in as few letters as possible. */
+function shortAgo(iso) {
+  const t = Date.parse(iso), m = (Date.now() - t) / 60000;
+  if (m < 1) return "now"; if (m < 60) return `${Math.floor(m)}m`; if (m < 1440) return `${Math.floor(m / 60)}h`;
+  return new Date(t).toLocaleDateString(undefined, m < 7 * 1440 ? { weekday: "short" } : { month: "short", day: "numeric" });
+}
+/** Which recency group a date falls in. */
+function recency(iso) {
+  const d = new Date(iso), today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = Math.floor((today.getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86400000);
+  return days <= 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? "Previous 7 days" : days < 30 ? "Previous 30 days" : "Older";
+}
+/** The conversation list: one slim line each, grouped by recency. Hover a line for its last messages; the open one has a dot that pulses while it works. */
 async function loadSessions() {
   const list = (await tryApi(`/api/sessions?q=${encodeURIComponent($("sessionSearch").value)}`)) || [];
-  $("sessionList").replaceChildren(h("button", { class: `item${state && !state.session.turns ? " on" : ""}`, onclick: () => newChat() }, h("div", { class: "t", text: "✎ New conversation" })),
-    ...list.map((s) => h("button", { class: `item${s.id === state?.session.id ? " on" : ""}`, title: s.title, onmouseenter: () => showPreview(s.id), onclick: () => resume(s.id) },
-      h("div", { class: "t", text: s.title || "(untitled)" }), h("div", { class: "m", text: `${s.turns} turn${s.turns === 1 ? "" : "s"} · ${ago(s.updated)} · ${s.model}` }))));
+  const rows = [h("button", { class: `chat-row new${state && !state.session.turns ? " on" : ""}`, onclick: () => newChat() }, h("span", { class: "cdot plus", text: "+" }), h("span", { class: "ct", text: "New chat" }), h("span", { class: "ctime kbd-hint", text: /Mac/.test(navigator.platform) ? "⌘N" : "Ctrl N" }))];
+  let group = "";
+  for (const c of [...list].sort((x, y) => Date.parse(y.updated) - Date.parse(x.updated))) {
+    const g = recency(c.updated); if (g !== group) { group = g; rows.push(h("div", { class: "chat-group", text: g })); }
+    const current = c.id === state?.session.id;
+    rows.push(h("button", { class: `chat-row${current ? " on" : ""}${current && state?.running ? " running" : ""}`, title: `${c.title || "(untitled)"}\n${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.model} · ${ago(c.updated)}`,
+      onmouseenter: (e) => showPreview(c, e.currentTarget), onmouseleave: hidePreview, onclick: () => { hidePreview(); resume(c.id); } },
+      h("span", { class: "cdot" }), h("span", { class: "ct", text: c.title || "(untitled)" }), h("span", { class: "ctime", text: shortAgo(c.updated) })));
+  }
+  if (!list.length && $("sessionSearch").value) rows.push(h("div", { class: "chat-empty", text: "No conversations match." }));
+  $("sessionList").replaceChildren(...rows);
 }
-let previewTimer, previewFor = null;
-function showPreview(id) {
-  clearTimeout(previewTimer);
+let previewTimer, previewFor = null, hoverRow = null;
+/** A floating card beside the list with the conversation's last messages. */
+function showPreview(c, row) {
+  clearTimeout(previewTimer); hoverRow = row;
   previewTimer = setTimeout(async () => {
-    if (previewFor === id) return; previewFor = id; const lines = (await tryApi(`/api/preview?id=${encodeURIComponent(id)}`)) || [];
-    const p = $("sessionPreview"); p.classList.toggle("hidden", !lines.length);
-    p.replaceChildren(...lines.map((l) => { const i = l.indexOf("  "); return h("div", {}, h("b", { text: l.slice(0, i) + " " }), l.slice(i + 2).slice(0, 240)); }));
-  }, 150);
+    const lines = previewFor === c.id ? null : (await tryApi(`/api/preview?id=${encodeURIComponent(c.id)}`)) || [];
+    if (hoverRow !== row) return;                                                    // the pointer moved on while the preview loaded
+    const p = $("sessionPreview");
+    if (lines) {
+      previewFor = c.id;
+      p.replaceChildren(h("div", { class: "pv-title", text: c.title || "(untitled)" }), h("div", { class: "pv-meta", text: `${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.model} · ${ago(c.updated)}` }),
+        ...lines.slice(-6).map((l) => { const i = l.indexOf("  "), who = l.slice(0, i); return h("div", { class: `pv-line ${who === "you" ? "you" : ""}` }, h("b", { text: who === "you" ? "You" : "Amness" }), h("span", { text: l.slice(i + 2).slice(0, 200) })); }));
+    }
+    const r = row.getBoundingClientRect(), side = $("sidebar").getBoundingClientRect();
+    p.style.cssText = `left:${Math.round(side.right + 8)}px; top:${Math.round(Math.min(r.top - 6, innerHeight - 280))}px`;
+    p.classList.remove("hidden");
+  }, 280);
 }
+function hidePreview() { clearTimeout(previewTimer); hoverRow = null; $("sessionPreview").classList.add("hidden"); }
 async function resume(id) { if (id === state?.session.id) return; if (state?.running) { toast("warn", "wait for the current turn to finish (or stop it)"); return; } if (await tryApi("/api/resume", { id })) input.focus(); }
 async function newChat() { if (state?.running) { toast("warn", "wait for the current turn to finish (or stop it)"); return; } if (await tryApi("/api/new", {})) input.focus(); }
 let searchT; $("sessionSearch").oninput = () => { clearTimeout(searchT); searchT = setTimeout(loadSessions, 150); };
