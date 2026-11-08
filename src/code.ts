@@ -9,7 +9,7 @@ import { createToolTool, loadSavedTools } from "./dynamic.ts";
 import { ToolCache } from "./cache.ts";
 import { coverageCheck } from "./coverage.ts";
 import { PlanCache, planBlock, planFrom } from "./plancache.ts";
-import { createHarness, defineTool, clip, makeHandoff, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
+import { createHarness, defineTool, clip, isSmallTalk, makeHandoff, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, isMemoryBackend, memoryTools, type MemoryBackend } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
@@ -217,6 +217,7 @@ Never invent file contents or command output. Don't ask the user questions; choo
 /** Conversational variant of the prompt: answers questions directly, plans, delegates exploration, works within permission modes. */
 /** For small context windows: the same rules as CHAT_SYSTEM and CODE_SYSTEM in about a third of the words. */
 export const COMPACT_SYSTEM = `You are a software engineer working in the user's repository. Be concise; cite files as path:line.
+- A greeting or thanks gets a short reply, no tools.
 - Look before you answer: list_files, grep, read_file (read part of a big file with start/end). Never invent file contents or tool output.
 - Change code with edit_file or write_file, then check it (run the tests or the build) before you finish.
 - Do what you said in the same turn: no plans without a tool call. Call \`finish\` when the task is done and verified.
@@ -228,6 +229,7 @@ How to work:
 - Changes: read a file before editing it, make the smallest correct change, then verify it (run the tests/build). For anything with 3+ steps, keep a checklist with \`todo_write\` and update it as you go (exactly one item in_progress).
 - When you finish a coding task, call \`finish(summary)\` (what changed, how you verified). For plain questions just answer; no \`finish\` needed.
 - Permissions: the user may be asked to approve edits and shell commands. If a call is denied, do not retry it; use another approach or explain what you need. In plan mode you are read-only: investigate, then present a plan with \`exit_plan_mode\` and wait for approval.
+- Greetings, thanks and small talk ("hi", "thanks"): answer in a sentence or two without tools, and ask what they want to work on. Do not explore the project unasked.
 - If the request is ambiguous in a way that matters, ask ONE short clarifying question; otherwise choose sensible defaults and say what you assumed.
 - Notes from earlier sessions may appear below the user's message; treat them as hints to verify. Save durable, non-obvious lessons with memory_save (never secrets).
 - Servers and watchers: start them with \`sh_start\` (plain \`sh\` waits for the command to end), read their output with \`sh_read\`, and \`sh_stop\` them when you are done.
@@ -490,14 +492,17 @@ ${note}
       tasksThisRequest = 0;
       task ||= userText;
       let text = userText;
+      // Small talk ("hi", "thanks") goes as it is: the project guidance, skills and memory notes would only send the model looking for work.
+      // They come with the first real request instead, so saying hi first does not lose them.
+      const chatty = isSmallTalk(userText), first = !chatty && !history.some((m) => m.role === "user" && !isSmallTalk(m.content ?? ""));
       const gate = await promptHooks(history.length === 0, userText); if (gate.block) return { text: gate.block, finished: false, steps: 0, messages: history, stopped: "blocked" as const, tokens: 0 };
       if (gate.context) text += "\n\n" + gate.context;
       text = await withContract(text);
-      if (memory?.embedder) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
-      if (!history.length && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
-      if (!history.length) { rescanIndex(); rescanAgents(); rescan(); const sb = skillBlockFor(userText); if (sb) text += "\n\n" + sb; }
-      if (!history.length && backend) { shown.clear(); const ctx = backend.context(userText, small() ? 800 : 6000, shown); if (ctx) text += "\n\n" + ctx; }
-      else if (backend) { const d = backend.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
+      if (memory?.embedder && !chatty) { await memory.index().catch(() => {}); await memory.warmQuery(userText); }
+      if (first && guidance) { const g = guidance.start(); if (g) text += "\n\n" + g; }
+      if (first) { rescanIndex(); rescanAgents(); rescan(); const sb = skillBlockFor(userText); if (sb) text += "\n\n" + sb; }
+      if (first && backend) { shown.clear(); const ctx = backend.context(userText, small() ? 800 : 6000, shown); if (ctx) text += "\n\n" + ctx; }
+      else if (backend && !chatty) { const d = backend.delta(userText, shown); if (d) text += "\n\n" + d; }          // only new, relevant notes, at the end: the cached prefix stays intact
       const img = extra.images?.length ? { images: extra.images } : {};
       const msgs: Message[] = history.length ? [...history, { role: "user", content: text, ...img }]
         : [{ role: "system", content: SYS(o.chat) }, { role: "user", content: text, ...img }];

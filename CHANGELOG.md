@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **"hi" gets a hello, not a project survey.** In a new session, a greeting made the agent list files and read the project. Three things caused it: the first message carried the project guidance (`AGENTS.md`), skills and memory notes; the nudge guard read "I'll be glad to help" as a stalled task and told the model to use a tool; and the prompts said nothing about greetings. Now small talk ("hi", "thanks", "ok", "how are you") is sent as it is and answered in words. The guidance and notes come with your first real request, so saying hi first loses nothing. The nudge also leaves alone a reply that asks you a question.
+
 ## 0.4.1 (2026-11-08)
 
 - **Trust a folder first, as in Claude Code.** The first time you start Amness in a folder, it asks **Do you trust the files in this folder?** Nothing runs before you answer, not even a task given on the command line. **Yes** is saved in `~/.amness/state.json` and covers the folders inside. **No** exits (code 3); in the desktop app, it goes back to the project you had open. In your home folder, Amness warns you. Project hooks, plugins and permission rules are still asked about separately. See [Safety](docs/safety.md#trust-a-folder-before-amness-works-in-it).

@@ -241,6 +241,9 @@ const FINISH: ToolSpec = {
   parameters: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } },
 };
 const INTENT = /\b(i'll|i will|let me(?! know)|next,? i|now i|i am going to|i'm going to)\b/i;
+const SMALL_TALK = new Set("hi hii hello hey hiya yo sup hola salam good morning afternoon evening night thanks thank you thx ty ok okay k cool nice great awesome bye goodbye see ya how are doing what's whats up there amness again".split(" "));
+/** A greeting, thanks or "ok" with no request in it ("hi", "hey there", "thanks!", "how are you"): answered in words, with no project context and no tools. */
+export const isSmallTalk = (text: string): boolean => { const w = text.toLowerCase().replace(/[^\p{L}\p{N}'\s]/gu, " ").split(/\s+/).filter(Boolean); return w.length > 0 && w.length <= 6 && w.every((x) => SMALL_TALK.has(x)); };
 
 export const clip = (s: string, n = 6000) =>
   s.length <= n ? s : `${s.slice(0, (n * 2) / 3)}\n...[${s.length - n} chars cut; read a smaller part for the rest]...\n${s.slice(-n / 3)}`;
@@ -541,7 +544,8 @@ export function createHarness(o: Options) {
       if (!m.tool_calls?.length) {
         const text = (m.content ?? "").trim();
         if (thenNext && text) { msgs.push({ role: "user", content: thenNext }); thenNext = undefined; continue; }                // a planning phase: the text is the plan, not the answer
-        if (!off.has("nudge") && nudges < 2 && (!text || INTENT.test(text.slice(-200)))) {
+        const said = [...msgs].reverse().find((x) => x.role === "user")?.content ?? "";
+        if (!off.has("nudge") && nudges < 2 && (!text || INTENT.test(text.slice(-200))) && !text.endsWith("?") && !isSmallTalk(said)) {   // a reply that asks the user something, or answers a greeting, is not a stalled task
           nudges++;
           emit({ kind: "nudge", detail: text.slice(-100) });
           msgs.push({ role: "user", content: "Don't stop to describe. Do it now with a tool call, or call `finish` if truly done." });
