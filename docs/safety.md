@@ -199,6 +199,30 @@ A cloned repository can contain `.amness/hooks.json`, `.amness/plugins/` and `al
 
 Hooks and plugins are not sandboxed. A trusted hook can do anything your user can do.
 
+### Allow a folder outside the project
+
+**What it is.** The file tools (`read_file`, `list_files`, `grep`, `write_file`, `edit_file`, `apply_patch`) work inside the project folder. A path outside it, such as `../shared-lib/types.ts`, needs your permission first.
+
+**Why you would use it.** Your work often needs a sibling repository, a shared library or a config folder.
+
+**How to use it.**
+
+1. When the agent wants a file outside the project, Amness shows **Outside this project**. You see the file, the folder that access would cover, and whether the agent wants to read or change it. This works the same in the terminal and in the desktop app.
+2. Choose **Yes, for this session**, **Yes, and always for this project**, or **No** (`Esc`). One yes covers the whole folder, so the agent does not ask again for each file there.
+3. To allow a folder before the agent asks, type `/dirs add <path>` (or `/add-dir <path>`, as in Claude Code). The path can be absolute, relative to the project, or start with `~`.
+4. Type `/dirs` to list the allowed folders, and `/dirs remove <path>` to take one off.
+5. In a headless run, pass `--add-dir <path>` (you can repeat it). Without it, outside paths are refused.
+
+**Example.** The agent reads `../billing-lib/src/invoice.ts`. You choose **Yes, and always for this project**. From then on, in this project, the agent can read and edit files in `../billing-lib/src` without this question.
+
+**Limits.**
+
+- Folders you allow "always" are saved in `~/.amness/state.json`, for this project only. They are never saved in the project, so a cloned repository cannot give itself access.
+- Allowing a folder does not skip other prompts. In Ask mode, each edit there still asks first. This question also appears in Yolo mode.
+- If you say no, the agent is told not to try other paths in that folder.
+- Shell commands (`sh`) are not limited to the project in the same way. To limit them, use the sandbox. In `workspace` mode the sandbox lets commands write only inside the project, not in the folders you allowed.
+- Tested: `test/outside.test.ts`, and the terminal and desktop tests for this dialog.
+
 ### Reduce what is sent
 
 - Use a local model: choose Ollama with `/provider` in the chat, or run `amness run --provider ollama --model qwen2.5-coder:7b "task"`.

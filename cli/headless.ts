@@ -29,6 +29,7 @@ export const HELP = `usage: amness run [flags] "task"
   --max-tokens <n>     hard token cap (default 300000)      --no-memory   disable memory
   --plans              offer the plan of a similar finished task, and keep plans of finished tasks (.amness/plans)
   --cache              answer identical model requests from .amness/cache/responses (reruns and replays cost nothing; use a fixed temperature)
+  --add-dir <path>     let the file tools use this folder outside the project too (repeatable; without it, outside paths are refused)
   --max-steps <n>      most model turns (default 40)        --context-window <tokens>   the model's window (8192 for a small local model); default: learned from the provider
   -                    as the task: read it from standard input (useful on Windows, where quoting a long task is painful)
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
@@ -50,6 +51,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   cfg.baseUrl = val("--base-url") ?? cfg.baseUrl;
   cfg.api = (val("--api") as typeof cfg.api) ?? cfg.api;
   cfg.effort = (val("--effort") as typeof cfg.effort) ?? cfg.effort;
+  const addDirs: string[] = []; for (let d = val("--add-dir"); d; d = val("--add-dir")) addDirs.push(resolve(d));   // repeatable
   const cwd = resolve(val("--cwd") ?? "."), verify = val("--verify"), check = val("--check"), bundle = val("--bundle"), exportTo = val("--export");
   const trustHooks = bool("--trust-project") || bool("--trust-hooks"), yes = bool("--yes"), json = bool("--json"), noMemory = bool("--no-memory");
   const li = args.indexOf("--live"); let livePort: number | undefined;
@@ -90,6 +92,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   for (const w of loadedPlugins.warnings) console.error("plugin: " + w);
   if (loadedPlugins.untrusted) console.error(`note: ${loadedPlugins.untrusted.count} project plugin file(s) in .amness/plugins were not loaded; pass --trust-project to run them`);
   const agent = createCodeAgent({
+    dirs: addDirs.length ? () => addDirs : undefined,
     plans: argv.includes("--plans") || cfg.plans || undefined,
     contextWindow: Number(val("--context-window")) || windowFor(cfg) || await detectWindow({ provider: cfg.provider, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model }),
     maxSteps: Number(val("--max-steps")) || undefined,

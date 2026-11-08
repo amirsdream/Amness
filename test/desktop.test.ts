@@ -232,3 +232,16 @@ test("desktop: /provider for a local server asks for an optional key; Enter skip
     assert.ok(llama.seen.some((s) => s.path === "/v1/chat/completions") && llama.seen.every((s) => s.auth === undefined), JSON.stringify(llama.seen));
   } finally { if (saved) process.env.OPENAI_API_KEY = saved; llama.close(); await d.close(); }
 });
+
+test("desktop: a file outside the project asks in the window first; Yes reads it, and the folder is not asked about again", async () => {
+  const lib = mkdtempSync(join(tmpdir(), "amness-lib-")); writeFileSync(join(lib, "x.ts"), "export const x = 'from lib';\n"); writeFileSync(join(lib, "y.ts"), "y\n");
+  const d = await boot([call("read_file", { path: join(lib, "x.ts") }), call("read_file", { path: join(lib, "y.ts") }), say("Read both.")]);
+  try {
+    await d.api("/api/send", { text: "read the lib" });
+    const ask = await dialogOf(d, "choice", /Outside this project/);
+    assert.match(JSON.stringify(ask), /Allow Amness to use files in/); assert.equal(ask.options[0].label, "Yes, for this session");
+    await d.api("/api/dialog", { id: ask.id, value: 0 });
+    assert.ok(await d.until(() => JSON.stringify(d.events).includes("Read both."), 8000));
+    assert.equal(d.events.filter((e) => e.type === "dialog" && /Outside this project/.test(JSON.stringify(e.dialog))).length, 1);   // y.ts is in the same folder
+  } finally { await d.close(); }
+});

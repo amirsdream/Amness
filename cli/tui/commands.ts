@@ -2,8 +2,9 @@
 import { previewLines, relatives } from "./session.ts";
 import { GUARDS, harnessView } from "./harnessinfo.ts";
 import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
-import { join, resolve } from "node:path";
-import { readFileSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { approveDraft, fetchSource, inspectSource, installSkills, listDrafts, rejectDraft, scaffoldSkill, trashSkill } from "../../src/index.ts";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, keyFor, storeKey, type Connection, type ProviderId } from "../config.ts";
@@ -64,6 +65,25 @@ export function buildCommands(): Cmd[] {
       const list = connections();
       const id = await a.pick<ProviderId>("Provider", list.map((c) => ({ label: `${!c.needsKey || c.source !== "none" ? "●" : "○"} ${c.label}${c.id === a.cfg.provider ? "  (in use)" : ""}`, value: c.id, hint: keyStatus(c) })));
       if (id) await switchProvider(a, id);
+    } },
+    { name: "dirs", alias: "add-dir", args: "[add|remove] [path]", help: "folders outside the project the agent may use: list, add (saved for this project) or remove", run: async (a, arg) => {
+      let [act = "", ...rest] = arg.trim().split(/\s+/).filter(Boolean), p = rest.join(" ");
+      if (act && !["add", "remove", "rm", "list"].includes(act)) { p = arg.trim(); act = "add"; }   // "/add-dir ../lib", "/dirs ../lib"
+      const full = (x: string) => resolve(a.cwd, x.replace(/^~(?=$|[\\/])/, homedir()));
+      if (!act || act === "list") {
+        if (!a.allowedDirs().length) return void a.say("No folders outside this project are allowed. Add one with /dirs add <path>, or say yes when Amness asks for one.", dim);
+        return void a.say([bold("Folders outside this project the agent may use"), ...a.savedDirs.map((d) => `  ${d}  ${dim("saved")}`), ...a.sessionDirs.map((d) => `  ${d}  ${dim("this session")}`), dim("  /dirs remove <path> takes one off")].join("\n"));
+      }
+      if (act === "add") {
+        if (!p) p = (await a.askText("Folder to allow (absolute, or relative to the project)")) ?? ""; if (!p) return;
+        const d = full(p);
+        if (!existsSync(d) || !statSync(d).isDirectory()) return void a.say(`${d} is not a folder`, red);
+        if (d === resolve(a.cwd) || d.startsWith(resolve(a.cwd) + sep)) return void a.say(`${d} is inside the project already`, dim);
+        a.allowDir(d, true); return void a.say(`${green("✓")} the agent may use files in ${cyan(d)} (saved for this project; /dirs remove to undo)`, dim);
+      }
+      const d = p ? full(p) : await a.pick("Remove which folder?", a.allowedDirs().map((x) => ({ label: x, value: x, hint: a.savedDirs.includes(x) ? "saved" : "this session" })));
+      if (!d) return;
+      a.say(a.removeDir(d) ? `${d} removed: the agent asks again before using it` : `${d} was not on the list`, dim);
     } },
     { name: "connect", alias: "keys", help: "add, replace or remove API keys for several providers and see which are connected", run: async (a) => {
       for (;;) {

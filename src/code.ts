@@ -62,19 +62,34 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
   return new Promise((res) => execFile(inv.file, inv.args, { cwd, env: childEnv(process.env, !!wrapped), timeout: ms, maxBuffer: 10 << 20, signal, windowsHide: true }, (err: any, out, errOut) => res(done(err, out, errOut))));
 }
 
+/** A file tool wants a path outside the project: the file or folder, the folder access would cover, and whether it would change something there. */
+export type OutsideRequest = { path: string; dir: string; write: boolean };
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
-export function codeTools(cwd: string, o: { /** called before a command that may change files runs (snapshots, irreversibility notes) */ beforeShell?: (cmd: string) => Promise<void>; /** OS sandbox for shell commands, read each time so it can be switched live */ sandbox?: () => SandboxMode; /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: (paths: string[]) => Promise<string> } = {}): Tool[] {
+export function codeTools(cwd: string, o: { /** called before a command that may change files runs (snapshots, irreversibility notes) */ beforeShell?: (cmd: string) => Promise<void>; /** OS sandbox for shell commands, read each time so it can be switched live */ sandbox?: () => SandboxMode; /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: (paths: string[]) => Promise<string>;
+  /** Folders outside the project the file tools may use too, read each time (the user allowed them) */ dirs?: () => string[];
+  /** Asked before a file tool uses a path outside the project and every allowed folder; true lets it (the caller adds `dir` to `dirs`). Without it such paths are refused. */ outside?: (req: OutsideRequest) => Promise<boolean> } = {}): Tool[] {
   const mode = o.mode;
   const mutating = mode ? { risky: () => (mode() === "default" ? "modify a file" : false), when: () => mode() !== "plan" } : {};
   const root = resolve(cwd);
   const shRisk = ({ cmd }: { cmd: string }): string | false => (!mode ? riskOf(cmd) : mode() === "yolo" ? false : riskOf(cmd) || (READONLY_CMD.test(cmd) ? false : "run a shell command"));
   const readSet = new Set<string>();
   const patchText = (a: { patch?: string; file?: string }): string => { if (a.patch) return a.patch; if (!a.file) throw new Error("give `patch` or `file`"); return readFileSync(abs(a.file), "utf8"); };
+  const inside = (a: string) => [root, ...(o.dirs?.() ?? []).map((d) => resolve(d))].some((r) => a === r || a.startsWith(r.endsWith(sep) ? r : r + sep));
   const abs = (p: string) => {
     const a = resolve(root, p);
-    if (a !== root && !a.startsWith(root + sep)) throw new Error(`path escapes the workspace: ${p}`);
+    if (!inside(a)) throw new Error(`path escapes the workspace: ${p}`);
     return a;
   };
+  /** Before a file tool runs: a path outside the project and the allowed folders is asked about (once per folder, see `outside`), or refused. */
+  const reach = (write: boolean, paths: (a: any) => (string | undefined)[]) => async (a: any) => {
+    for (const p of paths(a)) {
+      if (!p) continue;
+      const full = resolve(root, p); if (inside(full) || !o.outside) continue;   // without `outside`, abs() refuses it as before
+      const dir = existsSync(full) && statSync(full).isDirectory() ? full : dirname(full);
+      if (!(await o.outside({ path: full, dir, write }))) throw new Error(`the user did not allow access to ${dir}, which is outside the project. Do not try other paths there; work inside the project or ask the user`);
+    }
+  };
+  const patchPaths = (a: { patch?: string; file?: string }) => { try { return [a.file, ...parsePatch(patchText(a)).map((op) => op.path)]; } catch { return [a.file]; } };
   const mustRead = (p: string) => {
     if (existsSync(abs(p)) && !readSet.has(abs(p))) throw new Error(`read ${p} (read_file or grep) before changing it, so your edit is based on its real contents`);
   };
@@ -97,10 +112,10 @@ export function codeTools(cwd: string, o: { /** called before a command that may
   };
 
   return [
-    defineTool<{ path?: string }>({ name: "list_files", description: "List files in the workspace (skips node_modules, .git, dist). Max 300.",
+    defineTool<{ path?: string }>({ name: "list_files", gate: reach(false, (a) => [a.path]), description: "List files in the workspace (skips node_modules, .git, dist). Max 300.",
       schema: { type: "object", properties: { path: { type: "string" } } }, readOnly: true, cacheable: true,
       run: ({ path }) => path && !existsSync(abs(path)) ? `ERROR: ${path} does not exist.${suggest(path)}` : walk(abs(path ?? "."), []).join("\n") || "(empty)" }),
-    defineTool<{ path: string; start?: number; end?: number }>({ name: "read_file", description: "Read a file with line numbers (optionally lines start..end).",
+    defineTool<{ path: string; start?: number; end?: number }>({ name: "read_file", gate: reach(false, (a) => [a.path]), description: "Read a file with line numbers (optionally lines start..end).",
       schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, start: { type: "integer" }, end: { type: "integer" } } }, readOnly: true, cacheable: true, overlap: true,
       stamp: ({ path }) => { try { const s = statSync(abs(path)); return `${s.size}:${s.mtimeMs}`; } catch { return "missing"; } },
       run: ({ path, start, end }) => {
@@ -108,14 +123,14 @@ export function codeTools(cwd: string, o: { /** called before a command that may
         const all = readFileSync(a, "utf8").split("\n"); if (all.at(-1) === "") all.pop();            // a trailing newline is not an extra empty line
         return all.slice((start ?? 1) - 1, end).map((l, i) => `${(start ?? 1) + i}\t${l}`).join("\n") + (o.guidance?.nested(path) ?? "");
       } }),
-    defineTool<{ pattern: string; path?: string }>({ name: "grep", description: "Recursive regex search (file:line:text). Counts as having read matching files.",
+    defineTool<{ pattern: string; path?: string }>({ name: "grep", gate: reach(false, (a) => [a.path]), description: "Recursive regex search (file:line:text). Counts as having read matching files.",
       schema: { type: "object", required: ["pattern"], properties: { pattern: { type: "string" }, path: { type: "string" } } }, readOnly: true, cacheable: true,
       run: ({ pattern, path }) => path && !existsSync(abs(path)) ? `ERROR: ${path} does not exist, so nothing was searched.${suggest(path)}` : new Promise<string>((res) => execFile("grep", ["-rnIE", "-m", "20", ...[...IGNORE].map((d) => `--exclude-dir=${d}`), "-e", pattern, path ?? "."],
         { cwd: root, maxBuffer: 10 << 20 }, (_e, out) => {
           for (const l of out.split("\n")) { const f = l.split(":")[0]; if (f) { try { readSet.add(abs(f)); } catch { /* outside */ } } }
           res(out.split("\n").slice(0, 100).join("\n") || "no matches");
         })) }),
-    defineTool<{ path: string; content: string }>({ name: "write_file", description: "Create a file, or fully overwrite one you have already read.",
+    defineTool<{ path: string; content: string }>({ name: "write_file", gate: reach(true, (a) => [a.path]), description: "Create a file, or fully overwrite one you have already read.",
       schema: { type: "object", required: ["path", "content"], properties: { path: { type: "string" }, content: { type: "string" } } }, ...mutating,
       preview: ({ path, content }) => unifiedDiff(path, existsSync(abs(path)) ? readFileSync(abs(path), "utf8") : null, content).diff,
       run: async ({ path, content }, ctx) => {
@@ -125,7 +140,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
         ctx.emit?.({ kind: "edit", ...unifiedDiff(path, before, content), before: before === null || before.length < 500_000 ? before : undefined });
         return `wrote ${content.length} chars to ${path}` + (await o.check?.([path]) ?? "") + (o.guidance?.nested(path) ?? "");
       } }),
-    defineTool<{ path: string; old?: string; new?: string; edits?: { old: string; new: string }[] }>({ name: "edit_file", short: "Replace unique text `old` with `new` in a file you read, or pass `edits` (a list of old/new) for several.", description: "Replace exact, unique text in a file you have read. Give `old` and `new`, or an `edits` list of several replacements applied in order (all or nothing). If the text differs only in indentation it is still matched when unique. Shows the result.",
+    defineTool<{ path: string; old?: string; new?: string; edits?: { old: string; new: string }[] }>({ name: "edit_file", gate: reach(true, (a) => [a.path]), short: "Replace unique text `old` with `new` in a file you read, or pass `edits` (a list of old/new) for several.", description: "Replace exact, unique text in a file you have read. Give `old` and `new`, or an `edits` list of several replacements applied in order (all or nothing). If the text differs only in indentation it is still matched when unique. Shows the result.",
       schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, old: { type: "string" }, new: { type: "string" }, edits: { type: "array", items: { type: "object", required: ["old", "new"], properties: { old: { type: "string" }, new: { type: "string" } } } } } }, ...mutating,
       preview: ({ path, old, new: nw, edits }) => { const s = readFileSync(abs(path), "utf8"), r = replaceMany(s, edits?.length ? edits : old !== undefined && nw !== undefined ? [{ old, new: nw }] : []); return "error" in r ? undefined : unifiedDiff(path, s, r.out).diff; },
       run: async ({ path, old, new: nw, edits }, ctx) => {
@@ -139,7 +154,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
         const first = list[0], at = r.out.indexOf(first.new.split("\n")[0] ?? ""), line = at >= 0 ? r.out.slice(0, at).split("\n").length : 1;
         return `edited ${path}${list.length > 1 ? ` (${list.length} edits)` : ""}${r.fuzzy ? `; ${r.fuzzy} matched ignoring indentation` : ""}:\n` + r.out.split("\n").slice(Math.max(0, line - 3), line + first.new.split("\n").length + 2).map((l, i) => `${Math.max(1, line - 2) + i}\t${l}`).join("\n") + (await o.check?.([path]) ?? "") + (o.guidance?.nested(path) ?? "");
       } }),
-    defineTool<{ patch?: string; file?: string }>({ name: "apply_patch", description: "Change several files at once with a patch, all or nothing. Format: `*** Begin Patch`, then per file `*** Update File: path` (hunks start with `@@`, lines begin with space, `-` or `+`), `*** Add File: path` (all lines start with `+`) or `*** Delete File: path`, then `*** End Patch`. A unified diff also works. Existing files must have been read first. Instead of `patch` you can pass `file`: a patch file inside the workspace (a subagent's saved result).",
+    defineTool<{ patch?: string; file?: string }>({ name: "apply_patch", gate: reach(true, patchPaths), description: "Change several files at once with a patch, all or nothing. Format: `*** Begin Patch`, then per file `*** Update File: path` (hunks start with `@@`, lines begin with space, `-` or `+`), `*** Add File: path` (all lines start with `+`) or `*** Delete File: path`, then `*** End Patch`. A unified diff also works. Existing files must have been read first. Instead of `patch` you can pass `file`: a patch file inside the workspace (a subagent's saved result).",
       schema: { type: "object", properties: { patch: { type: "string" }, file: { type: "string" } } }, ...mutating,
       preview: (a) => { try { const patch = patchText(a); const r = applyOps(parsePatch(patch), (p) => (existsSync(abs(p)) ? readFileSync(abs(p), "utf8") : undefined)); return r.errors.length ? undefined : r.applied.map((x) => unifiedDiff(x.path, x.before, x.after ?? "").diff).join("\n"); } catch { return undefined; } },
       run: async (a, ctx) => {
@@ -257,6 +272,9 @@ export type CodeAgentOptions = {
   guidance?: boolean;
   /** Called before a command that may change files runs: take a snapshot, note that it cannot be undone. */
   beforeShell?: (cmd: string) => Promise<void>;
+  /** Folders outside the project the file tools may use too (read each time), and the question to ask before using any other outside path. Without `outside`, outside paths are refused. Subagents get both. */
+  dirs?: () => string[];
+  outside?: (req: OutsideRequest) => Promise<boolean>;
   /** Mask secrets in tool output before the model sees it (default on). */
   redact?: boolean;
   /** Commands that contain text copied from untrusted tool results (web pages, MCP servers): "ask" (default), "deny" or "off". */
@@ -353,7 +371,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const shellCheck = o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined;
   const postEdit = shellCheck || lsp ? async (paths: string[]) => (await shellCheck?.() ?? "") + (await lsp?.report(paths) ?? "") : undefined;
   const wrap = o.wrapTools ?? ((t: Tool[]) => t);
-  const registry = new Registry(wrap([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: postEdit }), ...(backend ? memoryTools(backend) : []), ...(o.tools ?? [])]));
+  const registry = new Registry(wrap([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: postEdit, dirs: o.dirs, outside: o.outside }), ...(backend ? memoryTools(backend) : []), ...(o.tools ?? [])]));
   const shown = new Set<string>();   // memory notes already in this conversation
   const rescanIndex = () => { if (codeIndex && !registry.get("repo_map") && codeIndex.list().length >= indexMin) registry.add(...indexTools(codeIndex)); };
   rescan(); rescanIndex();
@@ -396,14 +414,14 @@ export function createCodeAgent(o: CodeAgentOptions) {
           if (unknown) o.onEvent?.({ kind: "nudge", detail: `no agent named "${unknown}"; used the read-only explorer` });
           const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name, parent: ctx.callId } as unknown as Event);
           if (!d) {
-            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan" }), maxSteps: 14, contextBudget: 120_000, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan", dirs: o.dirs, outside: o.outside }), maxSteps: 14, contextBudget: 120_000, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
             const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";
             return note + clip(r.text || "(the explorer returned nothing)", 8000);                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
           }
           const names = plan ? d.tools.filter((t) => !WRITE_TOOLS.has(t)) : d.tools, isolated = d.isolation === "worktree" && isWriter(d) && !plan;
           let wt: Worktree | undefined; if (isolated) { if (!(await isRepo(o.cwd))) return "ERROR: isolation: worktree needs a git repository with at least one commit"; wt = await createWorktree(o.cwd); }
           try {
-            const base = codeTools(wt?.dir ?? o.cwd, { mode: plan ? () => "plan" : (mode ?? (() => "default")), sandbox: sandboxMode }).filter((t) => names.includes(t.name));
+            const base = codeTools(wt?.dir ?? o.cwd, { mode: plan ? () => "plan" : (mode ?? (() => "default")), sandbox: sandboxMode, dirs: o.dirs, outside: o.outside }).filter((t) => names.includes(t.name));
             if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList, onSkillLoad));
             const r = await createHarness({
               model: (d.model && o.agentModels?.[d.model]) || o.model, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,

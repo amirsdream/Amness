@@ -24,7 +24,7 @@ const GROUP_MEMBERS: Record<string, string> = {};
 for (const [g, names] of Object.entries({
   Conversation: "output clear compact resume rename edit branch branches export import undo rewind copy todos exit",
   "Model & keys": "model provider connect effort api models router keepwarm budget tokens cache plans",
-  Safety: "mode plan permissions policy sandbox approver hooks",
+  Safety: "mode plan permissions dirs policy sandbox approver hooks",
   Quality: "verify check review reviewer lsp report loop diff harness",
   Project: "init pr tools procs shell status live",
   Extend: "memory mcp skills agents plugins reload-plugins prompt strategy profile",

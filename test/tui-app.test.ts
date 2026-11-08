@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KEY, call, gate, plain, rig, say, sleep } from "./helpers/apprig.ts";
 
@@ -355,6 +356,20 @@ test("/connect saves a key for a local provider too (a server started with an AP
     await t.type("ollama-token"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Ollama (local) connected")));
     assert.equal((await import("../cli/config.ts")).keyFor("ollama").key, "ollama-token");
   } finally { if (saved) process.env.OPENAI_API_KEY = saved; await t.key(KEY.esc); await t.key(KEY.ctrlD); }
+});
+
+test("a file outside the project: Amness asks first (folder, path, why); yes lets it read; /dirs lists the folder and /dirs remove takes it off", async () => {
+  const lib = mkdtempSync(join(tmpdir(), "amness-lib-")); writeFileSync(join(lib, "x.ts"), "export const x = 'from lib';\n");
+  const t = rig([call("read_file", { path: join(lib, "x.ts") }), say("read it")]); await t.start();
+  try {
+  await t.submit("read the lib"); assert.ok(await t.until(() => t.has("Outside this project")));
+  const scr = plain(t.screen()); assert.match(scr, /Amness wants to read\s[\s\S]*x\.ts/); assert.match(scr, /Allow Amness to use files in/); assert.match(scr, /Yes, and always for this project/);
+  await t.key("2"); assert.ok(await t.until(() => t.has("read it") && t.idle()));
+  assert.match(t.seen[1].msgs.filter((m) => m.role === "tool").at(-1)!.content!, /from lib/);
+  await t.submit("/dirs"); assert.ok(await t.until(() => t.has("Folders outside this project")));
+  assert.ok(t.app.allowedDirs().includes(lib));
+  await t.submit(`/dirs remove ${lib}`); assert.ok(await t.until(() => !t.app.allowedDirs().length && t.has("removed")));   // the long temp path wraps the message
+  } finally { await t.key(KEY.esc); await t.key(KEY.ctrlD); }
 });
 
 test("# saves a memory note; ! runs a shell command now and feeds its output to the next turn", async () => {

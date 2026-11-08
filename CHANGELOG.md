@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Allow a folder outside the project, as in Claude Code.** Before, the file tools refused any path outside the project. Now Amness asks first (terminal and desktop): **Yes, for this session**, **Yes, and always for this project** or **No**. One yes covers the whole folder. `/dirs` lists, adds (`/dirs add <path>`, or `/add-dir <path>`) and removes allowed folders. `amness run --add-dir <path>` does the same for a headless run. Folders allowed for good are saved in `~/.amness/state.json`, never in the project, so a cloned repository cannot grant itself access. Edits there still ask first in Ask mode. See [Safety](docs/safety.md#allow-a-folder-outside-the-project).
+
 ## 0.3.4 (2026-11-08)
 
 - **The conversation list no longer reorders when you open a conversation.** Opening another conversation saved the one you left and moved it to the top, although nothing in it changed. Now a conversation moves only when its messages change; opening it, leaving it, renaming it or changing a setting keeps its place. This applies to the desktop list and to `/resume` in the terminal.

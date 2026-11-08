@@ -1,9 +1,9 @@
 // The chat TUI: one persistent conversation with a live input box, streaming output, permission prompts and slash commands.
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath, sep } from "node:path";
 import { onRateLimitWait } from "../model.ts";
-import { STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
+import { type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { PROVIDERS, home, keyFor, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
@@ -98,7 +98,7 @@ export class App {
   done: Promise<number>; private resolveDone!: (n: number) => void;
 
   constructor(o: AppOptions) {
-    this.opts = o; this.cfg = o.cfg; this.cwd = o.cwd; this.snaps = new Snapshots(o.cwd); this.version = o.version; this.persist = o.persist ?? true;
+    this.opts = o; this.cfg = o.cfg; this.cwd = o.cwd; this.snaps = new Snapshots(o.cwd); this.version = o.version; this.persist = o.persist ?? true; this.savedDirs = this.persist ? loadState().dirs?.[o.cwd] ?? [] : [];
     this.io = { input: o.input ?? process.stdin, output: o.output ?? (process.stdout as any) };
     this.ui = o.ui ?? "inline"; this.remote = o.remote; this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.cwd);
     if (this.ui === "full") this.full = new FullView(this);
@@ -140,7 +140,7 @@ export class App {
     }
     this.agent = createCodeAgent({
       model: this.model, modelById: (id) => make({ ...this.cfg, model: id }), cwd: this.cwd, chat: true, plans: this.cfg.plans || undefined, contextWindow: () => windowFor(this.cfg), onWindow: (w) => { rememberWindow(this.cfg, w); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`, [dim(`  context window learned: ${w.toLocaleString()} tokens`)]); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
     if (!windowFor(this.cfg)) void detectWindow({ provider: this.cfg.provider, baseUrl: this.cfg.baseUrl, apiKey: this.cfg.apiKey, model: this.cfg.model }).then((w) => { if (w && !windowFor(this.cfg)) { rememberWindow(this.cfg, w); this.notify("info", `context window detected: ${w.toLocaleString()} tokens`, [dim(`  context window detected: ${w.toLocaleString()} tokens`)]); } });   // a local server states it
@@ -857,6 +857,36 @@ export class App {
     if (!r.untrusted || !fp || !this.persist) return;
     const ok = await this.pick(`This project has ${r.untrusted.count} plugin file${r.untrusted.count === 1 ? "" : "s"} (.amness/plugins). A plugin is code that runs with your permissions and can change what the agent does. Trust this version of the files?\n${describeProjectPlugins(this.cwd).map((l) => "  " + l).join("\n")}\n(a text scan, not a guarantee: read them first)`, [{ label: "Yes, trust this version", value: "y" }, { label: "No, run without them", value: "n" }]);
     if (ok === "y") { const st = loadState(); st.pluginTrust = { ...(st.pluginTrust ?? {}), [this.cwd]: fp }; saveState(st); await this.loadPluginsNow(); }
+  }
+  /** Folders outside this project the file tools may use: allowed for good (state.json, per project, so a cloned repo cannot grant itself access) or for this session. */
+  savedDirs: string[] = []; sessionDirs: string[] = [];
+  allowedDirs = (): string[] => [...this.savedDirs, ...this.sessionDirs];
+  private dirAsks: Promise<unknown> = Promise.resolve();
+  /** A file tool wants a path outside the project: ask once per folder. Questions wait for each other (subagents ask too), and a folder allowed meanwhile is not asked about again. */
+  askOutside(req: OutsideRequest): Promise<boolean> {
+    const ask = this.dirAsks.then(async () => {
+      if (this.allowedDirs().some((d) => req.path === d || req.path.startsWith(d.endsWith(sep) ? d : d + sep))) return true;
+      const title = "Outside this project", question = `Allow Amness to use files in ${req.dir}?`;
+      const body = [`Amness wants to ${req.write ? "change" : "read"} ${bold(req.path)}`, dim(`That is outside ${this.cwd}.`), "", `Allowing gives the file tools access to ${req.dir} and everything in it.`, dim("Edits there still ask first in Ask mode. Remove a folder with /dirs.")];
+      const options = [{ label: "Yes, for this session" }, { label: "Yes, and always for this project", hint: "saved" }, { label: "No", hint: "esc" }];
+      this.ensureTimer(); this.notifyAway("Amness needs your approval", question);
+      const idx = await new Promise<number | undefined>((res) => { this.overlay = new ChoiceOverlay(title, body, question, options, res, yellow); this.render(); });
+      this.overlay = null; this.render();
+      if (idx !== 0 && idx !== 1) return false;
+      this.allowDir(req.dir, idx === 1); return true;
+    });
+    this.dirAsks = ask.catch(() => {}); return ask;
+  }
+  /** Let the file tools use `dir` too: for good (saved for this project) or for this session. */
+  allowDir(dir: string, always: boolean) {
+    if (always && this.persist) { const st = loadState(), list = [...new Set([...(st.dirs?.[this.cwd] ?? []), dir])]; st.dirs = { ...(st.dirs ?? {}), [this.cwd]: list }; saveState(st); this.savedDirs = list; }
+    else if (!this.sessionDirs.includes(dir)) this.sessionDirs.push(dir);
+  }
+  /** Take `dir` off both lists. Returns whether it was on one. */
+  removeDir(dir: string): boolean {
+    const had = this.allowedDirs().includes(dir); this.sessionDirs = this.sessionDirs.filter((d) => d !== dir);
+    if (this.savedDirs.includes(dir)) { const st = loadState(), list = (st.dirs?.[this.cwd] ?? []).filter((d) => d !== dir); st.dirs = { ...(st.dirs ?? {}), [this.cwd]: list }; if (!list.length) delete st.dirs[this.cwd]; saveState(st); this.savedDirs = list; }
+    return had;
   }
   private async askHookTrust() {
     const { fp, trusted } = this.loadHooks();

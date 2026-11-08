@@ -37,6 +37,8 @@ export function argOptions(a: App, cmd: string, words: string[]): ArgResult {
       : words.length === 1 ? modelOptions(a, [{ value: "off", detail: "use the main model" }]) : ok([]);
     case "harness": return first ? ok(opts(["on", "switch a guard on"], ["off", "switch a guard off"], ["steps", "step limit"], ["stagnation", "no-progress limit"], ["budget", "context budget in characters"], ["rewrites", "cost-aware rewrites on or off"], ["reset", "back to the defaults"]).map((o) => ({ ...o, more: o.value !== "reset" })))
       : words.length === 1 && (words[0] === "on" || words[0] === "off") ? ok(GUARDS.map((g) => ({ value: g.name, detail: g.label }))) : words.length === 1 && words[0] === "rewrites" ? ok(opts(["on", ""], ["off", ""])) : ok([]);
+    case "dirs": return first ? ok(opts(["add", "allow a folder outside the project (saved)"], ["remove", "take one off the list"], ["list", "show the allowed folders"]).map((o) => ({ ...o, more: o.value !== "list" })))
+      : words.length === 1 && (words[0] === "remove" || words[0] === "rm") ? ok(a.allowedDirs().map((d) => ({ value: d, detail: a.savedDirs.includes(d) ? "saved" : "this session" }))) : ok([]);
     case "todos": return first ? ok(opts(["edit", "change the agent's checklist"])) : ok([]);
     case "theme": return first ? ok(themeNames().map((n) => ({ value: n, detail: THEMES[n].label }))) : ok([]);
     case "shell": return first ? ok(SHELL_CHOICES.map((n) => ({ value: n, detail: n === "auto" ? "detect from your system" : undefined }))) : ok([]);

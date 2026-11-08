@@ -39,6 +39,8 @@ export type Tool<A = any> = {
   risky?: boolean | ((args: A) => boolean | string);
   /** Human-readable preview of what this call will do (a diff, a command), shown in the approval prompt. */
   preview?: (args: A) => string | undefined;
+  /** Runs before the approval prompt and the call, in the same queue as approvals; throwing refuses the call with that message. The file tools ask here for access to a folder outside the project. */
+  gate?: (args: A) => Promise<void>;
   /** Never changes anything (safe in plan mode, safe to run in a read-only subagent). */
   readOnly?: boolean;
   /** Its output comes from outside (the web, an MCP server): it is wrapped as untrusted data, and commands that copy text from it need approval. */
@@ -607,6 +609,10 @@ export function createHarness(o: Options) {
         if (taint) emit({ kind: "policy", tool: name, action: o.taint === "deny" ? "deny" : "ask", reason: `contains text copied from ${taint} (untrusted)` });
         else if (perm && perm.action !== "none") emit({ kind: "policy", tool: name, action: perm.action, reason: perm.reason ?? (perm.rule ? `matched your rule ${perm.rule}` : "permission rule") });
         if (perm?.action === "deny") { emit({ kind: "denied", detail: `${name}: ${perm.reason ?? "denied by a rule"}` }); return `DENIED: ${perm.reason ?? "denied by a permission rule"}. Do not retry this; choose a safer alternative, or finish and explain what you could not do.`; }
+        if (t!.gate) {
+          const g = approvals.then(() => t!.gate!(args)); approvals = g.catch(() => {});
+          try { await g; } catch (e) { const m = (e as Error).message; emit({ kind: "denied", detail: `${name}: ${m}` }); return `DENIED: ${m}`; }
+        }
         const base = typeof t!.risky === "function" ? t!.risky(args) : t!.risky;
         const risk = taint ? `contains text copied from ${taint}, an untrusted source (a web page or a tool server could be trying to steer you)` : perm?.action === "ask" ? (perm.floor && typeof base === "string" ? base : perm.reason ?? "requires approval") : perm?.action === "allow" ? false : base;
         if (risk) {
