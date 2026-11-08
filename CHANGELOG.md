@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 (2026-11-08)
 
 - **Desktop: tooltips.** Hovering a button, a menu item (model menu, project menu), a panel tile or a section header shows what it does, its shortcut as a key chip (`⌘K` on a Mac, `Ctrl+K` elsewhere) and the command it runs. One styled tooltip replaces the slow system one: it appears after a short pause, at once when you move to the next button, beside the item in menus, stays put while the panel redraws, and shows on keyboard focus too.
 - **Desktop: the context chart shows each request.** Hover a bar in the panel's Context chart for that request: tokens sent and the share of the window, cached tokens, tokens received and reasoning, the cost estimate, which step or subagent sent it, and when. The cached part of each bar is drawn lighter. Each request is now kept in the conversation (`usage.requests`).
