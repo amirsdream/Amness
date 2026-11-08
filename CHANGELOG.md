@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-11-08)
 
 - **Allow a folder outside the project, as in Claude Code.** Before, the file tools refused any path outside the project. Now Amness asks first (terminal and desktop): **Yes, for this session**, **Yes, and always for this project** or **No**. One yes covers the whole folder. `/dirs` lists, adds (`/dirs add <path>`, or `/add-dir <path>`) and removes allowed folders. `amness run --add-dir <path>` does the same for a headless run. Folders allowed for good are saved in `~/.amness/state.json`, never in the project, so a cloned repository cannot grant itself access. Edits there still ask first in Ask mode. See [Safety](docs/safety.md#allow-a-folder-outside-the-project).
 
