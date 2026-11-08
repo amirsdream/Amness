@@ -189,6 +189,21 @@ Press `Shift+Tab` or run `/mode`.
 
 Headless runs (`amness run`) deny risky commands unless you pass `--yes`. Do not use `--yes` on code you do not trust.
 
+### Trust a folder before Amness works in it
+
+**What it is.** The first time you start Amness in a folder, it asks **Do you trust the files in this folder?**, as Claude Code does. Nothing runs until you answer, not even a task you gave on the command line.
+
+**Why it matters.** The agent reads, changes and runs the files in the folder. Files from someone else can contain instructions that make the agent do things you did not intend.
+
+**How it works.**
+
+1. Choose **Yes, I trust this folder** to continue. Amness saves your answer in `~/.amness/state.json` and does not ask again. Folders inside a trusted folder are trusted too.
+2. Choose **No, exit** (or `Esc`) to stop. The terminal app exits with code 3. In the desktop app, **No** goes back to the project you had open; for the first project it closes the window.
+3. If the folder is your home folder, Amness warns you and suggests opening a project folder instead.
+4. A headless run (`amness run`) does not ask: you chose the folder with `--cwd`.
+
+**Limits.** To take back your trust, remove the folder from `trustedDirs` in `~/.amness/state.json`. Trusting a folder does not trust its `.amness/` hooks, plugins or permission rules. Amness asks about those separately, as described next. Tested: `test/tui-app.test.ts` and `test/desktop.test.ts`.
+
 ### Approve project files on purpose
 
 A cloned repository can contain `.amness/hooks.json`, `.amness/plugins/` and `allow` rules. These run code or remove prompts. Amness does not use them until you approve the exact files.

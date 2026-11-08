@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { KEY, call, gate, plain, rig, say, sleep } from "./helpers/apprig.ts";
 
 const count = (hay: string, needle: string) => hay.split(needle).length - 1;
@@ -370,6 +370,34 @@ test("a file outside the project: Amness asks first (folder, path, why); yes let
   assert.ok(t.app.allowedDirs().includes(lib));
   await t.submit(`/dirs remove ${lib}`); assert.ok(await t.until(() => !t.app.allowedDirs().length && t.has("removed")));   // the long temp path wraps the message
   } finally { await t.key(KEY.esc); await t.key(KEY.ctrlD); }
+});
+
+test("a new folder: Amness asks whether you trust it before anything runs; yes is saved and covers folders inside it", async () => {
+  const t = rig([say("on it")], { persist: true, untrusted: true, prompt: "start working" }); await t.start();
+  try {
+    assert.ok(await t.until(() => t.has("Do you trust the files in this folder?")));
+    assert.match(plain(t.screen()), /Yes, I trust this folder[\s\S]*No, exit/);
+    assert.equal(t.seen.length, 0);                                                    // the task given at start waits for the answer
+    await t.key("1"); assert.ok(await t.until(() => t.has("on it") && t.idle()));
+    const { loadState } = await import("../cli/state.ts"), trusted = loadState().trustedDirs ?? [];
+    assert.ok(trusted.some((d) => t.dir === d || t.dir.startsWith(d)), JSON.stringify(trusted));
+  } finally { await t.key(KEY.ctrlD); }
+});
+
+test("a folder inside a trusted folder is not asked about", async () => {
+  const t = rig([say("straight in")], { persist: true, untrusted: true });
+  const { loadState, saveState } = await import("../cli/state.ts"), st = loadState(); st.trustedDirs = [dirname(t.dir)]; saveState(st);   // the parent, trusted earlier
+  await t.start();
+  try { await t.submit("hi"); assert.ok(await t.until(() => t.has("straight in") && t.idle())); assert.ok(!t.has("Do you trust")); }
+  finally { await t.key(KEY.ctrlD); }
+});
+
+test("a folder you do not trust: No exits (code 3) without running anything or saving trust", async () => {
+  const t = rig([say("should not run")], { persist: true, untrusted: true, prompt: "start working" }); const done = t.app.done; await t.start();
+  assert.ok(await t.until(() => t.has("Do you trust the files in this folder?")));
+  await t.key(KEY.esc);
+  assert.equal(await done, 3); assert.equal(t.seen.length, 0);
+  assert.deepEqual((await import("../cli/state.ts")).loadState().trustedDirs ?? [], []);
 });
 
 test("# saves a memory note; ! runs a shell command now and feeds its output to the next turn", async () => {

@@ -8,7 +8,7 @@ import { PROVIDERS, ready, saveConfig, windowFor, type Config } from "../config.
 import { SHELL_CHOICES, STRATEGIES, effortsFor } from "../../src/index.ts";
 import { strip } from "../ui.ts";
 import { loadState, saveState } from "../state.ts";
-import { App } from "../tui/app.ts";
+import { App, NOT_TRUSTED } from "../tui/app.ts";
 import type { Block } from "../tui/blocks.ts";
 import { groupOf } from "../tui/complete.ts";
 import { ChoiceOverlay, InputOverlay, LongTextOverlay, PickerOverlay, TextOverlay } from "../tui/overlays.ts";
@@ -63,6 +63,7 @@ export class DesktopBridge {
 
   /** Run an App for `cwd`. A project switch ends the previous one (its conversation is saved). */
   private open(cwd: string) {
+    const back = this.app ? this.cwd : undefined;                                   // a switch the user declines (an untrusted folder) goes back here
     if (this.app) { this.switching = true; this.app.exit(0); this.switching = false; }
     const io = nullIo();
     const app = new App({ cfg: this.o.cfg, cwd, version: this.o.version, ui: "remote", persist: this.o.persist, makeModel: this.o.makeModel, input: io.input, output: io.output as never,
@@ -70,7 +71,11 @@ export class DesktopBridge {
     const onEvent = app.onEvent.bind(app);
     app.onEvent = (e) => { onEvent(e); if (e.kind === "edit") this.emit({ type: "fileChanged", path: e.path, diff: e.diff, created: e.created }); };
     this.app = app; this.cwd = cwd; this.panel = newPanelState(); this.sent.clear(); this.sentCount = 0; this.dialogOf = undefined;
-    void app.done.then(() => { if (!this.switching && this.app === app) this.emit({ type: "exit" }); });
+    void app.done.then((code) => {
+      if (this.switching || this.app !== app) return;
+      if (code === NOT_TRUSTED && back) { this.emit({ type: "toast", level: "warn", text: `not opened: you did not trust ${cwd}` }); this.open(back); this.fullSync(); this.changed(); return; }
+      this.emit({ type: "exit" });
+    });
     void app.start().catch(() => {});
     const startMode = this.o.cfg.desktop?.defaultMode;                              // Preferences: the mode a new window starts in
     if (startMode === "acceptEdits" || startMode === "plan") app.setMode(startMode);

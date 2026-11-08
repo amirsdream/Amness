@@ -10,13 +10,13 @@ import { electronBinary } from "../cli/desktop.ts";
 import { call, say, sleep } from "./helpers/apprig.ts";
 
 /** A desktop server over a temp project with a scripted model, plus a reader for its event stream. */
-async function boot(replies: Message[], files: Record<string, string> = { "a.txt": "one\ntwo\n" }, o: { cfg?: Record<string, unknown>; realModel?: boolean } = {}) {
+async function boot(replies: Message[], files: Record<string, string> = { "a.txt": "one\ntwo\n" }, o: { cfg?: Record<string, unknown>; realModel?: boolean; persist?: boolean } = {}) {
   process.env.AMNESS_HOME = mkdtempSync(join(tmpdir(), "amness-home-"));
   const dir = mkdtempSync(join(tmpdir(), "amness-desk-"));
   for (const [f, c] of Object.entries(files)) writeFileSync(join(dir, f), c);
   const queue = [...replies];
   const model: Model = async (_m, _s, o) => { const r = queue.shift() ?? say("(done)"); if (r.content && o?.onText) o.onText(r.content); return r; };
-  const srv = await startDesktopServer({ cfg: { provider: "custom", baseUrl: "http://x/v1", model: "test-model", maxTokens: 100000, ...o.cfg } as any, cwd: dir, version: "0.0.0", persist: false, makeModel: o.realModel ? undefined : () => model });
+  const srv = await startDesktopServer({ cfg: { provider: "custom", baseUrl: "http://x/v1", model: "test-model", maxTokens: 100000, ...o.cfg } as any, cwd: dir, version: "0.0.0", persist: o.persist ?? false, makeModel: o.realModel ? undefined : () => model });
   await sleep(50);
   const base = srv.url.split("/#")[0], events: any[] = [], ctrl = new AbortController();
   const es = await fetch(`${base}/events?t=${srv.token}`, { signal: ctrl.signal });
@@ -243,5 +243,21 @@ test("desktop: a file outside the project asks in the window first; Yes reads it
     await d.api("/api/dialog", { id: ask.id, value: 0 });
     assert.ok(await d.until(() => JSON.stringify(d.events).includes("Read both."), 8000));
     assert.equal(d.events.filter((e) => e.type === "dialog" && /Outside this project/.test(JSON.stringify(e.dialog))).length, 1);   // y.ts is in the same folder
+  } finally { await d.close(); }
+});
+
+test("desktop: a new folder asks whether you trust it; No while switching projects goes back to the project you had open", async () => {
+  const d = await boot([], undefined, { persist: true });
+  try {
+    const first = await dialogOf(d, "choice", /Do you trust the files in this folder/);
+    assert.deepEqual(first.options.map((x: any) => x.label), ["Yes, I trust this folder", "No"]);
+    await d.api("/api/dialog", { id: first.id, value: 0 });
+    const other = mkdtempSync(join(tmpdir(), "amness-other-"));
+    await d.api("/api/project", { dir: other });
+    const ask = await dialogOf(d, "choice", new RegExp(`${other.split(/[\\/]/).pop()}[\\s\\S]*Do you trust`));
+    await d.api("/api/dialog", { id: ask.id, value: 1 });
+    assert.ok(await d.until(() => d.events.some((e) => e.type === "toast" && /not opened: you did not trust/.test(e.text))));
+    assert.ok(await d.until(() => !d.events.some((e) => e.type === "exit")));
+    assert.equal((await d.api("/api/state")).json.cwd, d.dir);                          // back in the first project, window still open
   } finally { await d.close(); }
 });

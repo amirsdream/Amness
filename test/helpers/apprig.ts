@@ -18,10 +18,11 @@ export const gate = () => { let open!: () => void; const p = new Promise<void>((
 
 export const KEY = { enter: "\r", esc: "\x1b", tab: "\t", backtab: "\x1b[Z", up: "\x1b[A", down: "\x1b[B", left: "\x1b[D", right: "\x1b[C", ctrlC: "\x03", ctrlD: "\x04", ctrlO: "\x0f", altEnter: "\x1b\r", bs: "\x7f" };
 
-export function rig(replies: Reply[], o: { files?: Record<string, string>; cols?: number; rows?: number; resume?: string; prompt?: string; ui?: "full" | "inline"; theme?: string; name?: string; model?: string; cfg?: Record<string, unknown>; keepWarmMs?: number } = {}) {
+export function rig(replies: Reply[], o: { files?: Record<string, string>; cols?: number; rows?: number; resume?: string; prompt?: string; ui?: "full" | "inline"; theme?: string; name?: string; model?: string; cfg?: Record<string, unknown>; keepWarmMs?: number; /** save for real (into the temp project and the temp AMNESS_HOME) */ persist?: boolean; /** do not mark the temp project as trusted, so a saving App asks the folder-trust question */ untrusted?: boolean } = {}) {
   const dir = o.name ? join(mkdtempSync(join(tmpdir(), "amness-app-")), o.name) : mkdtempSync(join(tmpdir(), "amness-app-"));
   mkdirSync(dir, { recursive: true });
   process.env.AMNESS_HOME = mkdtempSync(join(tmpdir(), "amness-home-"));
+  if (!o.untrusted) writeFileSync(join(process.env.AMNESS_HOME, "state.json"), JSON.stringify({ verifyByDir: {}, tasks: [], trustedDirs: [dir] }));   // a test that saves must not stop at the folder-trust question
   for (const [f, c] of Object.entries(o.files ?? { "README.md": "# Demo\nhello\n", "a.txt": "one\ntwo\n" })) { mkdirSync(join(dir, f, ".."), { recursive: true }); writeFileSync(join(dir, f), c); }
   const cols = o.cols ?? 80, rows = o.rows ?? 30, vt = new VTerm(cols, rows);
   const input: any = Object.assign(new EventEmitter(), { setRawMode() {}, setEncoding() {}, resume() {}, pause() {} });
@@ -35,7 +36,7 @@ export function rig(replies: Reply[], o: { files?: Record<string, string>; cols?
     if (typeof r !== "function" && m.content && opts?.onText) { for (const part of m.content.match(/.{1,12}/gs) ?? []) { opts.onText(part); await sleep(1); } }
     return m;
   };
-  const app = new App({ ui: o.ui, cfg: { provider: "custom", baseUrl: "http://x/v1", model: o.model ?? "test-model", maxTokens: 100000, theme: o.theme, ...o.cfg } as any, cwd: dir, keepWarmMs: o.keepWarmMs, version: "0.0.0", input, output, makeModel: () => model, persist: false, resume: o.resume, prompt: o.prompt });
+  const app = new App({ ui: o.ui, cfg: { provider: "custom", baseUrl: "http://x/v1", model: o.model ?? "test-model", maxTokens: 100000, theme: o.theme, ...o.cfg } as any, cwd: dir, keepWarmMs: o.keepWarmMs, version: "0.0.0", input, output, makeModel: () => model, persist: o.persist ?? false, resume: o.resume, prompt: o.prompt });
   const t = {
     dir, vt, app, seen, input,
     start: async () => { void app.start(); await sleep(40); },

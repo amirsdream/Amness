@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { startDesktopServer } from "../../cli/desktop/server.ts";
 import { electronBinary } from "../../cli/desktop.ts";
+import { loadState, saveState } from "../../cli/state.ts";
 import type { Message, Model } from "../../src/index.ts";
 // Drives the real desktop window (Electron) with a scripted model and checks that it works the way a person uses it: typing, clicking, dialogs, panels.
 // Needs a screen, so it is not part of `npm test`: run `npm run test:desktop-ui` (exits 1 when a check fails). Optional arguments: a check script, a screenshot path.
@@ -22,7 +23,8 @@ const replies: Message[] = [
   { role: "assistant", content: "Fixed the off-by-one in `src/paginate.ts:4`. Each page now has `size` items and the last page has no `undefined` rows.", usage: u },
 ];
 const model: Model = async (_m, _s, o) => { await new Promise((x) => setTimeout(x, 120)); const r = replies.shift() ?? { role: "assistant", content: "ok", usage: u }; if (r.content && o?.onThinking) o.onThinking("Looking at the loop bounds in paginate…"); if (r.content && o?.onText) o.onText(r.content); return r; };
-if (process.argv.includes("--chats")) {                                         // saved conversations from several days, for the conversation list
+if (process.argv.includes("--chats")) {
+  saveState({ ...loadState(), trustedDirs: [dir] });                                // it saves for real, so the folder-trust question would come first                                         // saved conversations from several days, for the conversation list
   const chats = join(dir, ".amness", "chats"); mkdirSync(chats, { recursive: true });
   const H = 3600_000, now = Date.now();
   const mk = (title: string, agoMs: number, turns: number, said: [string, string]) => { const id = `c${Math.random().toString(36).slice(2, 9)}`;

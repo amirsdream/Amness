@@ -2,6 +2,7 @@
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath, sep } from "node:path";
+import { homedir } from "node:os";
 import { onRateLimitWait } from "../model.ts";
 import { type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
@@ -60,6 +61,9 @@ const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").repla
 const one = (s: string, n: number) => { const l = s.replace(/\s+/g, " ").trim(); return cellWidth(l) > n ? clipWidth(l, n - 1) + "…" : l; };
 
 export type TraceStep = { n: number; t0: number; ms: number; prompt: number; completion: number; cached?: number; parallel?: number; tools: { name: string; args: string; ms: number; ok: boolean }[]; notes: string[] };
+/** The exit code when the user does not trust the folder (the desktop app then goes back to the previous project). */
+export const NOT_TRUSTED = 3;
+
 export class App {
   cfg: Config; cwd: string; version: string; persist: boolean;
   io: { input: any; output: Out & { on?: (e: string, f: () => void) => void } };
@@ -164,7 +168,6 @@ export class App {
       output.on?.("resize", () => { this.full?.invalidate(); this.render(); });
       process.once("exit", this.restore);
     }
-    void this.askHookTrust();
     this.files.ensure().catch(() => {});
     this.refreshBranch();
     let resumed: string | undefined;
@@ -176,6 +179,8 @@ export class App {
     this.setTitle(`Amness · ${basename(this.cwd)}`);
     if (resumed && !this.structured) this.replay();
     this.render();
+    if (!(await this.trustFolder())) { this.exit(NOT_TRUSTED); return this.done; }   // before hooks, plugins or a task given on the command line
+    void this.askHookTrust();
     if (this.opts.prompt) void this.dispatch(this.opts.prompt);
     return this.done;
   }
@@ -857,6 +862,22 @@ export class App {
     if (!r.untrusted || !fp || !this.persist) return;
     const ok = await this.pick(`This project has ${r.untrusted.count} plugin file${r.untrusted.count === 1 ? "" : "s"} (.amness/plugins). A plugin is code that runs with your permissions and can change what the agent does. Trust this version of the files?\n${describeProjectPlugins(this.cwd).map((l) => "  " + l).join("\n")}\n(a text scan, not a guarantee: read them first)`, [{ label: "Yes, trust this version", value: "y" }, { label: "No, run without them", value: "n" }]);
     if (ok === "y") { const st = loadState(); st.pluginTrust = { ...(st.pluginTrust ?? {}), [this.cwd]: fp }; saveState(st); await this.loadPluginsNow(); }
+  }
+  /** The first time Amness opens a folder, ask whether you trust it (as Claude Code does): the agent reads, changes and runs what is there, and a stranger's files can carry instructions.
+   * A yes is saved in state.json and covers the folders inside it. Without saving (tests, --no-persist) nothing is asked. */
+  async trustFolder(): Promise<boolean> {
+    if (!this.persist) return true;
+    const st = loadState(), here = resolvePath(this.cwd);
+    if ((st.trustedDirs ?? []).some((d) => here === d || here.startsWith(d.endsWith(sep) ? d : d + sep))) return true;
+    const home = here === resolvePath(homedir());
+    const body = [bold(here), "", "Amness will read, change and run files here to do what you ask.", "Files from someone else can contain instructions that make the agent do things you did not intend.",
+      ...(home ? ["", yellow("This is your home folder. Open a project folder instead if you can.")] : []), "", dim("Only continue if you wrote these files or trust where they came from. Folders inside it are trusted too."), dim("Project hooks, plugins and permission rules (.amness/) are still asked about separately.")];
+    this.notifyAway("Amness needs your approval", "Do you trust the files in this folder?");
+    const idx = await new Promise<number | undefined>((res) => { this.overlay = new ChoiceOverlay("New folder", body, "Do you trust the files in this folder?", [{ label: "Yes, I trust this folder" }, { label: this.ui === "remote" ? "No" : "No, exit", hint: "esc" }], res, home ? yellow : undefined); this.render(); });
+    this.overlay = null; this.render();
+    if (idx !== 0) return false;
+    const now = loadState(); now.trustedDirs = [...new Set([...(now.trustedDirs ?? []), here])]; saveState(now);
+    return true;
   }
   /** Folders outside this project the file tools may use: allowed for good (state.json, per project, so a cloned repo cannot grant itself access) or for this session. */
   savedDirs: string[] = []; sessionDirs: string[] = [];

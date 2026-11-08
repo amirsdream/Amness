@@ -121,7 +121,7 @@ class Term:
     def __init__(self, args, mock, cwd=None, proj=None, model="m"):
         self.home = tempfile.mkdtemp()
         cwd = cwd or tempfile.mkdtemp()            # never run an agent inside the repo under test
-        json.dump({"lastDir": proj or cwd, "verifyByDir": {}, "tasks": ["an old task"]}, open(os.path.join(self.home, "state.json"), "w"))
+        json.dump({"lastDir": proj or cwd, "verifyByDir": {}, "tasks": ["an old task"], "trustedDirs": sorted({tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())})}, open(os.path.join(self.home, "state.json"), "w"))   # every test folder is in the temp folder: trusted, so the folder-trust question does not come first
         json.dump({"provider": "custom", "baseUrl": mock.url, "model": model, "maxTokens": 100000}, open(os.path.join(self.home, "config.json"), "w"))
         env = dict(os.environ, AMNESS_HOME=self.home, TERM="xterm-256color", AMNESS_UI=os.environ.get("AMNESS_UI", "inline")); env.pop("NO_COLOR", None); env.pop("OPENAI_API_KEY", None)
         self.pid, self.fd = pty.fork()

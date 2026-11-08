@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { home } from "./config.ts";
 
-export type State = { lastDir?: string; /** folders outside each project the user allowed for good: project directory -> folders (see /dirs) */ dirs?: Record<string, string[]>; verifyByDir: Record<string, string>; tasks: string[]; /** project hooks the user approved: directory -> fingerprint of the hooks.json that was approved */ hookTrust?: Record<string, string>; /** project plugins the user approved: directory -> fingerprint of the plugin files */ pluginTrust?: Record<string, string> };
+export type State = { lastDir?: string; /** folders the user said they trust when Amness first opened them; a folder inside one is trusted too */ trustedDirs?: string[]; /** folders outside each project the user allowed for good: project directory -> folders (see /dirs) */ dirs?: Record<string, string[]>; verifyByDir: Record<string, string>; tasks: string[]; /** project hooks the user approved: directory -> fingerprint of the hooks.json that was approved */ hookTrust?: Record<string, string>; /** project plugins the user approved: directory -> fingerprint of the plugin files */ pluginTrust?: Record<string, string> };
 const file = () => join(home(), "state.json");
 
 export function loadState(): State {
