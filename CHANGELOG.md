@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 (2026-11-08)
 
-- **A key for a local server:** Ollama and custom OpenAI-compatible servers can now have an API key or token, for a server that checks one (vLLM `--api-key`, LM Studio with authentication, a proxy). `/provider` asks for it after the base URL (Enter skips), `/connect` adds, replaces or removes it, the first setup asks too, and a 401 from the server asks for a key and sends the message again. The key is optional (Enter skips it) and works the same in the desktop app. With no key, requests now carry no `Authorization` header instead of an empty `Bearer`. Before, `/connect` said a local provider "needs no key" and the only way was `OPENAI_API_KEY`.
+- **A key for a local server:** Ollama and custom OpenAI-compatible servers can now have an API key or token, for a server that checks one (vLLM `--api-key`, `llama-server --api-key`, llama.cpp behind nginx, LM Studio with authentication). `/provider` asks for it after the base URL (Enter skips), `/connect` adds, replaces or removes it, the first setup asks too, and a 401 from the server asks for a key and sends the message again. The key is optional (Enter skips it) and works the same in the desktop app. With no key, requests now carry no `Authorization` header instead of an empty `Bearer`. Before, `/connect` said a local provider "needs no key" and the only way was `OPENAI_API_KEY`.
 
 ## 0.3.1 (2026-11-08)
 
