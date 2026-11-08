@@ -23,7 +23,7 @@
         <button data-mode="plan" title="Read and plan only; no changes">Plan</button>
         <button data-mode="yolo" title="Everything runs without asking (the safety floor still applies)">Yolo</button>
       </div>
-      <button id="modelBtn" class="model-chip" title="Model and provider"><span class="model-dot"></span><span id="modelName">…</span><span class="caret">▾</span></button>
+      <button id="modelBtn" class="model-chip" data-tip="Model and provider"><span class="model-dot"></span><span id="modelName">…</span><span class="caret">▾</span></button>
       <button id="paletteBtn" class="icon-btn" title="All commands (Ctrl/⌘ K)" aria-label="Commands">⌘</button>
       <button id="expandBtn" class="icon-btn" title="Expand all tool output and thinking (Ctrl/⌘ E)" aria-label="Expand all">⇕</button>
       <button id="newBtn" class="icon-btn" title="New conversation (Ctrl/⌘ N)" aria-label="New conversation">✎</button>
@@ -33,8 +33,8 @@
 
     <aside class="sidebar" id="sidebar">
       <div class="tabs" role="tablist">
-        <button data-tab="chats" class="on" role="tab">Chats</button>
-        <button data-tab="files" role="tab">Files</button>
+        <button data-tab="chats" class="on" role="tab" title="Your conversations in this project">Chats</button>
+        <button data-tab="files" role="tab" title="The project's files. Click one to view it (Ctrl/⌘ P)">Files</button>
       </div>
       <div class="tab-body" id="chatsTab">
         <div class="search"><input id="sessionSearch" type="search" placeholder="Search conversations" autocomplete="off"></div>
@@ -59,10 +59,10 @@
           <div id="blocks"></div>
         </div>
       </div>
-      <button id="jumpBottom" class="jump hidden">↓ Jump to latest</button>
+      <button id="jumpBottom" class="jump hidden" title="Scroll to the newest message">↓ Jump to latest</button>
       <div class="composer-wrap">
         <div class="status hidden" id="status">
-          <div class="status-row"><span class="spinner"></span><span id="statusText" class="status-text">Working…</span><span class="spacer"></span><button id="stopBtn" class="btn small danger">Stop</button></div>
+          <div class="status-row"><span class="spinner"></span><span id="statusText" class="status-text">Working…</span><span class="spacer"></span><button id="stopBtn" class="btn small danger" title="Stop the agent safely after the current step (Esc)">Stop</button></div>
           <div id="statusQueue"></div>
         </div>
         <div class="composer" id="composer">
@@ -84,8 +84,8 @@
         <span class="muted small" id="viewerMeta"></span>
         <span class="spacer"></span>
         <button id="viewerMention" class="btn small" title="Mention this file in your message">@ Mention</button>
-        <button id="viewerEditor" class="btn small">Open in editor</button>
-        <button id="viewerClose" class="icon-btn" aria-label="Close file">✕</button>
+        <button id="viewerEditor" class="btn small" title="Open this file in your own editor">Open in editor</button>
+        <button id="viewerClose" class="icon-btn" aria-label="Close file" title="Close the file view">✕</button>
       </header>
       <div class="code-view" id="viewerCode"></div>
     </section>

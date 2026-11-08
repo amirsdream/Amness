@@ -46,7 +46,7 @@ export function sidebarData(app: App, st: PanelState, t: Theme, now: number): Si
   return {
     title: app.session.title, model: app.cfg.model, provider: app.cfg.provider, api: app.model.api?.(), branch: app.branch, cwd: shortPath(app.cwd), mode: app.mode, effort: app.cfg.effort,
     skills: (app.agent.allSkills ?? []).map((s) => ({ name: s.name, uses: app.skillsUsed.get(s.name) ?? 0, off: app.agent.skillState.isOff(s.name) })),
-    pluginStatus: app.pluginStatus(), budget: { used: Math.round(app.budget.effective), max: app.budget.maxTokens }, ctxPct: app.ctxPct, ctxUsed: app.lastPrompt, ctxMax: win, series: u.series ?? [], map: st.ctxCache.map,
+    pluginStatus: app.pluginStatus(), budget: { used: Math.round(app.budget.effective), max: app.budget.maxTokens }, ctxPct: app.ctxPct, ctxUsed: app.lastPrompt, ctxMax: win, series: u.series ?? [], requests: (u.requests ?? []).map((r) => ({ ...r, cost: estimateCost(app.cfg.model, r.prompt, r.completion, r.cached) })), map: st.ctxCache.map,
     usage: { prompt: u.prompt, completion: u.completion, calls: u.calls, cached: u.cached ?? 0, reasoning: u.reasoning ?? 0 }, cost: estimateCost(app.cfg.model, u.prompt, u.completion, u.cached ?? 0),
     todos: app.todos, changes: [...changes.values()].reverse(), tools: app.agent.registry.visible({ step: 0, messages: [] }).length, mcp: app.mcp.length, memory: app.memory?.list().length ?? 0,
     sandbox: app.cfg.sandbox,

@@ -547,3 +547,18 @@ img.empty-logo { width: 56px; height: 56px; display: inline-block; filter: drop-
 .edit-row .muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 textarea.long-edit { width: 100%; min-height: 46vh; resize: vertical; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--border2); background: var(--bg2); color: var(--text); outline: none; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; }
 textarea.long-edit:focus { border-color: var(--accent); }
+
+/* tooltips (see tipEl in app.js) */
+.tip { position: fixed; z-index: 70; max-width: 300px; padding: 6px 9px; border-radius: 8px; background: var(--surface3); border: 1px solid var(--border2); color: var(--text); box-shadow: var(--shadow); font-size: 12px; line-height: 1.4; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .1s; }
+.tip.on { opacity: 1; visibility: visible; }
+.tip-head { display: flex; align-items: center; gap: 8px; }
+.tip-head.strong span:first-child { font-weight: 600; }
+.tip-head .kbd { margin-left: auto; flex: none; }
+.tip-line { color: var(--muted); margin-top: 2px; }
+
+/* the context chart: a bar per request, the cached part lighter; the hover area is the full height */
+.spark.reqs .hit { fill: transparent; }
+.spark.reqs .bar { fill: var(--accent2); opacity: .75; }
+.spark.reqs .bar.cached { opacity: .35; }
+.spark.reqs g:hover .bar { opacity: 1; fill: var(--accent); }
+.spark.reqs g:hover .bar.cached { opacity: .55; }

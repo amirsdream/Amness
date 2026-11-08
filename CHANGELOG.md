@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Desktop: tooltips.** Hovering a button, a menu item (model menu, project menu), a panel tile or a section header shows what it does, its shortcut as a key chip (`⌘K` on a Mac, `Ctrl+K` elsewhere) and the command it runs. One styled tooltip replaces the slow system one: it appears after a short pause, at once when you move to the next button, beside the item in menus, stays put while the panel redraws, and shows on keyboard focus too.
+- **Desktop: the context chart shows each request.** Hover a bar in the panel's Context chart for that request: tokens sent and the share of the window, cached tokens, tokens received and reasoning, the cost estimate, which step or subagent sent it, and when. The cached part of each bar is drawn lighter. Each request is now kept in the conversation (`usage.requests`).
+- **Desktop: the panel no longer blinks while Amness works.** It updates only what changed instead of redrawing everything, so hovering the agent loop is steady. Loop lines no longer have their own tooltip.
+
 ## 0.3.2 (2026-11-08)
 
 - **A key for a local server:** Ollama and custom OpenAI-compatible servers can now have an API key or token, for a server that checks one (vLLM `--api-key`, `llama-server --api-key`, llama.cpp behind nginx, LM Studio with authentication). `/provider` asks for it after the base URL (Enter skips), `/connect` adds, replaces or removes it, the first setup asks too, and a 401 from the server asks for a key and sends the message again. The key is optional (Enter skips it) and works the same in the desktop app. With no key, requests now carry no `Authorization` header instead of an empty `Bearer`. Before, `/connect` said a local provider "needs no key" and the only way was `OPENAI_API_KEY`.

@@ -4,11 +4,13 @@ import { dirname, join, resolve, sep } from "node:path";
 import type { Message } from "../../src/index.ts";
 import type { Snapshots } from "../../src/index.ts";
 
+/** One model request: its tokens, which step and agent sent it, and when. */
+export type RequestUsage = { prompt: number; completion: number; cached: number; reasoning: number; /** 1 = the turn's first step, as in the loop panel */ step: number; agent?: string; at: number };
 export type Turn = { /** shell commands that may have changed files this turn: a working-tree snapshot taken before the first one, and the ones undo cannot take back */ shell?: { tree?: string; cmds: string[]; irreversible: string[] }; at: number; text: string; t: number; /** path -> content before this turn's first edit (null = file did not exist) */ snaps: Record<string, string | null> };
 export type SessionData = {
   /** set on a branch: the conversation it was forked from and the turn it was forked after */ parent?: { id: string; turn: number };
   id: string; created: string; updated: string; title: string; cwd: string; model: string;
-  messages: Message[]; turns: Turn[]; usage: { prompt: number; completion: number; calls: number; /** prompt tokens of each request, newest last */ series?: number[]; /** prompt tokens served from the provider cache / output tokens spent reasoning */ cached?: number; reasoning?: number };
+  messages: Message[]; turns: Turn[]; usage: { prompt: number; completion: number; calls: number; /** prompt tokens of each request, newest last */ series?: number[]; /** each request in detail, newest last (the desktop chart shows it on hover) */ requests?: RequestUsage[]; /** prompt tokens served from the provider cache / output tokens spent reasoning */ cached?: number; reasoning?: number };
 };
 export type SessionInfo = { id: string; title: string; updated: string; turns: number; model: string };
 
@@ -82,7 +84,7 @@ export async function rewindFull(s: SessionData, cwd: string, idx: number, snaps
 /** A new conversation that continues from the end of turn `idx` (0-based) of `s`. The original is untouched. */
 export function forkSession(s: SessionData, idx: number): SessionData {
   const keep = s.turns.slice(0, idx + 1), end = s.turns[idx + 1]?.at ?? s.messages.length, f = newSession(s.cwd, s.model);
-  return { ...f, title: (s.title || "(untitled)").replace(/ \(branch \d+\)$/, "") + ` (branch ${Math.random().toString(36).slice(2, 5)})`, messages: JSON.parse(JSON.stringify(s.messages.slice(0, end))), turns: JSON.parse(JSON.stringify(keep)), usage: { ...s.usage, series: [...(s.usage.series ?? [])] }, parent: { id: s.id, turn: idx } };
+  return { ...f, title: (s.title || "(untitled)").replace(/ \(branch \d+\)$/, "") + ` (branch ${Math.random().toString(36).slice(2, 5)})`, messages: JSON.parse(JSON.stringify(s.messages.slice(0, end))), turns: JSON.parse(JSON.stringify(keep)), usage: { ...s.usage, series: [...(s.usage.series ?? [])], requests: [...(s.usage.requests ?? [])] }, parent: { id: s.id, turn: idx } };
 }
 /** Every conversation connected to `id` by branching (its ancestors, descendants and siblings), `id` itself included. */
 export function relatives(all: Pick<SessionData, "id" | "parent">[], id: string): string[] {

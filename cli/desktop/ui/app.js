@@ -27,7 +27,7 @@ function h(tag, props, ...kids) {
     if (k === "class") el.className = v;
     else if (k === "text") el.textContent = v;
     else if (k === "style") el.style.cssText = v;                                   // through CSSOM: the CSP forbids style attributes
-    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k.startsWith("on")) { el.addEventListener(k.slice(2), v); el._on = true; }   // patch() never reuses an element with handlers: they may hold old data
     else if (k === "dataset") Object.assign(el.dataset, v);
     else el.setAttribute(k, v === true ? "" : String(v));
   }
@@ -50,6 +50,40 @@ function spark(values, w = 120, hgt = 22) {
   const v = values.slice(-Math.floor(w / 4)), mx = Math.max(1, ...v), bw = w / Math.max(1, v.length);
   v.forEach((x, i) => { const r = document.createElementNS(SVGNS, "rect"), hh = Math.max(1, (x / mx) * (hgt - 2)); r.setAttribute("x", (i * bw).toFixed(1)); r.setAttribute("y", (hgt - hh).toFixed(1)); r.setAttribute("width", Math.max(1, bw - 1).toFixed(1)); r.setAttribute("height", hh.toFixed(1)); svg.append(r); });
   return svg;
+}
+/** The context chart: one bar per request (the cached part lighter), each with a hover area the height of the chart and a tooltip with that request's tokens and cost. */
+function requestChart(reqs, ctxMax, w = 248, hgt = 26) {
+  const svg = document.createElementNS(SVGNS, "svg"); svg.setAttribute("width", w); svg.setAttribute("height", hgt); svg.setAttribute("class", "spark reqs");
+  const v = reqs.slice(-Math.floor(w / 4)), first = reqs.length - v.length, mx = Math.max(1, ...v.map((r) => r.prompt)), bw = w / Math.max(1, v.length);
+  const rect = (cls, x, y, wd, ht) => { const r = document.createElementNS(SVGNS, "rect"); r.setAttribute("class", cls); r.setAttribute("x", x.toFixed(1)); r.setAttribute("y", y.toFixed(1)); r.setAttribute("width", wd.toFixed(1)); r.setAttribute("height", ht.toFixed(1)); return r; };
+  v.forEach((r, i) => {
+    const g = document.createElementNS(SVGNS, "g"), x = i * bw, bh = Math.max(1, (r.prompt / mx) * (hgt - 2)), ch = r.prompt ? bh * Math.min(1, r.cached / r.prompt) : 0;
+    const pc = (a, b) => (!b ? 0 : a && a / b < 0.01 ? "<1" : Math.round((a / b) * 100));
+    g.dataset.tip = [`Request ${first + i + 1} · ${r.agent ? `${r.agent} agent` : `step ${r.step}`}`,
+      `Sent ${fmtTokens(r.prompt)} tokens${ctxMax ? ` · ${pc(r.prompt, ctxMax)}% of the window` : ""}`,
+      `Cached ${fmtTokens(r.cached)} (${pc(r.cached, r.prompt)}%)`,
+      `Received ${fmtTokens(r.completion)}${r.reasoning ? ` · reasoning ${fmtTokens(r.reasoning)}` : ""}`,
+      `${r.cost != null ? `≈ ${fmtCost(r.cost)} · ` : ""}${ago(new Date(r.at).toISOString())}`].join("\n");
+    g.append(rect("hit", x, 0, bw, hgt), rect("bar", x, hgt - bh, Math.max(1, bw - 1), bh - ch), ...(ch ? [rect("bar cached", x, hgt - ch, Math.max(1, bw - 1), ch)] : []));
+    svg.append(g);
+  });
+  return svg;
+}
+/** Put `kids` into `parent`, keeping every node that did not change, so the element under the pointer (its hover and its tooltip) survives a redraw.
+ * An element with handlers is kept only when it is equal, since its handlers may hold old data. A title becomes data-tip first (see the tooltips), so redraws never bring the system tooltip back. */
+function patch(parent, kids) {
+  for (const k of kids) if (k.nodeType === 1) for (const el of [k, ...k.querySelectorAll("[title]")]) { const t = el.getAttribute("title"); if (t !== null) { el.removeAttribute("title"); if (t) el.dataset.tip = t; } }
+  const old = [...parent.childNodes];
+  for (const o of old.slice(kids.length)) o.remove();                              // a list that grew or shrank keeps its matching start: a new loop step does not redraw the others
+  kids.forEach((n, i) => {
+    const o = old[i]; if (!o) { parent.append(n); return; }
+    if (o.isEqualNode(n)) return;
+    if (o.nodeType === 3 && n.nodeType === 3) { o.nodeValue = n.nodeValue; return; }
+    if (o.nodeType !== 1 || n.nodeType !== 1 || o.tagName !== n.tagName || o._on || n._on) { o.replaceWith(n); return; }
+    for (const a of [...o.attributes]) if (!n.hasAttribute(a.name)) o.removeAttribute(a.name);
+    for (const a of [...n.attributes]) if (o.getAttribute(a.name) !== a.value) { if (a.name === "style") o.style.cssText = n.style.cssText; else o.setAttribute(a.name, a.value); }   // style through CSSOM: the CSP forbids style attributes
+    patch(o, [...n.childNodes]);
+  });
 }
 /** A theme colour from the App (0xRRGGBB, or 0x1000000 + a 256-colour index) as CSS. */
 function themeColor(c) { if (c === undefined || c < 0) return ""; if (c >= 0x1000000) return pal256(c - 0x1000000); return "#" + c.toString(16).padStart(6, "0"); }
@@ -467,7 +501,7 @@ function applyState(prev) {
   const s = state;
   $("projectName").textContent = s.project; $("emptyProject").textContent = s.cwd;
   $("sessionTitle").textContent = s.session.title || "New conversation";
-  $("modelName").textContent = s.model; $("modelBtn").title = `${s.providerLabel} · ${s.model}${sd.effort ? ` · effort ${sd.effort}` : ""}`;
+  $("modelName").textContent = s.model; $("modelBtn").dataset.tip = `${s.providerLabel} · ${s.model}${sd.effort ? ` · effort ${sd.effort}` : ""}\nChange the model, provider, keys or effort`;
   document.querySelector(".model-dot").classList.toggle("off", !s.ready);
   for (const b of $("modeSwitch").children) b.classList.toggle("on", b.dataset.mode === s.mode);
   document.title = `${s.session.title ? s.session.title + " · " : ""}${s.project} · Amness`;
@@ -496,24 +530,33 @@ setInterval(() => { updateStatus(); }, 500);
 // Sections fold; what you fold is remembered. The most used numbers sit in tiles at the top; the rest is one line each.
 const FOLDED_BY_DEFAULT = new Set(["Session", "Workspace", "Project", "Skills", "Background", "Plugins"]);
 const folded = (title) => pref("fold:" + title, FOLDED_BY_DEFAULT.has(title));
+const SEC_TIPS = {
+  "Agent loop": "Each step of the run happening now: the model call, its tools and what the guards did. Click a step to open it in the chat",
+  "Last run": "The steps of the last run. Click a step to open it in the chat",
+  Todos: "The agent's checklist for this task",
+  Changes: "Files changed in this conversation. Click one to open it",
+  Context: "What fills the model's context window, by kind",
+  Session: "The model and settings this conversation uses",
+  Background: "Commands the agent left running, such as a dev server",
+};
 function sec(title, right, ...kids) {
   const f = folded(title);
   return h("section", { class: `psec${f ? " folded" : ""}` },
-    h("button", { class: "psec-head", "aria-expanded": String(!f), onclick: () => { setPref("fold:" + title, !f); renderPanel(); } },
+    h("button", { class: "psec-head", title: SEC_TIPS[title] ? `${SEC_TIPS[title]}\nClick to ${f ? "show" : "fold"}` : undefined, "aria-expanded": String(!f), onclick: () => { setPref("fold:" + title, !f); renderPanel(); } },
       h("span", { class: "chev" }), h("span", { class: "t", text: title }), right ? h("span", { class: "r" }, right) : null),
     f ? null : h("div", { class: "psec-body" }, kids));
 }
 function kv(pairs) { return h("div", { class: "kv" }, pairs.filter(Boolean).flatMap(([k, v]) => [h("span", { class: "k", text: k }), h("span", { class: "v" }, v)])); }
-const tile = (label, value, sub, cls = "") => h("div", { class: `tile ${cls}` }, h("div", { class: "tv" }, value), h("div", { class: "tl2", text: label }), sub ? h("div", { class: "ts", text: sub }) : null);
+const tile = (label, value, sub, cls = "", tip) => h("div", { class: `tile ${cls}`, title: tip }, h("div", { class: "tv" }, value), h("div", { class: "tl2", text: label }), sub ? h("div", { class: "ts", text: sub }) : null);
 function renderPanel() {
   const d = sd, s = state; if (!d) return;
   const out = [], u = d.usage, pct = d.ctxPct ?? 0, cachePct = u.prompt ? Math.round((u.cached / u.prompt) * 100) : 0;
   const b = d.budget && Number.isFinite(d.budget.max) && d.budget.used > 0 ? Math.min(100, Math.round((d.budget.used / d.budget.max) * 100)) : null;
   out.push(h("div", { class: "tiles" },
-    tile("context", h("span", {}, `${pct}`, h("small", { text: "%" })), `${fmtTokens(d.ctxUsed)} / ${fmtTokens(d.ctxMax)}`, pct > 85 ? "err" : pct > 60 ? "warn" : ""),
-    tile("cost", fmtCost(d.cost).replace(/^\$/, "$"), d.lastTurnCost != null ? `last turn ${fmtCost(d.lastTurnCost)}` : "this conversation"),
-    tile("tokens", fmtTokens(u.prompt + u.completion), `${fmtTokens(u.prompt)} in · ${fmtTokens(u.completion)} out`),
-    tile("cache", h("span", {}, `${cachePct}`, h("small", { text: "%" })), b !== null ? `budget ${b}%` : `${u.calls} request${u.calls === 1 ? "" : "s"}`, cachePct >= 60 ? "ok" : "")));
+    tile("context", h("span", {}, `${pct}`, h("small", { text: "%" })), `${fmtTokens(d.ctxUsed)} / ${fmtTokens(d.ctxMax)}`, pct > 85 ? "err" : pct > 60 ? "warn" : "", "Context window\nHow full the model's window is now. Near the top, Amness shortens old tool output and then writes a handoff note"),
+    tile("cost", fmtCost(d.cost).replace(/^\$/, "$"), d.lastTurnCost != null ? `last turn ${fmtCost(d.lastTurnCost)}` : "this conversation", "", "Cost\nAn estimate for this conversation from list prices, subagents included. Your bill can differ"),
+    tile("tokens", fmtTokens(u.prompt + u.completion), `${fmtTokens(u.prompt)} in · ${fmtTokens(u.completion)} out`, "", "Tokens\nAll tokens sent (in) and received (out) in this conversation"),
+    tile("cache", h("span", {}, `${cachePct}`, h("small", { text: "%" })), b !== null ? `budget ${b}%` : `${u.calls} request${u.calls === 1 ? "" : "s"}`, cachePct >= 60 ? "ok" : "", "Prompt cache\nThe share of sent tokens the provider read from its cache. Cached tokens are cheaper and faster")));
   if (s.loop) out.push(sec(s.loop.title === "LOOP" ? "Agent loop" : "Last run", ansi(s.loop.right), h("div", { class: "loop" }, s.loop.lines.map((l, i) => {
     const hit = s.loop.hits.find((x) => x.line === i);
     return h(hit ? "button" : "div", { class: `tl${hit ? " step" : ""}`, onclick: hit ? () => api("/api/step", { n: hit.step }) : undefined }, ansi(l));
@@ -522,8 +565,8 @@ function renderPanel() {
     h("div", { class: "row-btns" }, h("button", { class: "btn xs", title: "Change, reorder, add or remove items; Amness follows your list", onclick: () => run("/todos edit") }, "Edit list…")))); }
   out.push(sec("Changes", d.changes.length ? String(d.changes.length) : "", ...(d.changes.length ? d.changes.map((c) => h("button", { class: "change", title: c.path, onclick: () => openFile(c.path) }, h("span", { class: "p" }, h("span", { class: "dir", text: c.path.slice(0, c.path.length - c.path.split("/").pop().length) }), c.path.split("/").pop()), c.created ? h("span", { class: "new", text: "new" }) : null, h("span", { class: "ad", text: `+${c.added}` }), h("span", { class: "rm", text: `−${c.removed}` })))
     : [h("div", { class: "empty-note", text: "No files changed yet." })]),
-    h("div", { class: "row-btns" }, h("button", { class: "btn xs", disabled: !s.session.turns || s.running, onclick: () => run("/rewind") }, "Rewind…"), h("button", { class: "btn xs", disabled: !d.changes.length, onclick: () => run("/diff") }, "Diff"), h("button", { class: "btn xs", disabled: s.running || !s.session.turns, onclick: () => run("/undo") }, "Undo turn"))));
-  out.push(sec("Context", d.series?.length > 1 ? `${d.series.length} requests` : "", d.series?.length > 1 ? spark(d.series, 248, 26) : null,
+    h("div", { class: "row-btns" }, h("button", { class: "btn xs", title: "Go back to before an earlier message, files included (/rewind)", disabled: !s.session.turns || s.running, onclick: () => run("/rewind") }, "Rewind…"), h("button", { class: "btn xs", title: "Every change in this conversation as a diff (/diff)", disabled: !d.changes.length, onclick: () => run("/diff") }, "Diff"), h("button", { class: "btn xs", title: "Put back the files the last turn changed (/undo)", disabled: s.running || !s.session.turns, onclick: () => run("/undo") }, "Undo turn"))));
+  out.push(sec("Context", d.series?.length > 1 ? `${d.series.length} requests` : "", d.requests?.length > 1 ? requestChart(d.requests, d.ctxMax) : d.series?.length > 1 ? spark(d.series, 248, 26) : null,
     d.map?.length ? h("div", { class: "ctxbar" }, d.map.filter((m) => m.pct > 0).map((m) => h("span", { title: `${m.label} ${m.pct}%`, style: `width:${m.pct}%;background:${themeColor(m.color)}` }))) : null,
     d.map?.length ? h("div", { class: "ctxmap" }, d.map.filter((m) => m.pct > 0).map((m) => h("div", { class: "cm" }, h("span", { class: "sw", style: `background:${themeColor(m.color)}` }), h("span", { text: m.label }), h("span", { class: "faint", text: `${m.pct}%` })))) : null,
     kv([u.reasoning ? ["reasoning", fmtTokens(u.reasoning)] : null, b !== null ? ["budget", `${b}% of ${fmtTokens(d.budget.max)}`] : null, ["requests", String(u.calls)]])));
@@ -537,7 +580,7 @@ function renderPanel() {
     h("div", { class: "row-btns" }, h("button", { class: "btn xs", onclick: openProjectPicker }, "Open another…"), window.amnessDesktop ? h("button", { class: "btn xs", onclick: () => window.amnessDesktop.reveal(s.cwd) }, "Show in folder") : null)));
   if (d.tip) out.push(h("div", { class: "tip" }, h("b", { text: "Tip · " }), d.tip));
   out.push(h("div", { class: "ver", text: `Amness ${s.version} · ${s.providerLabel}` }));
-  const scroll = $("panel").scrollTop; $("panel").replaceChildren(...out); $("panel").scrollTop = scroll;
+  const scroll = $("panel").scrollTop; patch($("panel"), out); $("panel").scrollTop = scroll;
 }
 
 // ------------------------------------------------------------------ composer: the terminal's own completion for /commands, their arguments and @files
@@ -696,7 +739,55 @@ function popover(anchor, items) {
   function closeIfOut(e) { if (!p.contains(e.target)) { closePopover(); document.removeEventListener("mousedown", closeIfOut); } }
 }
 function closePopover() { document.querySelectorAll(".popover").forEach((p) => p.remove()); }
-const popItem = (text, fn, sub) => h("button", { class: "opt", onclick: () => { closePopover(); fn(); } }, text, sub ? h("span", { class: "faint small", text: "  " + sub }) : null);
+const popItem = (text, fn, sub, tip) => h("button", { class: "opt", title: tip, onclick: () => { closePopover(); fn(); } }, text, sub ? h("span", { class: "faint small", text: "  " + sub }) : null);
+
+// ------------------------------------------------------------------ tooltips
+// One styled tooltip for everything with a `title` (or `data-tip`): quicker than the system one, and a trailing "(Ctrl/⌘ K)" becomes a key chip.
+// The title moves to data-tip on first hover, so the system tooltip does not show as well. Inside menus and the sidebar it opens to the side, not over the next row.
+const tipEl = h("div", { class: "tip", id: "tip", role: "tooltip" });
+let tipFor = null, tipTimer = 0, tipWatch = 0, tipWarmUntil = 0, tipX = 0, tipY = 0, tipShown = "";
+const TIP_SELECTOR = "[title],[data-tip]";
+function tipText(el) {
+  const t = el.getAttribute("title");
+  if (t !== null) { el.removeAttribute("title"); if (t) el.dataset.tip = t; else delete el.dataset.tip; }
+  return el.dataset.tip;
+}
+function showTip(el) {
+  if (!el.isConnected || !el.dataset.tip) return;
+  tipShown = el.dataset.tip;
+  const [head, ...rest] = el.dataset.tip.split("\n"), m = /\s*\(((?:Ctrl|⌘|Shift|Alt|Esc|Enter)[^)]*)\)\s*$/.exec(head);
+  tipEl.replaceChildren(h("div", { class: `tip-head${rest.length ? " strong" : ""}` }, h("span", { text: m ? head.slice(0, m.index) : head }), m ? h("span", { class: "kbd", text: m[1].replace("Ctrl/⌘ ", /Mac/.test(navigator.platform) ? "⌘" : "Ctrl+") }) : null), ...rest.map((l) => h("div", { class: "tip-line", text: l })));
+  if (!tipEl.isConnected) document.body.append(tipEl);
+  // measured at the left edge: a fixed box near the right edge would shrink to fit
+  tipEl.style.cssText = "left:0; top:0"; tipEl.classList.add("on"); el.setAttribute("aria-describedby", "tip");
+  const r = el.getBoundingClientRect(), w = tipEl.offsetWidth, ht = tipEl.offsetHeight, side = el.closest(".popover, .pick-list, .sidebar");
+  let left, top;
+  if (side) { left = r.right + 8; top = r.top + r.height / 2 - ht / 2; if (left + w > innerWidth - 8) left = r.left - w - 8; }
+  else { left = r.left + r.width / 2 - w / 2; top = r.bottom + 7; if (top + ht > innerHeight - 8) top = r.top - ht - 7; }
+  tipEl.style.cssText = `left:${Math.round(Math.max(8, Math.min(left, innerWidth - w - 8)))}px; top:${Math.round(Math.max(8, Math.min(top, innerHeight - ht - 8)))}px`;
+  clearInterval(tipWatch); tipWatch = setInterval(followRedraw, 300);
+}
+/** The panel and the list redraw while you hover: keep the tip on the new copy of the element under the pointer, or hide it. */
+function followRedraw() {
+  if (tipFor?.isConnected) return;
+  const el = document.elementFromPoint(tipX, tipY)?.closest(TIP_SELECTOR);
+  if (el && tipText(el) === tipShown) { tipFor = el; el.setAttribute("aria-describedby", "tip"); }
+  else hideTip();
+}
+function hideTip() {
+  clearTimeout(tipTimer); clearInterval(tipWatch);
+  if (tipEl.classList.contains("on")) tipWarmUntil = Date.now() + 700;             // moving straight to the next button shows its tip at once
+  tipEl.classList.remove("on"); tipFor?.removeAttribute("aria-describedby"); tipFor = null;
+}
+function armTip(el) { hideTip(); if (!el || !tipText(el)) return; tipFor = el; if (Date.now() < tipWarmUntil) showTip(el); else tipTimer = setTimeout(() => showTip(el), 450); }
+document.addEventListener("pointerover", (e) => { tipX = e.clientX; tipY = e.clientY; const el = e.target.closest?.(TIP_SELECTOR); if (el && el !== tipFor) armTip(el); });   // leaving for a part with no tip is the pointerout below
+document.addEventListener("pointermove", (e) => { tipX = e.clientX; tipY = e.clientY; }, { passive: true });
+document.addEventListener("pointerout", (e) => { if (tipFor?.contains(e.target) && !tipFor.contains(e.relatedTarget)) hideTip(); });
+document.addEventListener("focusin", (e) => { const el = e.target.closest?.(TIP_SELECTOR); if (el?.matches(":focus-visible")) armTip(el); });
+document.addEventListener("focusout", (e) => { if (tipFor?.contains(e.target)) hideTip(); });   // only the tip of what lost focus: a redraw moving focus elsewhere must not close a hover tip
+for (const ev of ["pointerdown", "wheel"]) document.addEventListener(ev, () => hideTip(), true);
+document.addEventListener("keydown", (e) => { if (e.key !== "Tab") hideTip(); }, true);
+addEventListener("blur", () => hideTip());
 
 function fuzzy(q, s) {
   if (!q) return -s.length; const l = s.toLowerCase(); let i = 0, score = 0, prev = -2;
@@ -732,7 +823,7 @@ function findBar() {
   let bar = $("findbar");
   if (!bar) {
     const q = h("input", { type: "search", placeholder: "Find in conversation", autofocus: true });
-    bar = h("div", { id: "findbar", class: "findbar" }, q, h("button", { class: "icon-btn", title: "Previous", onclick: () => window.find(q.value, false, true, true) }, "↑"), h("button", { class: "icon-btn", title: "Next", onclick: () => window.find(q.value, false, false, true) }, "↓"), h("button", { class: "icon-btn", onclick: () => bar.remove() }, "✕"));
+    bar = h("div", { id: "findbar", class: "findbar" }, q, h("button", { class: "icon-btn", title: "Previous", onclick: () => window.find(q.value, false, true, true) }, "↑"), h("button", { class: "icon-btn", title: "Next", onclick: () => window.find(q.value, false, false, true) }, "↓"), h("button", { class: "icon-btn", title: "Close (Esc)", "aria-label": "Close find", onclick: () => bar.remove() }, "✕"));
     q.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); window.find(q.value, false, e.shiftKey, true); q.focus(); } else if (e.key === "Escape") bar.remove(); };
     $("main").append(bar);
   }
@@ -740,8 +831,15 @@ function findBar() {
 }
 function modelMenu() {
   popover($("modelBtn"), [h("div", { class: "head", text: `${state?.providerLabel ?? ""} · ${state?.model ?? ""}` }),
-    popItem("Change model…", () => run("/model")), popItem("Reasoning effort…", () => run("/effort"), sd?.effort || "default"), popItem("Providers and API keys…", () => run("/connect")), popItem("Switch provider…", () => run("/provider")),
-    h("div", { class: "sep" }), popItem("Models for roles (explore, review…)", () => run("/models")), popItem("Fallback model", () => run("/models")), popItem("Budget…", () => run("/budget")), popItem("Token use", () => run("/tokens")), popItem("Cache", () => run("/cache"))]);
+    popItem("Change model…", () => run("/model"), undefined, "Pick another model from this provider; the list includes what your server reports (/model)"),
+    popItem("Reasoning effort…", () => run("/effort"), sd?.effort || "default", "How long the model thinks before it answers. Higher can help on hard tasks and uses more tokens (/effort)"),
+    popItem("Providers and API keys…", () => run("/connect"), undefined, "Add, replace or remove a key for each provider, local servers included (/connect)"),
+    popItem("Switch provider…", () => run("/provider"), undefined, "Use another provider: Claude, OpenAI, OpenRouter, Ollama or any OpenAI-compatible server (/provider)"),
+    h("div", { class: "sep" }), popItem("Models for roles (explore, review…)", () => run("/models"), undefined, "A different model of the same provider for one job, such as a cheaper one for exploring (/models)"),
+    popItem("Fallback model", () => run("/models"), undefined, "The model to answer from when the main one is overloaded or not reachable (/models fallback)"),
+    popItem("Budget…", () => run("/budget"), undefined, "The most tokens this conversation may use before Amness stops and asks (/budget)"),
+    popItem("Token use", () => run("/tokens"), undefined, "What fills the context window now: system prompt, tools, messages, file reads (/tokens)"),
+    popItem("Cache", () => run("/cache"), undefined, "How much of each request the provider read from its prompt cache, and what that saved (/cache)")]);
 }
 function renameSession() {
   const inp = h("input", { type: "text", value: state?.session.title || "", autofocus: true });
@@ -760,10 +858,14 @@ async function openProjectPicker() {
 async function switchProject(dir) { if (state?.running) { toast("warn", "stop the running turn first"); return; } if (await tryApi("/api/project", { dir })) toast("ok", `opened ${dir.split(/[\\/]/).pop()}`); }
 async function projectMenu() {
   const recent = ((await tryApi("/api/projects")) || []).filter((p) => p !== state?.cwd);
-  popover($("projectBtn"), [popItem("Open folder…", openProjectPicker),
-    ...(recent.length ? [h("div", { class: "sep" }), h("div", { class: "head", text: "Recent" }), ...recent.map((p) => popItem(p.split(/[\\/]/).pop(), () => switchProject(p), p))] : []),
-    h("div", { class: "sep" }), popItem("Write AGENTS.md (/init)", () => run("/init")), popItem("Hooks", () => run("/hooks")), popItem("Permissions", () => run("/permissions")), popItem("Plugins", () => run("/plugins")), popItem("Agents", () => run("/agents")),
-    ...(window.amnessDesktop && state ? [h("div", { class: "sep" }), popItem("Show in folder", () => window.amnessDesktop.reveal(state.cwd))] : [])]);
+  popover($("projectBtn"), [popItem("Open folder…", openProjectPicker, undefined, "Work in another project folder. The running turn must be stopped first"),
+    ...(recent.length ? [h("div", { class: "sep" }), h("div", { class: "head", text: "Recent" }), ...recent.map((p) => popItem(p.split(/[\\/]/).pop(), () => switchProject(p), p, `Open ${p}`))] : []),
+    h("div", { class: "sep" }), popItem("Write AGENTS.md (/init)", () => run("/init"), undefined, "Amness explores the project and writes AGENTS.md: how to build, test and run it, for later sessions"),
+    popItem("Hooks", () => run("/hooks"), undefined, "Commands that run before or after the agent's tool calls, from your settings (/hooks)"),
+    popItem("Permissions", () => run("/permissions"), undefined, "Rules for what runs without asking: allowed and denied tools and commands (/permissions)"),
+    popItem("Plugins", () => run("/plugins"), undefined, "Installed plugins and what each adds: commands, tools, skills (/plugins)"),
+    popItem("Agents", () => run("/agents"), undefined, "Subagents you can hand work to, from .amness/agents (/agents)"),
+    ...(window.amnessDesktop && state ? [h("div", { class: "sep" }), popItem("Show in folder", () => window.amnessDesktop.reveal(state.cwd), undefined, "Open the project folder in Finder or Explorer")] : [])]);
 }
 
 // ------------------------------------------------------------------ conversations (sidebar)
@@ -793,7 +895,7 @@ function drawSessions() {
   for (const c of [...chatsList].sort((x, y) => Date.parse(y.updated) - Date.parse(x.updated))) { const g = recency(c.updated); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(c); }
   const row = (c) => {
     const current = c.id === state?.session.id;
-    return h("button", { class: `chat-row${current ? " on" : ""}${current && state?.running ? " running" : ""}`, title: `${c.title || "(untitled)"}\n${c.turns} turn${c.turns === 1 ? "" : "s"} · ${c.model} · ${ago(c.updated)}`,
+    return h("button", { class: `chat-row${current ? " on" : ""}${current && state?.running ? " running" : ""}`,
       onmouseenter: (e) => showPreview(c, e.currentTarget), onmouseleave: hidePreview, onclick: () => { hidePreview(); resume(c.id); } },
       h("span", { class: "cdot" }), h("span", { class: "ct", text: c.title || "(untitled)" }), h("span", { class: "ctime", text: shortAgo(c.updated) }));
   };

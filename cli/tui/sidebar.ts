@@ -1,4 +1,5 @@
 // The right-hand panel: what is going on in this session at a glance.
+import type { RequestUsage } from "./session.ts";
 import { A, mix, type Cell, parseAnsi } from "./ansi.ts";
 import { BOLD, F, ITAL, fit, split } from "./rich.ts";
 import { cellWidth, clipWidth } from "./text.ts";
@@ -9,7 +10,7 @@ import { renderLoop, type LoopData } from "./looppanel.ts";
 
 export type SidebarData = {
   title: string; model: string; provider: string; api?: string; branch?: string; cwd: string; mode: string; effort?: string;
-  ctxPct: number | null; ctxUsed: number; ctxMax: number; series: number[]; map: { label: string; pct: number; color: number }[];
+  ctxPct: number | null; ctxUsed: number; ctxMax: number; series: number[]; /** each request in detail with its cost estimate (desktop chart tooltips) */ requests?: (RequestUsage & { cost: number | null })[]; map: { label: string; pct: number; color: number }[];
   usage: { prompt: number; completion: number; calls: number; cached: number; reasoning: number }; cost: number | null;
   todos: { content: string; status: string }[]; changes: { path: string; added: number; removed: number; created: boolean; blockId: number }[];
   /** the agent loop of the current (or last) run, step by step */ loop?: LoopData;
