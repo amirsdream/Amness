@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 (2026-11-08)
 
 - **Trust a folder first, as in Claude Code.** The first time you start Amness in a folder, it asks **Do you trust the files in this folder?** Nothing runs before you answer, not even a task given on the command line. **Yes** is saved in `~/.amness/state.json` and covers the folders inside. **No** exits (code 3); in the desktop app, it goes back to the project you had open. In your home folder, Amness warns you. Project hooks, plugins and permission rules are still asked about separately. See [Safety](docs/safety.md#trust-a-folder-before-amness-works-in-it).
 
