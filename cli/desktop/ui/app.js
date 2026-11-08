@@ -682,8 +682,13 @@ function showDialog(d) {
     const body = h("div", { class: "body" }), det = d.detail;
     if (det?.kind === "diff") body.append(diffView(det.diff, 800));
     else if (det?.kind === "plan") body.append(md(det.md));
-    else if (det?.kind === "command") { body.append(h("pre", { class: "cmd", text: `$ ${det.cmd}` })); if (det.danger) body.append(h("div", { class: "warnbox", text: `⚠ ${det.danger}` })); }
-    if (!det || det.kind === "text" || det.kind === "command") { const extra = det?.kind === "command" ? d.body.slice(1) : d.body; if (extra.some((l) => stripAnsi(l).trim())) body.append(ansiLines(extra, "term dialog-term")); }
+    else if (det?.kind === "command") {                                             // the command, then one risk panel: what it will do, and whether /undo can take it back (src/riskinfo.ts)
+      body.append(h("pre", { class: "cmd", text: `$ ${det.cmd}` }));
+      if (det.risk) body.append(h("div", { class: `riskbox ${det.risk.level}` },
+        h("div", { class: "rwhat" }, h("span", { class: "ri", text: det.risk.level === "high" ? "▲" : "●" }), h("span", { text: det.risk.what })),
+        det.undo ? h("div", { class: `rundo ${det.undo.can}` }, h("span", { class: "ri", text: det.undo.can === "no" ? "✗" : "↺" }), h("span", { text: det.undo.text })) : null));
+    }
+    if (!det || det.kind === "text") { if (d.body.some((l) => stripAnsi(l).trim())) body.append(ansiLines(d.body, "term dialog-term")); }
     body.append(h("div", { class: "question", text: stripAnsi(d.question) }));
     d.options.forEach((o, i) => body.append(h("button", { class: "choice", onclick: () => answer(d.id, i) }, h("span", { class: "num", text: String(i + 1) }), ansi(o.label), o.hint ? h("span", { class: "hint", text: o.hint }) : null)));
     const m = h("div", { class: "modal" }, h("header", {}, h("span", { text: stripAnsi(d.title) })), body, h("footer", {}, h("span", { class: "muted small", text: "1–9 choose · Esc cancel" })));

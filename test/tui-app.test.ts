@@ -447,6 +447,17 @@ test("/settings: the same groups as desktop Preferences; changes are drafts unti
   } finally { await t.key(KEY.esc); await t.key(KEY.ctrlD); }
 });
 
+test("a risky command asks with one line on what it will do and one on undo, not two warnings", async () => {
+  const t = rig([call("sh", { cmd: "rm -rf build" }), say("ok")], { cols: 100 }); await t.start();
+  try {
+    await t.submit("clean up"); assert.ok(await t.until(() => t.has("Run this command?")));
+    const scr = plain(t.screen());
+    assert.equal((scr.match(/Deletes build and everything in it/g) ?? []).length, 1);
+    assert.match(scr, /▲ Deletes build and everything in it/); assert.match(scr, /✗ Cannot be undone: this folder is not a git repository/);   // the rig's folder has no git
+    assert.doesNotMatch(scr, /⚠|recursive\/forced delete/);                                 // no category jargon, no second warning
+  } finally { await t.key(KEY.esc); await t.key(KEY.esc); await t.key(KEY.ctrlD); }
+});
+
 test("# saves a memory note; ! runs a shell command now and feeds its output to the next turn", async () => {
   const t = rig([say("noted")]); await t.start();
   await t.submit("# always use pnpm in this repo");

@@ -53,7 +53,7 @@
     "test:pty": "python3 test/pty/tui.py",
     "prepack": "npm run build",
     "desktop": "node cli/desktop.ts",
-    "test:desktop-ui": "node test/desktop-ui/run.ts && node test/desktop-ui/agents.ts && node test/desktop-ui/run.ts test/desktop-ui/narrow-check.js --size 1100x720 && node test/desktop-ui/run.ts test/desktop-ui/prefs-check.js && node test/desktop-ui/run.ts test/desktop-ui/chats-check.js --chats && node test/desktop-ui/run.ts test/desktop-ui/edit-check.js && node test/desktop-ui/run.ts test/desktop-ui/tips-check.js && node test/desktop-ui/run.ts test/desktop-ui/panel-check.js",
+    "test:desktop-ui": "node test/desktop-ui/run.ts && node test/desktop-ui/agents.ts && node test/desktop-ui/run.ts test/desktop-ui/narrow-check.js --size 1100x720 && node test/desktop-ui/run.ts test/desktop-ui/prefs-check.js && node test/desktop-ui/run.ts test/desktop-ui/chats-check.js --chats && node test/desktop-ui/run.ts test/desktop-ui/edit-check.js && node test/desktop-ui/run.ts test/desktop-ui/tips-check.js && node test/desktop-ui/run.ts test/desktop-ui/panel-check.js && node test/desktop-ui/run.ts test/desktop-ui/risk-check.js",
     "desktop:icons": "electron scripts/desktop-icons.cjs"
   },
   "optionalDependencies": {

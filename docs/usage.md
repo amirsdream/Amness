@@ -211,7 +211,7 @@ The file is attached to your message. In the transcript you see a note such as "
 | `plan` | Read-only. The agent looks at the code, then shows a plan. You approve the plan before it can change anything. |
 | `yolo` | Stops asking for edits and ordinary shell commands. |
 
-**How to answer a question.** When Amness asks, you see the diff or the command and a list of choices. The choices include "Yes", "Yes, and accept all edits this session" (for edits), "Yes, and don't ask again for `npm test`" (for the session) and, for simple commands, "always allow" (this saves a rule in `.amness/permissions.json`). The last choice lets you tell the agent what to do instead.
+**How to answer a question.** When Amness asks, you see the diff or the command and a list of choices. For a risky command you also see two lines. The first says what the command will do, for example `▲ Deletes build and everything in it` (▲ high, ● caution). The second says whether `/undo` can take it back: `↺` yes or partly (not files git ignores, not git history), `✗` no (for example it pushes to a remote, or the folder has no git). The terminal and the desktop app show the same lines. The choices include "Yes", "Yes, and accept all edits this session" (for edits), "Yes, and don't ask again for `npm test`" (for the session) and, for simple commands, "always allow" (this saves a rule in `.amness/permissions.json`). The last choice lets you tell the agent what to do instead.
 
 ![An edit waiting for approval, with the diff](images/approval.png)
 

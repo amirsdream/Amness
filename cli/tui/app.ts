@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { onRateLimitWait } from "../model.ts";
-import { type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
+import { type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { PROVIDERS, home, keyFor, keyIdOf, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
@@ -612,6 +612,14 @@ export class App {
   }
 
   // ------------------------------------------------------------------ permission prompts
+  /** Whether /undo can take a command back, in words. Snapshots cover the working tree (not files git ignores) and need git; history and other machines are out of reach. */
+  undoFor(cmd: string, risk: CommandRisk): { can: "yes" | "partly" | "no"; text: string } {
+    if (risk.irreversible) return { can: "no", text: `Cannot be undone: it ${risk.irreversible}` };
+    if (!this.branch) return { can: "no", text: "Cannot be undone: this folder is not a git repository, so there is no snapshot for /undo" };
+    if (/\bgit\s+(reset|rebase|branch\s+-D|commit\s+--amend)\b/.test(cmd)) return { can: "partly", text: "/undo puts your files back, but not git history (git reflog can)" };
+    if (/\bgit\s+clean\b[^;&|]*\s-\w*x|\brm\b/.test(cmd)) return { can: "partly", text: "/undo can put back files git sees, not ignored ones (build output, caches, .env)" };
+    return { can: "yes", text: "/undo can put the project's files back" };
+  }
   approve: Approve = async (req) => {
     const { name, args, preview, reason } = req, w = this.width;
     if (!req.floor && name === "sh" && this.shAllowed(String(args.cmd))) return true;
@@ -626,9 +634,11 @@ export class App {
       title = `${name === "write_file" ? "Write" : name === "apply_patch" ? "Patch" : "Edit"} ${target}`; body = preview ? renderDiff(preview, w - 4, 18).map((l) => l.slice(5)) : [String(args.path)];
       question = "Apply this change?"; if (preview) detail = { kind: "diff", path: name === "apply_patch" ? target : String(args.path), diff: preview };
       options = [{ label: "Yes" }, { label: "Yes, and accept all edits this session", hint: "shift+tab" }, { label: "No, and tell Amness what to do instead", hint: "esc" }];
-    } else if (name === "sh") {
-      const danger = riskOf(String(args.cmd)); paint = danger ? yellow : undefined;
-      const irr = irreversibleReason(String(args.cmd)); title = "Run command"; body = [bold(String(args.cmd)), ...(danger ? ["", yellow(`⚠ ${danger}`)] : []), ...(irr ? [danger ? "" : "", yellow(`⚠ cannot be undone: ${irr}`)].filter((x, i, arr) => x || (i === 0 && arr.length > 1 && !danger)) : [])]; question = "Run this command?"; detail = { kind: "command", cmd: String(args.cmd), danger: danger || undefined };
+    } else if (name === "sh" || name === "sh_start") {
+      const cmd = String(args.cmd), danger = riskOf(cmd), risk = explainCommand(cmd), undo = risk && this.undoFor(cmd, risk);
+      paint = risk?.level === "high" ? yellow : undefined; title = name === "sh_start" ? "Start in the background" : "Run command"; question = "Run this command?";
+      body = [bold(cmd), ...(risk ? ["", (risk.level === "high" ? yellow("▲ ") : cyan("● ")) + risk.what, undo!.can === "no" ? red(`✗ ${undo!.text}`) : dim(`↺ ${undo!.text}`)] : [])];
+      detail = { kind: "command", cmd, ...(risk && { risk: { what: risk.what, level: risk.level }, undo }) };
       const prefix = shPrefix(String(args.cmd));
       const simple = !danger && !/[;&|<>`$()]/.test(String(args.cmd));
       options = [{ label: "Yes" }, ...(simple ? [{ label: `Yes, and don't ask again for ${bold(prefix)} commands`, hint: "this session" }, { label: `Yes, and always allow ${bold(prefix + " *")} in this project`, hint: "saves a rule" }] : []), { label: "No, and tell Amness what to do instead", hint: "esc" }];

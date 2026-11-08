@@ -582,3 +582,13 @@ textarea.long-edit:focus { border-color: var(--accent); }
 .pref:has(.plist) { grid-template-columns: minmax(0, 1fr); }
 .pref:has(.plist) .pc { grid-row: auto; grid-column: 1; justify-self: stretch; }
 .prefs-nav button { white-space: nowrap; }
+
+/* a risky command: what it will do, and whether /undo can take it back */
+.riskbox { margin-top: 10px; border: 1px solid var(--border2); border-left: 3px solid var(--accent2); border-radius: 8px; padding: 9px 12px; background: var(--surface2); display: flex; flex-direction: column; gap: 6px; }
+.riskbox.high { border-left-color: var(--warn); }
+.riskbox .rwhat { display: flex; gap: 8px; font-weight: 550; line-height: 1.4; }
+.riskbox .ri { flex: none; width: 14px; text-align: center; }
+.riskbox.high .rwhat .ri { color: var(--warn); }
+.riskbox.caution .rwhat .ri { color: var(--accent2); }
+.riskbox .rundo { display: flex; gap: 8px; font-size: 12px; color: var(--muted); }
+.riskbox .rundo.no { color: var(--err); }

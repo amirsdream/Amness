@@ -12,7 +12,8 @@ export interface Overlay { render(width: number): Drawn; key(k: Key): void; }
 /** What a permission prompt is about, in a form the full-screen UI can draw properly (the inline UI uses `body`). */
 export type ChoiceDetail =
   | { kind: "diff"; path: string; diff: string }
-  | { kind: "command"; cmd: string; danger?: string }
+  /** A shell command; `risk` says in one sentence what it will do (src/riskinfo.ts), `undo` whether /undo can take it back. Every view draws these two lines and nothing else. */
+  | { kind: "command"; cmd: string; risk?: { what: string; level: "high" | "caution" }; undo?: { can: "yes" | "partly" | "no"; text: string } }
   | { kind: "plan"; md: string }
   | { kind: "text"; text: string };
 

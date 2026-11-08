@@ -26,7 +26,7 @@ export function drawModal(c: Canvas, t: Theme, o: Overlay, frame: number): Modal
 
   if (o instanceof ChoiceOverlay) {
     const w = Math.min(c.w - 6, 100), inner = w - 4, d = o.detail;
-    const tone = o.title.startsWith("Run") && d?.kind === "command" && d.danger ? t.warn : d?.kind === "plan" ? t.accent2 : t.accent;
+    const tone = d?.kind === "command" && d.risk?.level === "high" ? t.warn : d?.kind === "plan" ? t.accent2 : t.accent;
     const rows: string[] = [];
     if (d?.kind === "diff") {
       const r = renderDiffRows(d.diff, { width: inner, theme: t, lang: langOf(d.path), mode: "stacked", maxRows: 14 });
@@ -34,7 +34,11 @@ export function drawModal(c: Canvas, t: Theme, o: Overlay, frame: number): Modal
     } else if (d?.kind === "command") {
       rows.push(fit(" " + F(t.accent, "$ ") + BOLD(F(t.text, clipWidth(d.cmd, inner - 5))), inner, t.surface2));
       if (d.cmd.length > inner - 5) for (const l of wrapAnsi(F(t.dim, d.cmd.slice(inner - 5)), inner - 4, 0).slice(0, 4)) rows.push(fit("   " + l, inner, t.surface2));
-      if (d.danger) rows.push(fit(" " + F(t.warn, "⚠ " + d.danger), inner, t.surface2));
+      if (d.risk) {                                                                // what it will do, then whether /undo can take it back: one line each
+        rows.push(fit("", inner, t.surface));
+        for (const [i, l] of wrapAnsi(d.risk.what, inner - 4, 0).slice(0, 3).entries()) rows.push(fit(" " + (i ? "  " : F(d.risk.level === "high" ? t.warn : t.accent2, d.risk.level === "high" ? "▲ " : "● ")) + F(t.text, l), inner, t.surface));
+        if (d.undo) rows.push(fit(" " + F(d.undo.can === "no" ? t.err : t.dim, `${d.undo.can === "no" ? "✗" : "↺"} ${d.undo.text}`), inner, t.surface));
+      }
     } else if (d?.kind === "plan") {
       for (const l of renderMarkdown(d.md, inner - 2, themeSkin(t)).slice(0, 16)) rows.push(fit(" " + l, inner, t.surface));
     } else for (const l of o.body.slice(0, 12)) rows.push(fit(" " + l, inner, t.surface));

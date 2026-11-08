@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Clearer questions for risky commands.** Before, the approval showed category words such as "recursive/forced delete" or "dangerous system command", sometimes two "⚠" lines that said nearly the same thing, and the desktop app showed the warning twice. Now one line says what this command will do ("Deletes build and everything in it", "Force-pushes feature to origin, replacing the commits there", "Installs left-pad from the internet"), marked ▲ (high) or ● (caution). A second line says whether `/undo` can take it back: yes, partly (not files git ignores, not git history), or no (it reaches another machine, or the folder has no git). The terminal (inline and full screen) and the desktop app show the same two lines; the full-screen view used to leave out "cannot be undone". `sh_start` asks the same way.
+
 ## 0.5.1 (2026-11-08)
 
 **0.5.0 was not published to npm** (its release check failed), so 0.5.1 is the first version with everything listed under 0.5.0 below.
