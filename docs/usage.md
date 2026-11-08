@@ -388,6 +388,8 @@ When you start the chat, Amness picks a first `/verify` command for you if it ca
 |---|---|
 | `/help` (alias `/?`), `/status`, `/tools`, `/todos` | Help, session facts, tools the agent can use, the agent's checklist. `/todos edit` changes the checklist. |
 | `/harness` | The agent loop's guards and limits. See [Tune the agent loop](#tune-the-agent-loop-harness). |
+| `/settings` | Every setting in groups, applied together. See [Change settings in one place](#change-settings-in-one-place-settings). |
+| `/set <name> <value>` | Change one setting by name; `/set` lists them. |
 | `/cache` | What the harness reused instead of repeating: reads answered from the store, plans, and (on a vLLM server) the share of prompt tokens the server served from its prefix cache. |
 | `/plans [on\|off]` | Offers the plan of a similar finished task as a starting point (off until measured). With no argument it shows how many plans are stored and how often they helped. |
 | `/tokens` (alias `/cost`) | The context gauge, what fills it, tokens, cache hits and estimated cost. |
@@ -475,9 +477,30 @@ Press `Esc` to skip. You can also change keys at any time with `/connect`.
 
 Notes are ranked, merged and removed in a way you can reverse. Details: [Features: Memory](features.md#memory) and [The agent loop](agent-loop.md).
 
+## Change settings in one place (`/settings`)
+
+**What it is.** `/settings` shows every setting in groups: Chat, Model, Context and limits, Harness, Safety & quality, Folders and trust, Search and memory, Advanced and Terminal. These are the same settings, from the same list, as **Preferences** in the desktop app.
+
+**How to use it.**
+
+1. Type `/settings` and choose a group, then a setting. A switch flips; a choice opens a list; a text or number asks for the value.
+2. A changed setting shows its old and new value with a dot, for example `Off → Workspace •`. Nothing changes yet.
+3. Go back to the groups and choose **Apply N changes**, or **Revert**. If you press `Esc` with changes left, Amness asks: **Apply them**, **Discard them** or **Keep editing**.
+
+**Change one setting quickly.** `/set <name> <value>` changes one setting at once. `/set` alone lists the names and values. `Tab` completes names and values.
+
+```
+/set contextWindow 32768
+/set maxConcurrent 2
+/set lsp on
+/set trusted remove:/Users/me/old-project
+```
+
+A value a setting does not accept is refused with the reason (for example `between 1 and 64`). Tested in `test/tui-app.test.ts`.
+
 ## Options without a command
 
-Put these in `~/.amness/config.json`. See [Budgets and subagents](budgets.md).
+Put these in `~/.amness/config.json`. See [Budgets and subagents](budgets.md). `taskBudget` and `maxConcurrent` can also be set with `/set` (or in Preferences → Context and limits).
 
 | Key | What it does |
 |---|---|

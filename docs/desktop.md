@@ -44,19 +44,32 @@ The window runs the terminal app itself (the same `App`), so everything the term
 
 ## Preferences
 
-Click ⚙ in the top bar, or press `⌘,` (macOS) or `Ctrl+,`. Changes apply at once and are saved in `~/.amness/config.json`, the same file as the terminal app's settings, so they survive restarts.
+Click ⚙ in the top bar, or press `⌘,` (macOS) or `Ctrl+,`.
 
-| Section | What you can set |
-|---|---|
-| Appearance | Theme (System, Dark, Light), accent colour, interface size, chat text size, code font, density (Comfortable, Compact), reduce motion |
-| Chat | The mode a new window starts in, send with Enter or ⌘/Ctrl+Enter, fold finished turns, open the current step by itself, notifications |
-| Harness | Each guard of the agent loop on or off, the step limit, the no-progress limit, the context budget, cost-aware rewrites (the same as `/harness`) |
-| Model | Provider and API keys, model, reasoning effort, budget per turn, fallback model, models for the explorer, compaction, reviewer and cheap steps, router, wire API |
-| Safety & quality | Sandbox, verify command, check after each edit, language-server errors, independent reviewer, approval reviewer |
-| Advanced | Shell, loop strategy, keep the cache warm, plan cache |
-| About | Version, project folder |
+**Every change waits for Apply.** A changed setting gets a dot, and so does its tab. The footer counts the changes: **3 changes not applied yet · Revert · Apply**.
 
-Agent settings work by running the same command you would type in the terminal (for example `/sandbox workspace`), so both apps behave the same.
+- Appearance changes show at once, so you can see them. **Revert** puts them back.
+- Agent settings run only when you click **Apply**. They run the same command you would type in the terminal (for example `/sandbox workspace`), so both apps behave the same.
+- Your changes stay while you switch tabs, and each tab shows what is saved now.
+- If you close Preferences (✕, `Esc` or a click outside) with changes left, it asks: **Discard**, **Keep editing** or **Apply and close**.
+- Buttons that open their own dialog (**Manage…** for keys and servers, **Show…** for memory notes and permission rules) ask you to apply or revert first.
+
+Everything is saved in `~/.amness/config.json`, the same file as the terminal app's settings. The settings come from one shared list, which the terminal shows with `/settings`.
+
+| Section | What you can set | In the terminal |
+|---|---|---|
+| Appearance | Theme (System, Dark, Light), accent colour, interface size, chat text size, code font, density, reduce motion | none (the terminal's own font and colours decide these) |
+| Chat | The mode a new window starts in, send with Enter or ⌘/Ctrl+Enter, fold finished turns, open the current step by itself, notifications | `/notify` (the others are window only) |
+| Model | Provider (cloud providers and your saved servers), keys and servers (**Manage…**), model, reasoning effort, fallback model, models for each job, router, wire API | `/provider`, `/connect`, `/model`, `/effort`, `/models`, `/router`, `/api` |
+| Context and limits | Budget per turn, context window, requests at once, Claude task budget | `/budget`, `/set contextWindow`, `/set maxConcurrent`, `/set taskBudget` |
+| Harness | Each guard on or off, step limit, no-progress limit, context budget, cost-aware rewrites, defaults | `/harness` |
+| Safety & quality | Sandbox, verify command, check after each edit, language-server errors, independent reviewer, approval reviewer, permission rules | `/sandbox`, `/verify`, `/check`, `/lsp`, `/reviewer`, `/approver`, `/permissions` |
+| Folders and trust | Folders outside the project the agent may use, trusted folders (add or remove) | `/dirs`, `/set trusted remove:<path>` |
+| Search and memory | Tavily key for web search, semantic memory, memory notes | `/set tavilyKey`, `/memory embeddings`, `/memory` |
+| Advanced | Shell, loop strategy, keep the cache warm, plan cache | `/shell`, `/strategy`, `/keepwarm`, `/plans` |
+| About | Version, project folder, settings file, shortcuts | |
+
+Tested in the real window by `npm run test:desktop-ui` (`test/desktop-ui/prefs-check.js`).
 
 The app has its own icon (the Amness mark) in the dock, the taskbar and the window. To change it, edit `cli/desktop/assets/icon.svg` and run `npm run desktop:icons`.
 

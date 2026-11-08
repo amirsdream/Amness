@@ -214,22 +214,28 @@ test("desktop: a local server behind a token (llama.cpp + nginx) answers 401; th
   } finally { if (saved) process.env.OPENAI_API_KEY = saved; llama.close(); await d.close(); }
 });
 
-test("desktop: /provider for a local server asks for an optional key; Enter skips it and requests go without one", async () => {
+test("desktop: /provider sets up a server through the window's dialogs (optional key skipped, model from its list, a name); requests go without a key, and the saved server is offered again", async () => {
   const saved = process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY_FILE;
   const llama = await llamaBehindNginx();
   const d = await boot([], undefined, { cfg: { provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-6.1-sol", apiKey: "sk-x", api: "chat" }, realModel: true });
   try {
     await d.api("/api/send", { text: "/provider" });
-    const pick = await dialogOf(d, "pick", /Ollama \(local\)/);                         // Ollama: the test above saved a key for "custom"
-    await d.api("/api/dialog", { id: pick.id, value: pick.items.findIndex((i: any) => /Ollama/.test(i.label)) });
-    await d.api("/api/dialog", { id: (await dialogOf(d, "input", /Model id/)).id, value: "qwen-coder" });
-    await d.api("/api/dialog", { id: (await dialogOf(d, "input", /Base URL/)).id, value: llama.url });
+    const pick = await dialogOf(d, "pick", /\+ Ollama server/);
+    await d.api("/api/dialog", { id: pick.id, value: pick.items.findIndex((i: any) => /\+ Ollama server/.test(i.label)) });
+    await d.api("/api/dialog", { id: (await dialogOf(d, "input", /base URL/)).id, value: llama.url });
     const key = await dialogOf(d, "input", /only if your server needs one/); assert.equal(key.secret, true);
     await d.api("/api/dialog", { id: key.id, value: "" });
-    assert.ok(await d.until(() => JSON.stringify(d.events).includes("provider →")));
+    const model = await dialogOf(d, "pick", /qwen-coder/);                              // the model list comes from the server
+    await d.api("/api/dialog", { id: model.id, value: model.items.findIndex((i: any) => i.label === "qwen-coder") });
+    await d.api("/api/dialog", { id: (await dialogOf(d, "input", /Name for this server/)).id, value: "lab" });
+    assert.ok(await d.until(() => /lab\S* saved and in use/.test(JSON.stringify(d.events))));
     await d.api("/api/send", { text: "ping" });
     assert.ok(await d.until(() => JSON.stringify(d.events).includes("pong from llama.cpp"), 8000));
     assert.ok(llama.seen.some((s) => s.path === "/v1/chat/completions") && llama.seen.every((s) => s.auth === undefined), JSON.stringify(llama.seen));
+    await d.api("/api/send", { text: "/provider" });
+    const again = await dialogOf(d, "pick", /"lab/);
+    const row = again.items.find((i: any) => /lab/.test(i.label)); assert.match(row.label, /in use/); assert.match(row.hint, /Ollama · 127\.0\.0\.1:\d+\/v1 · qwen-coder · no key/);
+    await d.api("/api/dialog", { id: again.id, value: null });
   } finally { if (saved) process.env.OPENAI_API_KEY = saved; llama.close(); await d.close(); }
 });
 

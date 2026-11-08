@@ -20,6 +20,7 @@ import { getTheme } from "../tui/themes.ts";
 import { renderLoop } from "../tui/looppanel.ts";
 import { setLevel } from "../tui/theme.ts";
 import { forceColor } from "../ui.ts";
+import { applySettings, settingsView, type SettingChange } from "../tui/settings.ts";
 import type { Model } from "../../src/index.ts";
 
 /** A dialog the App opened, as the window shows it. Text in `body`, `lines` and option labels may carry ANSI colours (the same text the terminal shows). */
@@ -145,7 +146,13 @@ export class DesktopBridge {
       shell: c.shell ?? "auto", shells: ["auto", ...SHELL_CHOICES.filter((x) => x !== "auto")], strategy: c.strategy ?? "off", strategies: ["off", ...Object.keys(STRATEGIES)],
       keepWarm: !!c.keepWarm, plans: !!c.plans, notify: c.notify !== "off", configFile: "~/.amness/config.json",
       harness: harnessView(c, this.app.profile?.profile),
+      groups: settingsView(this.app, "desktop"),                                    // the shared list (cli/tui/settings.ts): the same settings as /settings in the terminal
     };
+  }
+  /** Apply drafts from Preferences, in order, through the same code as /settings and /set; then the fresh settings. */
+  async applySettings(changes: SettingChange[]) {
+    const results = await applySettings(this.app, changes, (cmd) => this.command(cmd));
+    return { results, settings: this.settings() };
   }
   /** Run a terminal command without showing its output in the conversation (Preferences uses this); returns what it said, as plain lines. */
   async command(text: string): Promise<string[]> {

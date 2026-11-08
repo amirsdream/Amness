@@ -20,7 +20,9 @@
   $("#prefsBtn").click(); await until(() => !!$(".modal.prefs"));
   $$(".prefs-nav button").find((b) => b.textContent.includes("Harness")).click(); await sleep(80);
   const loopRow = $$(".pref").find((p) => p.querySelector(".pl")?.textContent === "Repeated-call guard"); r.harnessTab = !!loopRow;
-  loopRow?.querySelector(".switch").click(); await sleep(600);
+  loopRow?.querySelector(".switch").click(); await sleep(80);
+  [...$$(".prefs-foot button")].find((b) => b.textContent === "Apply").click();     // a draft until Apply
+  await until(() => /No changes/.test($(".prefs-foot").textContent));
   r.guardOff = (await get("/api/settings")).harness.guards.find((g) => g.name === "loop").on === false;
   $(".modal.prefs .icon-btn").click(); await sleep(60);
   // the todo list in its editor

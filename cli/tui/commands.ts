@@ -1,13 +1,14 @@
 // Slash commands. Each gets the running App and the raw argument string.
 import { previewLines, relatives } from "./session.ts";
 import { GUARDS, harnessView } from "./harnessinfo.ts";
+import { applySettings, settingsView, showValue, type SettingChange, type SettingItem, type SettingValue } from "./settings.ts";
 import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
 import { join, resolve, sep } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { approveDraft, fetchSource, inspectSource, installSkills, listDrafts, rejectDraft, scaffoldSkill, trashSkill } from "../../src/index.ts";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
-import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, keyFor, storeKey, type Connection, type ProviderId } from "../config.ts";
+import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, forgetServer, keyFor, serverKey, serverName, storeKey, useServer, type Connection, type ProviderId, type Server } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { fetchModels, prefixCacheRate } from "../models.ts";
 import { argOptions } from "./argcomplete.ts";
@@ -29,17 +30,92 @@ const INIT_PROMPT = "Explore this repository and write an AGENTS.md at the repo 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 const keyStatus = (c: Connection) => c.source === "env" ? `${c.needsKey ? "connected" : "local · key"} · from ${c.env}` : c.source === "saved" ? (c.needsKey ? `connected · ${noStore() ? "this session only" : where()}` : `local · key ${noStore() ? "for this session only" : where()}`) : c.needsKey ? "not connected" : "local · no key (optional)";
-/** A local server (Ollama, vLLM, LM Studio…) usually needs no key, but one started with an API key or behind a proxy does. */
-const keyPrompt = (id: ProviderId) => PROVIDERS[id].needsKey ? `${PROVIDERS[id].label} API key (hidden; ${where()})` : `${PROVIDERS[id].label} API key or token, only if your server needs one (hidden; ${where()}; Enter skips)`;
+/** A cloud provider needs a key; a server (Ollama, vLLM, llama.cpp, LM Studio…) usually does not, but one started with an API key or behind a proxy does. */
+const keyPrompt = (label: string, optional: boolean) => optional ? `${label} API key or token, only if your server needs one (hidden; ${where()}; Enter skips)` : `${label} API key (hidden; ${where()})`;
+const inUse = (a: App, c: Connection) => (c.server ? a.cfg.server === c.server.name : !a.cfg.server && a.cfg.provider === c.id);
+const serverHint = (c: Connection) => `${c.server!.provider === "ollama" ? "Ollama" : "custom"} · ${c.server!.baseUrl.replace(/^https?:\/\//, "")} · ${c.server!.model} · ${c.source === "none" ? "no key" : c.source === "env" ? `key from ${c.env}` : "key saved"}`;
+const rowOf = (a: App, c: Connection) => ({ label: `${!c.needsKey || c.source !== "none" ? "●" : "○"} ${c.label}${inUse(a, c) ? "  (in use)" : ""}`, value: c.id as string, hint: c.server ? serverHint(c) : keyStatus(c) });
+const ADD_SERVER = [{ label: "+ Ollama server…", value: "+ollama", hint: "a local Ollama, or one on another machine" }, { label: "+ Custom OpenAI-compatible server…", value: "+custom", hint: "vLLM, llama.cpp, LM Studio, a gateway" }];
 
-/** Make `id` the active provider, using its saved key (or asking for one). Returns false if the user gave up. */
+/** Make a cloud provider the one in use, with its saved key (or asking for one). Returns false if the user gave up. */
 async function switchProvider(a: App, id: ProviderId): Promise<boolean> {
   let apiKey = keyFor(id).key;
-  if (PROVIDERS[id].needsKey && !apiKey) { apiKey = await a.askText(keyPrompt(id), { secret: true }); if (!apiKey) return false; }
-  Object.assign(a.cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model, apiKey });
-  if (id === "custom" || id === "ollama") { const m = await a.askText("Model id", { initial: a.cfg.model }); if (m) a.cfg.model = m; const u = await a.askText("Base URL", { initial: a.cfg.baseUrl }); if (u) a.cfg.baseUrl = u; if (!apiKey) a.cfg.apiKey = (await a.askText(keyPrompt(id), { secret: true })) || undefined; }
+  if (!apiKey) { apiKey = await a.askText(keyPrompt(PROVIDERS[id].label, false), { secret: true }); if (!apiKey) return false; }
+  Object.assign(a.cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model, apiKey, server: undefined });
   a.saveConfig(); a.buildAgent(); a.say(`provider → ${cyan(PROVIDERS[id].label)}, model ${cyan(a.cfg.model)}`, dim);
   return true;
+}
+/** Use a saved server: its address, model and own key, with no questions. */
+function useSaved(a: App, s: Server) {
+  useServer(a.cfg, s); a.saveConfig(); a.buildAgent();
+  a.say(`provider → ${cyan(s.name)} (${s.baseUrl}), model ${cyan(s.model)}`, dim);
+}
+/** Set up a server: its address, an optional key, the model (from the server's own list when it gives one) and a name. It is saved, so /provider offers it next time. */
+async function addServer(a: App, kind: Server["provider"], old?: Server): Promise<boolean> {
+  const label = PROVIDERS[kind].label;
+  const baseUrl = (await a.askText(`${old ? old.name : label}: base URL (usually ending in /v1)`, { initial: old?.baseUrl ?? PROVIDERS[kind].baseUrl }))?.trim(); if (!baseUrl) return false;
+  const had = old ? keyFor(serverKey(old.name)).key : undefined;
+  const key = had ? had : (await a.askText(keyPrompt(old?.name ?? label, true), { secret: true })) || undefined;
+  a.note("asking the server for its models…", 7000);
+  const models = await fetchModels({ provider: kind, baseUrl, apiKey: key });
+  let model: string | undefined = models.length ? await a.pick("Model", [...models.map((m) => ({ label: m, value: m, hint: "from the server" })), { label: "Other…", value: "" }], Math.max(0, models.indexOf(old?.model ?? ""))) : "";
+  if (model === undefined) return false;
+  if (!model) { model = (await a.askText("Model id", { initial: old?.model ?? PROVIDERS[kind].model }))?.trim(); if (!model) return false; }
+  const name = old?.name ?? (await a.askText("Name for this server (you pick it by this name in /provider)", { initial: serverName(kind, baseUrl) }))?.trim(); if (!name) return false;
+  if (!old && (a.cfg.servers ?? []).some((x) => x.name === name) && (await a.pick(`A server named "${name}" is saved already. Replace it?`, [{ label: "Yes, replace it", value: "y" }, { label: "No", value: "n" }])) !== "y") return false;
+  useServer(a.cfg, { name, provider: kind, baseUrl, model }); if (key) a.cfg.apiKey = key;
+  a.saveConfig(); a.buildAgent(); a.say(`${green("✓")} ${cyan(name)} saved and in use: ${baseUrl}, model ${cyan(model)}${key ? ", with a key" : ""}. Pick it again with /provider.`, dim);
+  return true;
+}
+
+const onoffValue = (v: string, dflt: boolean) => (/^(on|true|yes|1)$/i.test(v) ? true : /^(off|false|no|0)$/i.test(v) ? false : dflt);
+
+/** The terminal's settings page: the same groups and settings as the desktop Preferences. Changes are drafts until "Apply"; Esc with drafts asks first. */
+async function settingsPage(a: App) {
+  const drafts = new Map<string, SettingValue>(), lists = new Map<string, string[]>();   // list settings collect "add:x" / "remove:x" in order
+  const count = () => drafts.size + [...lists.values()].reduce((n, l) => n + l.length, 0);
+  const shown = (s: SettingItem) => { if (s.kind === "list") { const ops = lists.get(s.id) ?? []; return `${s.entries?.length ?? 0} folder${s.entries?.length === 1 ? "" : "s"}${ops.length ? ` → ${ops.length} change${ops.length === 1 ? "" : "s"} •` : ""}`; }
+    if (!drafts.has(s.id)) return showValue(s); return `${showValue(s)} → ${showValue({ ...s, value: drafts.get(s.id)! })} •`; };
+  const apply = async () => {
+    const changes: SettingChange[] = [...[...drafts].map(([id, value]) => ({ id, value })), ...[...lists].flatMap(([id, ops]) => ops.map((value) => ({ id, value })))];
+    const res = await applySettings(a, changes, async (cmd) => { await a.runCommand(cmd); return []; });
+    for (const r of res.filter((x) => x.message !== "done")) a.say(`${r.ok ? green("✓") : red("✗")} ${r.message}`, r.ok ? dim : red);
+    a.say(`${green("✓")} ${res.filter((r) => r.ok).length} of ${res.length} setting${res.length === 1 ? "" : "s"} applied`, dim); drafts.clear(); lists.clear();
+  };
+  for (;;) {
+    const groups = settingsView(a, "terminal"), n = count();
+    const g = await a.pick<string>(`Settings${n ? `   ${n} change${n === 1 ? "" : "s"} not applied yet` : ""}`, [
+      ...groups.map((x) => ({ label: x.label, value: x.id, hint: x.items.filter((i) => drafts.has(i.id) || lists.get(i.id)?.length).length ? "changed •" : x.lead })),
+      ...(n ? [{ label: `Apply ${n} change${n === 1 ? "" : "s"}`, value: "@apply" }, { label: "Revert", value: "@revert", hint: "forget the changes" }] : []),
+    ]);
+    if (g === "@apply") { await apply(); continue; }
+    if (g === "@revert") { drafts.clear(); lists.clear(); continue; }
+    if (!g) {
+      if (!count()) return;
+      const q = await a.pick(`${count()} change${count() === 1 ? "" : "s"} not applied yet`, [{ label: "Apply them", value: "apply" }, { label: "Discard them", value: "discard" }, { label: "Keep editing", value: "keep" }]);
+      if (q === "apply") { await apply(); return; } if (q === "discard") return; continue;
+    }
+    for (;;) {
+      const group = settingsView(a, "terminal").find((x) => x.id === g); if (!group) break;
+      const id = await a.pick<string>(group.label, group.items.map((s) => ({ label: s.label, value: s.id, hint: s.kind === "action" ? `${s.button ?? "Open…"} ${dim(s.help)}` : `${shown(s)}  ${dim(s.help)}` })));
+      if (!id) break;
+      const s = group.items.find((x) => x.id === id)!;
+      if (s.kind === "action") { await a.runCommand(s.command!); return; }                     // a dialog of its own (keys, memory): leave the page
+      const cur = drafts.has(id) ? drafts.get(id)! : s.value;
+      let v: SettingValue | undefined;
+      if (s.kind === "toggle") v = !cur;
+      else if (s.kind === "choice") v = await a.pick(s.label, s.options!.map((o) => ({ label: o.label, value: o.value, hint: o.value === String(s.value) ? "now" : undefined })), Math.max(0, s.options!.findIndex((o) => o.value === String(cur))));
+      else if (s.kind === "list") {
+        const ops = lists.get(id) ?? [], gone = new Set(ops.filter((o) => o.startsWith("remove:")).map((o) => o.slice(7)));
+        const e = await a.pick<string>(`${s.label}: pick one to remove`, [...(s.entries ?? []).filter((x) => !gone.has(x.value)).map((x) => ({ label: x.value, value: "remove:" + x.value, hint: x.hint })), ...ops.filter((o) => o.startsWith("add:")).map((o) => ({ label: o.slice(4), value: "", hint: "to add •" })), { label: "+ Add a folder…", value: "@add" }]);
+        if (e === "@add") { const p = (await a.askText(`Folder to add (${s.placeholder})`))?.trim(); if (p) lists.set(id, [...ops, "add:" + p]); }
+        else if (e) lists.set(id, [...ops, e]);
+        continue;
+      } else v = (await a.askText(`${s.label}${s.kind === "secret" ? " (hidden; empty removes it)" : ""}`, { initial: s.kind === "secret" ? "" : String(cur ?? ""), secret: s.kind === "secret" })) ?? undefined;
+      if (v === undefined) continue;
+      if (v === s.value && s.kind !== "secret") drafts.delete(id); else drafts.set(id, v);   // back to the saved value: no change
+    }
+  }
 }
 
 export function buildCommands(): Cmd[] {
@@ -61,10 +137,18 @@ export function buildCommands(): Cmd[] {
       if (a.cfg.effort && a.cfg.provider !== "anthropic" && !effortsFor(id).includes(a.cfg.effort)) { a.say(`effort "${a.cfg.effort}" is not valid for ${id}; using the model default`, yellow); a.cfg.effort = undefined; }
       a.saveConfig(); a.buildAgent(); a.say(`model → ${cyan(id)}`, dim);
     } },
-    { name: "provider", help: "switch provider (OpenAI, Claude, Ollama…); each provider keeps its own saved key", run: async (a) => {
-      const list = connections();
-      const id = await a.pick<ProviderId>("Provider", list.map((c) => ({ label: `${!c.needsKey || c.source !== "none" ? "●" : "○"} ${c.label}${c.id === a.cfg.provider ? "  (in use)" : ""}`, value: c.id, hint: keyStatus(c) })));
-      if (id) await switchProvider(a, id);
+    { name: "provider", help: "switch provider (OpenAI, Claude, OpenRouter) or a saved server (Ollama, custom), or set up a new server; each keeps its own key", args: "[name]", run: async (a, arg) => {
+      const list = connections(a.cfg);
+      if (arg.trim()) {                                                              // "/provider openai", "/provider lab", "/provider server:lab"
+        const q = arg.trim().toLowerCase(), c = list.find((x) => x.id.toLowerCase() === q || x.label.toLowerCase() === q || (x.server && x.server.name.toLowerCase() === q));
+        if (!c) return void a.say(`no provider or saved server called "${arg.trim()}". Choose: ${list.map((x) => x.server?.name ?? x.id).join(", ")}`, red);
+        return void (c.server ? useSaved(a, c.server) : await switchProvider(a, c.id as ProviderId));
+      }
+      const v = await a.pick<string>("Provider", [...list.map((c) => rowOf(a, c)), ...ADD_SERVER], Math.max(0, list.findIndex((c) => inUse(a, c))));
+      if (!v) return;
+      if (v === "+ollama" || v === "+custom") return void (await addServer(a, v.slice(1) as Server["provider"]));
+      const c = list.find((x) => x.id === v)!;
+      if (c.server) useSaved(a, c.server); else await switchProvider(a, c.id as ProviderId);
     } },
     { name: "dirs", alias: "add-dir", args: "[add|remove] [path]", help: "folders outside the project the agent may use: list, add (saved for this project) or remove", run: async (a, arg) => {
       let [act = "", ...rest] = arg.trim().split(/\s+/).filter(Boolean), p = rest.join(" ");
@@ -85,28 +169,45 @@ export function buildCommands(): Cmd[] {
       if (!d) return;
       a.say(a.removeDir(d) ? `${d} removed: the agent asks again before using it` : `${d} was not on the list`, dim);
     } },
-    { name: "connect", alias: "keys", help: "add, replace or remove API keys for several providers and see which are connected", run: async (a) => {
+    { name: "settings", alias: "config", help: "every setting in one place, grouped as in the desktop Preferences; changes wait for Apply", run: (a) => settingsPage(a) },
+    { name: "set", help: "change one setting by name: /set contextWindow 32768 (no name lists them)", args: "[setting] [value]", run: async (a, arg) => {
+      const [id = "", ...rest] = arg.trim().split(/\s+/), value = rest.join(" ");
+      if (!id) return void a.say([bold("Settings you can change with /set"), ...settingsView(a, "terminal").flatMap((g) => g.items.filter((x) => x.kind !== "action").map((x) => `  ${x.id.padEnd(22)} ${dim(showValue(x) || "—")}  ${dim(x.label)}`))].join("\n"));
+      const d = settingsView(a, "terminal").flatMap((g) => g.items).find((x) => x.id.toLowerCase() === id.toLowerCase());
+      if (!d || d.kind === "action") return void a.say(`no setting called "${id}". /set lists them`, red);
+      const v: SettingValue = d.kind === "toggle" ? onoffValue(value, !d.value) : value;
+      const [r] = await applySettings(a, [{ id: d.id, value: v }], async (cmd) => { await a.runCommand(cmd); return []; });
+      if (r.message !== "done") a.say(r.ok ? `${d.label}: ${r.message}` : `${d.label}: ${r.message}`, r.ok ? dim : red);
+    } },
+    { name: "connect", alias: "keys", help: "providers and saved servers: add, replace or remove keys; change or forget a server; add a new one", run: async (a) => {
       for (;;) {
-        const list = connections();
-        const id = await a.pick<ProviderId>("Providers   ● connected   ○ not connected", list.map((c) => ({ label: `${!c.needsKey || c.source !== "none" ? "●" : "○"} ${c.label}${c.id === a.cfg.provider ? "  (in use)" : ""}`, value: c.id, hint: keyStatus(c) })));
-        if (!id) return;
-        const c = list.find((x) => x.id === id)!;
-        const act = c.source === "none" ? "add" : await a.pick("What do you want to do?", [
-          ...(id === a.cfg.provider ? [] : [{ label: "Use this provider now", value: "use" }]),
-          { label: c.source === "env" ? `Also save a key (${c.env} still wins while it is set)` : "Replace the key", value: "add" },
+        const list = connections(a.cfg);
+        const v = await a.pick<string>("Providers and servers   ● ready   ○ needs a key", [...list.map((c) => rowOf(a, c)), ...ADD_SERVER]);
+        if (!v) return;
+        if (v === "+ollama" || v === "+custom") { await addServer(a, v.slice(1) as Server["provider"]); continue; }
+        const c = list.find((x) => x.id === v)!, s = c.server, id = c.id;
+        const act = !s && c.source === "none" ? "add" : await a.pick(`${c.label}: what do you want to do?`, [
+          ...(inUse(a, c) ? [] : [{ label: s ? "Use this server now" : "Use this provider now", value: "use" }]),
+          { label: c.source === "env" ? `Also save a key (${c.env} still wins while it is set)` : c.source === "saved" ? "Replace the key" : "Add a key or token", value: "add" },
           ...(c.source === "saved" ? [{ label: "Remove the saved key", value: "remove" }] : []),
+          ...(s ? [{ label: "Change its address or model", value: "edit" }, { label: "Forget this server", value: "forget", hint: "and its key" }] : []),
         ]);
         if (!act) continue;
-        if (act === "use") { await switchProvider(a, id); continue; }
+        if (act === "use") { if (s) useSaved(a, s); else await switchProvider(a, id as ProviderId); continue; }
+        if (act === "edit") { await addServer(a, s!.provider, s); continue; }
+        if (act === "forget") {
+          const was = inUse(a, c); forgetServer(a.cfg, s!.name); a.saveConfig(); if (was) a.buildAgent();
+          a.say(`${s!.name} forgotten${was ? ". It was in use: pick another with /provider" : ""}`, was ? yellow : dim); continue;
+        }
         if (act === "add") {
-          const key = await a.askText(keyPrompt(id), { secret: true });
+          const key = await a.askText(keyPrompt(c.label, !!s), { secret: true });
           if (!key) continue;
           storeKey(id, key);
-          if (id === a.cfg.provider) { a.cfg.apiKey = keyFor(id).key; a.buildAgent(); }
-          a.say(`${green("✓")} ${c.label} connected (${noStore() ? "this session only" : where()})`, dim);
+          if (inUse(a, c)) { a.cfg.apiKey = keyFor(id).key; a.buildAgent(); }
+          a.say(`${green("✓")} ${c.label}: key saved (${noStore() ? "this session only" : where()})`, dim);
         } else {
           storeKey(id, undefined);
-          if (id === a.cfg.provider) { a.cfg.apiKey = keyFor(id).key; a.buildAgent(); }
+          if (inUse(a, c)) { a.cfg.apiKey = keyFor(id).key; a.buildAgent(); }
           a.say(`${c.label}: saved key removed`, dim);
         }
       }

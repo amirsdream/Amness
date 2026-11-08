@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { KEY, call, gate, plain, rig, say, sleep } from "./helpers/apprig.ts";
 
@@ -346,16 +347,35 @@ test("a local server that asks for a key (401) gets one: asked, saved for that p
   } finally { if (saved) process.env.OPENAI_API_KEY = saved; await t.key(KEY.ctrlD); }
 });
 
-test("/connect saves a key for a local provider too (a server started with an API key)", async () => {
+test("/provider sets up a custom server once (address, optional key, model from its list, name); it is listed after, picking it again asks nothing, and /connect adds its own key", async () => {
   const saved = process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY_FILE;
+  const srv = createServer((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(req.url === "/v1/models" ? { data: [{ id: "qwen-coder" }, { id: "llama-3" }] } : {})); });
+  await new Promise<void>((ok) => srv.listen(0, "127.0.0.1", ok)); const url = `http://127.0.0.1:${(srv.address() as any).port}/v1`;
   const t = rig([]); await t.start();
+  const answer = async (prompt: string, text: string) => { assert.ok(await t.until(() => t.has(prompt)), `no prompt "${prompt}"`); await t.key("\x15"); if (text) await t.type(text); await t.key(KEY.enter); };
   try {
-    await t.submit("/connect"); assert.ok(await t.until(() => t.has("Ollama (local)")));
-    assert.match(plain(t.screen()), /Ollama \(local\)\s+local · no key \(optional\)/);
-    await t.type("ollama"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("only if your server needs one")));
-    await t.type("ollama-token"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Ollama (local) connected")));
-    assert.equal((await import("../cli/config.ts")).keyFor("ollama").key, "ollama-token");
-  } finally { if (saved) process.env.OPENAI_API_KEY = saved; await t.key(KEY.esc); await t.key(KEY.ctrlD); }
+    await t.submit("/provider"); assert.ok(await t.until(() => t.has("+ Custom OpenAI-compatible server")));
+    await t.type("custom openai"); await t.key(KEY.enter);
+    await answer("base URL", url);
+    await answer("only if your server needs one", "");                                  // no key: Enter skips
+    assert.ok(await t.until(() => t.has("llama-3") && t.has("from the server")));       // the model list comes from the server
+    await t.type("llama"); await t.key(KEY.enter);
+    await answer("Name for this server", "mybox");
+    assert.ok(await t.until(() => t.has("mybox saved and in use")));
+    assert.deepEqual([t.app.cfg.server, t.app.cfg.baseUrl, t.app.cfg.model], ["mybox", url, "llama-3"]);
+    Object.assign(t.app.cfg, { provider: "custom", baseUrl: "http://elsewhere/v1", model: "x", server: undefined });   // as if you had switched away
+    await t.submit("/provider"); assert.ok(await t.until(() => t.has("mybox")));
+    assert.match(plain(t.screen()), /mybox\s+custom · 127\.0\.0\.1:\d+\/v1 · llama-3 · n/);   // the hint ends "no key", cut at 80 columns
+    await t.type("mybox"); await t.key(KEY.enter);
+    assert.ok(await t.until(() => t.has("provider → mybox")));                          // no questions this time
+    assert.deepEqual([t.app.cfg.server, t.app.cfg.baseUrl, t.app.cfg.model], ["mybox", url, "llama-3"]);
+    await t.submit("/connect"); assert.ok(await t.until(() => t.has("Providers and servers")));
+    await t.type("mybox"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Forget this server") && t.has("Change its address or model")));
+    await t.type("add a key"); await t.key(KEY.enter);
+    await answer("only if your server needs one", "box-token");
+    assert.ok(await t.until(() => t.has("mybox: key saved")));
+    assert.equal((await import("../cli/config.ts")).keyFor("server:mybox").key, "box-token"); assert.equal(t.app.cfg.apiKey, "box-token");
+  } finally { if (saved) process.env.OPENAI_API_KEY = saved; srv.close(); await t.key(KEY.esc); await t.key(KEY.esc); await t.key(KEY.ctrlD); }
 });
 
 test("a file outside the project: Amness asks first (folder, path, why); yes lets it read; /dirs lists the folder and /dirs remove takes it off", async () => {
@@ -398,6 +418,31 @@ test("a folder you do not trust: No exits (code 3) without running anything or s
   await t.key(KEY.esc);
   assert.equal(await done, 3); assert.equal(t.seen.length, 0);
   assert.deepEqual((await import("../cli/state.ts")).loadState().trustedDirs ?? [], []);
+});
+
+test("/set changes one setting by name (the same list as desktop Preferences); a bad value is refused and says why", async () => {
+  const t = rig([]); await t.start();
+  try {
+    await t.submit("/set contextWindow 32768"); assert.ok(await t.until(() => t.has("32,768 tokens"))); assert.equal(t.app.cfg.contextWindow, 32768);
+    await t.submit("/set lsp on"); assert.ok(await t.until(() => t.app.cfg.lsp === true));
+    await t.submit("/set maxConcurrent 0"); assert.ok(await t.until(() => t.has("between 1 and 64"))); assert.equal(t.app.cfg.maxConcurrent, undefined);
+    await t.submit("/set nosuch 1"); assert.ok(await t.until(() => t.has('no setting called "nosuch"')));
+  } finally { await t.key(KEY.ctrlD); }
+});
+
+test("/settings: the same groups as desktop Preferences; changes are drafts until Apply, and Esc with drafts asks first", async () => {
+  const t = rig([]); await t.start();
+  try {
+    await t.submit("/settings"); assert.ok(await t.until(() => t.has("Safety & quality") && t.has("Folders and trust") && t.has("Context and limits")));
+    await t.type("safety"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Sandbox")));
+    await t.type("sandbox"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Workspace")));
+    await t.type("workspace"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Off → Workspace •")));
+    assert.equal(t.app.cfg.sandbox, undefined);                                         // a draft: nothing changed yet
+    await t.key(KEY.esc); assert.ok(await t.until(() => t.has("1 change not applied yet") && t.has("Apply 1 change")));
+    await t.key(KEY.esc); assert.ok(await t.until(() => t.has("Apply them") && t.has("Discard them")));   // Esc with a draft asks
+    await t.type("apply them"); await t.key(KEY.enter);
+    assert.ok(await t.until(() => t.app.cfg.sandbox === "workspace" && t.has("1 of 1 setting applied")));
+  } finally { await t.key(KEY.esc); await t.key(KEY.ctrlD); }
 });
 
 test("# saves a memory note; ! runs a shell command now and feeds its output to the next turn", async () => {

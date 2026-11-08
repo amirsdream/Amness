@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Preferences: Apply, Revert, and up-to-date tabs.** In the desktop app, switching tabs in Preferences showed the values from when it opened, not what you had just changed. Fixed. Every change is now a draft: appearance previews at once, agent settings run on **Apply**, **Revert** undoes everything, and closing with changes left asks first. Changed settings and tabs get a dot.
+- **One settings list for both apps.** Desktop Preferences and the new terminal `/settings` page come from one shared list, so they show the same settings and change them with the same code. `/settings` has the same groups and the same Apply. `/set <name> <value>` changes one setting by name.
+- **New settings:** Folders and trust (folders outside the project, trusted folders), Context and limits (context window, requests at once, Claude task budget), Search and memory (Tavily key, semantic memory, memory notes), your saved servers in Provider, and permission rules.
+- **Saved servers.** Amness now remembers each Ollama or custom server you set up: its address, model and its own key. `/provider` lists them by name, and picking one switches without asking anything. **+ Ollama server…** and **+ Custom OpenAI-compatible server…** set up a new one: the address, an optional key, the model (from the server's own `/v1/models` list) and a name. `/connect` uses, re-keys, edits or forgets a saved server. `/model` on a saved server is remembered with it. `amness run --server <name>` uses one. Each server has its own key slot, so a token is never sent to another server. Your current custom or Ollama setup is saved as a server on the first start. Works the same in the terminal and in the desktop app. Saved servers also keep their place in the list.
+
 ## 0.4.2 (2026-11-08)
 
 - **"hi" gets a hello, not a project survey.** In a new session, a greeting made the agent list files and read the project. Three things caused it: the first message carried the project guidance (`AGENTS.md`), skills and memory notes; the nudge guard read "I'll be glad to help" as a stalled task and told the model to use a tool; and the prompts said nothing about greetings. Now small talk ("hi", "thanks", "ok", "how are you") is sent as it is and answered in words. The guidance and notes come with your first real request, so saying hi first loses nothing. The nudge also leaves alone a reply that asks you a question.

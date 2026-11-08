@@ -460,7 +460,7 @@ img.empty-logo { width: 56px; height: 56px; display: inline-block; filter: drop-
 
 /* ---------------------------------------------------------------- the Preferences window */
 .modal.prefs { width: min(860px, 100%); height: min(640px, 84vh); }
-.prefs-wrap { display: grid; grid-template-columns: 180px 1fr; min-height: 0; flex: 1; border-top: 1px solid var(--border); }
+.prefs-wrap { display: grid; grid-template-columns: 196px 1fr; min-height: 0; flex: 1; border-top: 1px solid var(--border); }
 .prefs-nav { padding: 10px 8px; border-right: 1px solid var(--border); background: var(--bg2); display: flex; flex-direction: column; gap: 2px; }
 .prefs-nav button { text-align: left; padding: 6px 10px; border-radius: 7px; color: var(--muted); font-size: 12.5px; display: flex; gap: 8px; align-items: center; }
 .prefs-nav button .ic { width: 16px; text-align: center; opacity: .8; }
@@ -562,3 +562,23 @@ textarea.long-edit:focus { border-color: var(--accent); }
 .spark.reqs .bar.cached { opacity: .35; }
 .spark.reqs g:hover .bar { opacity: 1; fill: var(--accent); }
 .spark.reqs g:hover .bar.cached { opacity: .55; }
+
+/* Preferences: drafts until Apply */
+.modal.prefs { display: flex; flex-direction: column; }
+.prefs-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--bg2); }
+.prefs-foot .msg { color: var(--muted); font-size: 12px; }
+.prefs-foot .spacer { flex: 1; }
+.pref.changed .pl::after { content: " •"; color: var(--accent); }
+.prefs-nav button .dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); visibility: hidden; }
+.prefs-nav button.dirty .dot { visibility: visible; }
+.plist { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.pli { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; min-width: 0; }
+.pli .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pli .spacer { flex: 1; }
+.pli.gone .mono { text-decoration: line-through; color: var(--faint); }
+.pli.added { border-style: dashed; }
+.pli.addrow { border: 0; padding: 0; }
+.pli.addrow input { flex: 1; min-width: 0; }
+.pref:has(.plist) { grid-template-columns: minmax(0, 1fr); }
+.pref:has(.plist) .pc { grid-row: auto; grid-column: 1; justify-self: stretch; }
+.prefs-nav button { white-space: nowrap; }

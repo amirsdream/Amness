@@ -667,12 +667,13 @@ $("starters").replaceChildren(...STARTERS.map(([t, p]) => h("button", { class: "
 
 // ------------------------------------------------------------------ dialogs: the App's own (approvals, pickers, questions, help), drawn as windows
 let dialogOpen = null;
+let modalCancel = null;                                                            // what Esc or a click outside does (Preferences asks about unapplied changes)
 function modal(content, o = {}) {
-  closeModal(true);
+  closeModal(true); modalCancel = o.onCancel ?? null;
   const ov = h("div", { class: "overlay", onmousedown: (e) => { if (e.target === ov && !o.sticky) { o.onCancel ? o.onCancel() : closeModal(); } } }, content);
   $("modalRoot").append(ov); setTimeout(() => (content.querySelector("[autofocus]") || content.querySelector("input, textarea, .choice, button.primary"))?.focus(), 30); return ov;
 }
-function closeModal(keepId = false) { $("modalRoot").replaceChildren(); if (!keepId) dialogOpen = null; }
+function closeModal(keepId = false) { $("modalRoot").replaceChildren(); modalCancel = null; if (!keepId) dialogOpen = null; }
 const answer = (id, value) => { api("/api/dialog", { id, value }); closeModal(); };
 
 function showDialog(d) {
@@ -1004,65 +1005,97 @@ async function setting(cmd) { try { const r = await api("/api/command", { text: 
 const onoff = (v) => (v ? "on" : "off");
 
 async function showPrefs() {
-  const s = (await tryApi("/api/settings")) || {};
-  const nav = h("nav", { class: "prefs-nav" }), body = h("div", { class: "prefs-body" });
-  const TABS = [["appearance", "◐", "Appearance"], ["chat", "✉", "Chat"], ["model", "◆", "Model"], ["harness", "⟳", "Harness"], ["safety", "⛨", "Safety & quality"], ["advanced", "⚙", "Advanced"], ["about", "ⓘ", "About"]];
+  let s = (await tryApi("/api/settings")) || {};
+  const nav = h("nav", { class: "prefs-nav" }), body = h("div", { class: "prefs-body" }), foot = h("footer", { class: "prefs-foot" });
+  // Every change is a draft until Apply. The window's own look previews live (and goes back on Revert or a discarded close); agent settings run only on Apply,
+  // through the same code as /settings in the terminal. Switching tabs keeps the drafts.
+  const winDraft = new Map(), winOrig = new Map(), draft = new Map(), lists = new Map();
+  const count = () => winDraft.size + draft.size + [...lists.values()].reduce((n, l) => n + l.length, 0);
+  const P = (k, d) => pref(k, d);
+  const stageWin = (k, live = true) => (v) => { if (!winOrig.has(k)) winOrig.set(k, prefs[k]); if (v === winOrig.get(k)) winDraft.delete(k); else winDraft.set(k, v); prefs[k] = v; if (live) { applyPrefs(); render(true); } refresh(); };
+  const items = () => (s.groups ?? []).flatMap((g) => g.items);
+  const stage = (id) => (v) => { const it = items().find((x) => x.id === id); if (it && v === it.value) draft.delete(id); else draft.set(id, v); refresh(); };
+  const cur = (it) => (draft.has(it.id) ? draft.get(it.id) : it.value);
+  const changedWin = (k) => winDraft.has(k), changed = (id) => draft.has(id) || !!lists.get(id)?.length;
+  const prow = (key, isWin, label, desc, ...ctl) => { const r = row(label, desc, ...ctl); r.dataset.key = key; r.classList.toggle("changed", isWin ? changedWin(key) : changed(key)); return r; };
+  const revertWin = () => { for (const [k, v] of winOrig) { if (v === undefined) delete prefs[k]; else prefs[k] = v; } winDraft.clear(); winOrig.clear(); applyPrefs(); render(true); };
+  const revert = () => { revertWin(); draft.clear(); lists.clear(); draw(); };
+  const apply = async () => {
+    document.activeElement?.blur?.();                                               // a text field saves its value on blur
+    for (const [k, v] of winDraft) setPref(k, v); winDraft.clear(); winOrig.clear();
+    const changes = [...[...draft].map(([id, value]) => ({ id, value })), ...[...lists].flatMap(([id, ops]) => ops.map((value) => ({ id, value })))];
+    if (changes.length) {
+      const r = await tryApi("/api/settings", { changes }); draft.clear(); lists.clear();
+      if (r) { s = r.settings; const bad = r.results.filter((x) => !x.ok); if (bad.length) for (const b of bad) toast("error", b.message); else toast("ok", `${r.results.length} setting${r.results.length === 1 ? "" : "s"} applied`); }
+    } else toast("ok", "applied");
+    draw();
+  };
+  let closing = false;
+  const close = () => { if (!count()) { closeModal(); return; } closing = true; refresh(); };
+  const refresh = () => {
+    const n = count();
+    for (const r of body.querySelectorAll(".pref[data-key]")) r.classList.toggle("changed", winDraft.has(r.dataset.key) || changed(r.dataset.key));
+    for (const b of nav.querySelectorAll("button[data-tab]")) b.classList.toggle("dirty", tabChanged(b.dataset.tab));
+    foot.replaceChildren(...(closing && n
+      ? [h("span", { class: "msg", text: `Apply your ${n} change${n === 1 ? "" : "s"} before closing?` }), h("span", { class: "spacer" }), h("button", { class: "btn", onclick: () => { revert(); closeModal(); } }, "Discard"), h("button", { class: "btn", onclick: () => { closing = false; refresh(); } }, "Keep editing"), h("button", { class: "btn primary", onclick: async () => { await apply(); closeModal(); } }, "Apply and close")]
+      : [h("span", { class: "msg", text: n ? `${n} change${n === 1 ? "" : "s"} not applied yet` : "No changes" }), h("span", { class: "spacer" }), h("button", { class: "btn", disabled: !n, onclick: revert }, "Revert"), h("button", { class: "btn primary", disabled: !n, onclick: apply }, "Apply")]));
+  };
+  const WIN = { appearance: ["theme", "accent", "uiScale", "chatSize", "codeFont", "density", "reduceMotion"], chat: ["defaultMode", "sendKey", "foldFinished", "autoOpen"] };
+  const tabChanged = (t) => (WIN[t] ?? []).some((k) => winDraft.has(k)) || ((s.groups ?? []).find((g) => g.id === t)?.items ?? []).some((it) => changed(it.id));
+  /** One shared setting (cli/tui/settings.ts), drawn by its kind. */
+  const control = (it) => {
+    const v = cur(it);
+    if (it.kind === "toggle") return sw(!!v, stage(it.id));
+    if (it.kind === "choice") return sel(it.options.map((o) => [o.value, o.label]), String(v), stage(it.id));
+    if (it.kind === "action") return h("button", { class: "btn small", onclick: () => { if (count()) { toast("warn", "apply or revert your changes first"); return; } closeModal(); run(it.command); } }, it.button ?? "Open…");
+    if (it.kind === "secret") { const i = h("input", { type: "password", placeholder: v ? `${v} · type to replace, or clear` : it.placeholder ?? "", autocomplete: "off" }); if (draft.has(it.id)) i.value = String(draft.get(it.id)); i.onchange = () => stage(it.id)(i.value.trim()); return i; }
+    if (it.kind === "list") {
+      const ops = lists.get(it.id) ?? [], gone = new Set(ops.filter((o) => o.startsWith("remove:")).map((o) => o.slice(7)));
+      const setOps = (o) => { lists.set(it.id, o); draw(); };
+      const inp = h("input", { type: "text", placeholder: it.placeholder ?? "" }), add = () => { const p = inp.value.trim(); if (p) setOps([...ops, "add:" + p]); };
+      inp.onkeydown = (e) => { if (e.key === "Enter") add(); };
+      return h("div", { class: "plist" },
+        ...(it.entries ?? []).map((e) => h("div", { class: `pli${gone.has(e.value) ? " gone" : ""}` }, h("span", { class: "mono", text: e.value }), e.hint ? h("span", { class: "faint small", text: e.hint }) : null, h("span", { class: "spacer" }),
+          h("button", { class: "btn xs", onclick: () => setOps(gone.has(e.value) ? ops.filter((o) => o !== "remove:" + e.value) : [...ops, "remove:" + e.value]) }, gone.has(e.value) ? "Keep" : "Remove"))),
+        ...ops.filter((o) => o.startsWith("add:")).map((o) => h("div", { class: "pli added" }, h("span", { class: "mono", text: o.slice(4) }), h("span", { class: "faint small", text: "to add" }), h("span", { class: "spacer" }), h("button", { class: "btn xs", onclick: () => setOps(ops.filter((x) => x !== o)) }, "Undo"))),
+        (it.entries ?? []).length || ops.length ? null : h("div", { class: "faint small", text: "None." }),
+        h("div", { class: "pli addrow" }, inp, h("button", { class: "btn xs", onclick: add }, "Add")));
+    }
+    return txt(v === undefined || v === null ? "" : String(v), it.placeholder ?? "", stage(it.id));
+  };
+  const shared = (id) => { const g = (s.groups ?? []).find((x) => x.id === id); return g ? g.items.map((it) => prow(it.id, false, it.label, it.help, control(it))) : []; };
   const draw = () => {
-    nav.replaceChildren(...TABS.map(([id, ic, l]) => h("button", { class: id === prefsTab ? "on" : "", onclick: () => { prefsTab = id; draw(); } }, h("span", { class: "ic", text: ic }), l)));
-    const P = (k, d) => pref(k, d), set = (k) => (v) => { setPref(k, v); applyPrefs(); render(true); };
+    const groups = (s.groups ?? []).filter((g) => g.id !== "chat");
+    const TABS = [["appearance", "◐", "Appearance"], ["chat", "✉", "Chat"], ...groups.map((g) => [g.id, { model: "◆", limits: "▤", harness: "⟳", safety: "⛨", folders: "▣", search: "⌕", advanced: "⚙" }[g.id] ?? "·", g.label]), ["about", "ⓘ", "About"]];
+    if (!TABS.some((t) => t[0] === prefsTab)) prefsTab = "appearance";
+    nav.replaceChildren(...TABS.map(([id, ic, l]) => h("button", { class: id === prefsTab ? "on" : "", dataset: { tab: id }, onclick: () => { prefsTab = id; draw(); } }, h("span", { class: "ic", text: ic }), l, h("span", { class: "dot" }))));
+    const lead = (g) => h("div", { class: "lead", text: g?.lead ?? "" });
     const sections = {
-      appearance: [h("h2", { text: "Appearance" }), h("div", { class: "lead", text: "How the window looks. Changes apply at once." }),
-        row("Theme", "Follow the system, or always dark or light.", seg([["system", "System"], ["dark", "Dark"], ["light", "Light"]], P("theme", "system"), set("theme"))),
-        row("Accent colour", "Buttons, selection and the active step.", h("div", { class: "swatches" }, Object.entries(ACCENTS).map(([name, c]) => h("button", { class: `swatch${P("accent", "violet") === name ? " on" : ""}`, title: name, style: `background:${c[0]}`, onclick: (e) => { setPref("accent", name); applyPrefs(); for (const x of e.currentTarget.parentElement.children) x.classList.toggle("on", x === e.currentTarget); } })))),
-        row("Interface size", "Scales the whole window.", ...range(0.8, 1.3, 0.05, P("uiScale", 1), (v) => `${Math.round(v * 100)}%`, set("uiScale"))),
-        row("Chat text size", "Replies, your messages and the message box.", ...range(12, 18, 1, P("chatSize", 14), (v) => `${v}px`, set("chatSize"))),
-        row("Code font", "Used for code, diffs, commands and the file view. Leave empty for the system font.", txt(P("codeFont", ""), "e.g. JetBrains Mono", set("codeFont"))),
-        row("Density", "Compact fits more on the screen.", seg([["comfortable", "Comfortable"], ["compact", "Compact"]], P("density", "comfortable"), set("density"))),
-        row("Reduce motion", "No animations or pulsing.", sw(!!P("reduceMotion", false), set("reduceMotion")))],
+      appearance: [h("h2", { text: "Appearance" }), h("div", { class: "lead", text: "How this window looks. You see changes at once; they are kept when you apply." }),
+        prow("theme", true, "Theme", "Follow the system, or always dark or light.", seg([["system", "System"], ["dark", "Dark"], ["light", "Light"]], P("theme", "system"), stageWin("theme"))),
+        prow("accent", true, "Accent colour", "Buttons, selection and the active step.", h("div", { class: "swatches" }, Object.entries(ACCENTS).map(([name, c]) => h("button", { class: `swatch${P("accent", "violet") === name ? " on" : ""}`, title: name, style: `background:${c[0]}`, onclick: (e) => { stageWin("accent")(name); for (const x of e.currentTarget.parentElement.children) x.classList.toggle("on", x === e.currentTarget); } })))),
+        prow("uiScale", true, "Interface size", "Scales the whole window.", ...range(0.8, 1.3, 0.05, P("uiScale", 1), (v) => `${Math.round(v * 100)}%`, stageWin("uiScale"))),
+        prow("chatSize", true, "Chat text size", "Replies, your messages and the message box.", ...range(12, 18, 1, P("chatSize", 14), (v) => `${v}px`, stageWin("chatSize"))),
+        prow("codeFont", true, "Code font", "Used for code, diffs, commands and the file view. Leave empty for the system font.", txt(P("codeFont", ""), "e.g. JetBrains Mono", stageWin("codeFont"))),
+        prow("density", true, "Density", "Compact fits more on the screen.", seg([["comfortable", "Comfortable"], ["compact", "Compact"]], P("density", "comfortable"), stageWin("density"))),
+        prow("reduceMotion", true, "Reduce motion", "No animations or pulsing.", sw(!!P("reduceMotion", false), stageWin("reduceMotion")))],
       chat: [h("h2", { text: "Chat" }), h("div", { class: "lead", text: "How conversations behave in this window." }),
-        row("Start in mode", "The permission mode a new window starts with.", sel([["default", "Ask"], ["acceptEdits", "Auto-edit"], ["plan", "Plan"]], P("defaultMode", "default"), (v) => setPref("defaultMode", v))),
-        row("Send with", "With ⌘/Ctrl+Enter, Enter starts a new line.", seg([["enter", "Enter"], ["mod-enter", "⌘/Ctrl+Enter"]], P("sendKey", "enter"), (v) => setPref("sendKey", v))),
-        row("Fold finished turns", "A finished turn's steps become one \"Worked …\" line; the answer stays in full.", sw(P("foldFinished", true) !== false, set("foldFinished"))),
-        row("Open the current step", "While Amness works, the step happening now opens by itself.", sw(P("autoOpen", true) !== false, set("autoOpen"))),
-        row("Notifications", "When a long turn ends or approval is needed while the window is in the background.", sw(s.notify !== false, (v) => setting(`/notify ${onoff(v)}`)))],
-      model: [h("h2", { text: "Model" }), h("div", { class: "lead", text: `${s.providerLabel ?? ""} · ${s.model ?? ""}` }),
-        row("Provider and API keys", "Connect providers, add or replace keys.", h("button", { class: "btn small", onclick: () => { closeModal(); run("/connect"); } }, "Manage…")),
-        row("Model", s.model ?? "", h("button", { class: "btn small", onclick: () => { closeModal(); run("/model"); } }, "Change…")),
-        ...(s.efforts?.length ? [row("Reasoning effort", "More effort thinks longer and costs more.", sel([["default", "Default"], ...s.efforts.map((x) => [x, x])], s.effort || "default", (v) => setting(`/effort ${v}`)))] : []),
-        row("Budget per turn", "Token cap for one turn (cached input counts a tenth). For example 300k or 1m.", txt(s.maxTokens ? fmtTokens(s.maxTokens) : "", "300k", (v) => v && setting(`/budget ${v}`))),
-        row("Fallback model", "Answers when the main model is overloaded or unreachable.", txt(s.fallback, "model id, or empty for none", (v) => setting(`/models fallback ${v || "off"}`))),
-        ...["explore", "compact", "review", "cheap"].map((r) => row(`Model for ${r}`, { explore: "The read-only explorer subagents.", compact: "Handoff notes and /compact.", review: "The independent reviewer.", cheap: "Cheap steps when the router is on." }[r], txt(s.models?.[r], "same as the main model", (v) => setting(`/models ${r} ${v || "off"}`)))),
-        row("Router", "Send exploration steps to the cheap model when that pays off.", sw(!!s.router, (v) => setting(`/router ${onoff(v)}`))),
-        ...(s.openai ? [row("Wire API", "OpenAI-compatible providers only.", sel([["auto", "Auto"], ["responses", "Responses"], ["chat", "Chat completions"]], s.api, (v) => setting(`/api ${v}`)))] : [])],
-      harness: (() => { const hv = s.harness ?? { guards: [] }, refresh = async (cmd) => { await setting(cmd); const n = await tryApi("/api/settings"); if (n) { Object.assign(s, n); draw(); } };
-        return [h("h2", { text: "Harness" }), h("div", { class: "lead", text: "The agent loop's own checks and limits. The same as /harness in the terminal. Each guard can be switched off; together they were not measured to change the pass rate yet, so leave them on unless you are testing." }),
-          ...hv.guards.map((g) => row(g.label, `${g.what}${g.byProfile ? " (off in this model's profile)" : ""} · ${g.name}`, sw(g.on, (v) => refresh(`/harness ${v ? "on" : "off"} ${g.name}`)))),
-          row("Step limit", "The most model turns in one run.", txt(String(hv.maxSteps ?? ""), "60", (v) => v && refresh(`/harness steps ${v}`))),
-          row("No-progress limit", "Turns without measurable progress before the run stops.", txt(String(hv.stagnationTurns ?? ""), "8", (v) => v && refresh(`/harness stagnation ${v}`))),
-          row("Context budget", "Characters of history before old tool output is shortened (used when the model's context window is not known).", txt(String(hv.contextBudget ?? ""), "60000", (v) => v && refresh(`/harness budget ${v}`))),
-          row("Cost-aware rewrites", "Shorten old output only when that saves more than the lost prompt cache costs. Not measured to help.", sw(!!hv.governRewrites, (v) => refresh(`/harness rewrites ${v ? "on" : "off"}`))),
-          row("Defaults", "Switch every guard back on and reset the limits.", h("button", { class: "btn small", onclick: () => refresh("/harness reset") }, "Reset"))]; })(),
-      safety: [h("h2", { text: "Safety & quality" }), h("div", { class: "lead", text: "What protects your machine and what checks the work." }),
-        row("Sandbox", "Shell commands run in an OS sandbox: workspace (no writes outside the project) or strict (no network either).", sel([["off", "Off"], ["workspace", "Workspace"], ["strict", "Strict"]], s.sandbox, (v) => setting(`/sandbox ${v}`))),
-        row("Verify command", "Must pass before Amness may say it is done (for example npm test).", txt(s.verify, "none", (v) => setting(`/verify ${v || "off"}`))),
-        row("Check after each edit", "A fast command (typecheck, lint) whose failures go straight back to the model.", txt(s.check, "none", (v) => setting(`/check ${v || "off"}`))),
-        row("Language-server errors", "Add errors from an installed language server to edit results.", sw(!!s.lsp, (v) => setting(`/lsp ${onoff(v)}`))),
-        row("Independent reviewer", "A skeptical second pass before work is accepted (extra model calls).", sw(!!s.review, (v) => setting(`/reviewer ${onoff(v)}`))),
-        row("Approval reviewer", "A second model pre-approves clearly safe risky calls (never the safety floor).", sw(!!s.approvalReviewer, (v) => setting(`/approver ${onoff(v)}`)))],
-      advanced: [h("h2", { text: "Advanced" }), h("div", { class: "lead", text: "Rarely needed." }),
-        row("Shell", "Which shell runs the agent's commands.", sel((s.shells ?? ["auto"]).map((x) => [x, x]), s.shell, (v) => setting(`/shell ${v}`))),
-        row("Loop strategy", "Plan first, explore then act, or none.", sel((s.strategies ?? ["off"]).map((x) => [x, x]), s.strategy, (v) => setting(`/strategy ${v}`))),
-        row("Keep the cache warm", "While you are away, keep the prompt cache alive (a few cache reads).", sw(!!s.keepWarm, (v) => setting(`/keepwarm ${onoff(v)}`))),
-        row("Plan cache", "Offer the plan of a similar finished task as a starting point.", sw(!!s.plans, (v) => setting(`/plans ${onoff(v)}`))),
-        row("All settings", `Everything is kept in ${s.configFile ?? "~/.amness/config.json"}, shared with the terminal app.`, h("button", { class: "btn small", onclick: () => { closeModal(); palette(); } }, "All commands…"))],
+        prow("defaultMode", true, "Start in mode", "The permission mode a new window starts with.", sel([["default", "Ask"], ["acceptEdits", "Auto-edit"], ["plan", "Plan"]], P("defaultMode", "default"), stageWin("defaultMode", false))),
+        prow("sendKey", true, "Send with", "With ⌘/Ctrl+Enter, Enter starts a new line.", seg([["enter", "Enter"], ["mod-enter", "⌘/Ctrl+Enter"]], P("sendKey", "enter"), stageWin("sendKey", false))),
+        prow("foldFinished", true, "Fold finished turns", "A finished turn's steps become one \"Worked …\" line; the answer stays in full.", sw(P("foldFinished", true) !== false, stageWin("foldFinished"))),
+        prow("autoOpen", true, "Open the current step", "While Amness works, the step happening now opens by itself.", sw(P("autoOpen", true) !== false, stageWin("autoOpen"))),
+        ...shared("chat")],
       about: [h("div", { class: "about" }, h("img", { src: "icon.png", alt: "" }), h("div", {}, h("h3", { text: "Amness" }), h("div", { class: "muted", text: `Version ${state?.version ?? ""}` }), h("div", { class: "muted small", text: navigator.userAgent.match(/Electron\/[\d.]+/)?.[0]?.replace("/", " ") ?? "browser" }))),
         row("Project", state?.cwd ?? "", window.amnessDesktop && state ? h("button", { class: "btn small", onclick: () => window.amnessDesktop.reveal(state.cwd) }, "Show in folder") : null),
+        row("Settings file", `${s.configFile ?? "~/.amness/config.json"}, shared with the terminal app. In the terminal: /settings, or /set <name> <value>.`, null),
         row("Shortcuts", "⌘/Ctrl K commands · N new · O open · P file · F find · E expand · B sidebar · J panel · , preferences", null)],
     };
+    for (const g of groups) sections[g.id] = [h("h2", { text: g.label }), g.id === "model" ? h("div", { class: "lead", text: `${s.providerLabel ?? ""} · ${s.model ?? ""}` }) : lead(g), ...shared(g.id)];
     body.replaceChildren(...sections[prefsTab]);
+    refresh();
   };
   draw();
-  modal(h("div", { class: "modal prefs" }, h("header", {}, "Preferences", h("span", { class: "spacer" }), h("button", { class: "icon-btn", "aria-label": "Close", onclick: () => closeModal() }, "✕")), h("div", { class: "prefs-wrap" }, nav, body)));
+  modal(h("div", { class: "modal prefs" }, h("header", {}, "Preferences", h("span", { class: "spacer" }), h("button", { class: "icon-btn", "aria-label": "Close", onclick: close }, "✕")), h("div", { class: "prefs-wrap" }, nav, body), foot), { onCancel: close });
 }
 
 // ------------------------------------------------------------------ chrome: buttons, tabs, shortcuts, menus
@@ -1095,7 +1128,7 @@ const menuAction = (what) => ({ prefs: () => showPrefs(), new: newChat, open: op
 window.amnessDesktop?.onMenu(menuAction);
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
-  if (e.key === "Escape" && $("modalRoot").children.length && !dialogOpen) { closeModal(); return; }
+  if (e.key === "Escape" && $("modalRoot").children.length && !dialogOpen) { modalCancel ? modalCancel() : closeModal(); return; }
   if (e.key === "Escape" && state?.running && document.activeElement !== input && !dialogOpen) { api("/api/stop", {}); return; }
   if (!mod || window.amnessDesktop) return;                                       // in the app window the menu owns these shortcuts
   if (e.key === ",") { e.preventDefault(); showPrefs(); return; }

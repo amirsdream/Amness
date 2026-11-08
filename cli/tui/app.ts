@@ -7,7 +7,7 @@ import { onRateLimitWait } from "../model.ts";
 import { type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
-import { PROVIDERS, home, keyFor, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
+import { PROVIDERS, home, keyFor, keyIdOf, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { editExternally, editorCommand, readClipboardImage, savePastedImage } from "./external.ts";
 import { fileOpenCommand } from "./find.ts";
@@ -520,7 +520,7 @@ export class App {
 
   /** The provider rejected the key (expired or revoked): ask for a new one, save it, and send the message again. */
   private async reconnect(text: string): Promise<boolean> {
-    const id = this.cfg.provider, label = PROVIDERS[id].label;
+    const id = keyIdOf(this.cfg), label = this.cfg.server ?? PROVIDERS[this.cfg.provider].label;   // a saved server has its own key
     if (keyFor(id).source === "env") { this.note(`${label}: the key comes from an environment variable. Update it and restart, or unset it and use /connect.`); return false; }
     const key = await this.askText(`${label} ${this.cfg.apiKey ? "key was rejected. New API key" : "asks for a key. API key or token"} (hidden; ${where()}), Esc to skip`, { secret: true });
     if (!key) return false;

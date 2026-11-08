@@ -6,6 +6,7 @@ import { CLAUDE_MODELS, OPENAI_MODELS } from "../config.ts";
 import { fetchModels } from "../models.ts";
 import { listDrafts } from "../../src/index.ts";
 import { themeNames, THEMES } from "./themes.ts";
+import { settingsView, showValue } from "./settings.ts";
 import type { App } from "./app.ts";
 
 export type ArgOption = { value: string; detail?: string; /** more words are expected after this one: insert a space and do not submit */ more?: boolean };
@@ -37,6 +38,8 @@ export function argOptions(a: App, cmd: string, words: string[]): ArgResult {
       : words.length === 1 ? modelOptions(a, [{ value: "off", detail: "use the main model" }]) : ok([]);
     case "harness": return first ? ok(opts(["on", "switch a guard on"], ["off", "switch a guard off"], ["steps", "step limit"], ["stagnation", "no-progress limit"], ["budget", "context budget in characters"], ["rewrites", "cost-aware rewrites on or off"], ["reset", "back to the defaults"]).map((o) => ({ ...o, more: o.value !== "reset" })))
       : words.length === 1 && (words[0] === "on" || words[0] === "off") ? ok(GUARDS.map((g) => ({ value: g.name, detail: g.label }))) : words.length === 1 && words[0] === "rewrites" ? ok(opts(["on", ""], ["off", ""])) : ok([]);
+    case "set": return first ? ok(settingsView(a, "terminal").flatMap((g) => g.items.filter((x) => x.kind !== "action").map((x) => ({ value: x.id, detail: `${x.label} · now ${showValue(x) || "—"}`, more: true }))))
+      : words.length === 1 ? (() => { const s = settingsView(a, "terminal").flatMap((g) => g.items).find((x) => x.id === words[0]); return ok(s?.kind === "toggle" ? opts(["on", ""], ["off", ""]) : s?.kind === "choice" ? (s.options ?? []).map((o) => ({ value: o.value, detail: o.label })) : []); })() : ok([]);
     case "dirs": return first ? ok(opts(["add", "allow a folder outside the project (saved)"], ["remove", "take one off the list"], ["list", "show the allowed folders"]).map((o) => ({ ...o, more: o.value !== "list" })))
       : words.length === 1 && (words[0] === "remove" || words[0] === "rm") ? ok(a.allowedDirs().map((d) => ({ value: d, detail: a.savedDirs.includes(d) ? "saved" : "this session" }))) : ok([]);
     case "todos": return first ? ok(opts(["edit", "change the agent's checklist"])) : ok([]);

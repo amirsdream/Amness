@@ -1,4 +1,5 @@
-// Runs inside the desktop window for `npm run test:desktop-ui`: Preferences changes the window at once, agent settings reach the App (through its own commands), and everything is saved.
+// Runs inside the desktop window for `npm run test:desktop-ui`: Preferences previews the window at once, every change waits for Apply (agent settings then run the App's own commands),
+// Revert and a discarded close undo the preview, drafts survive tab switches, and what was applied is saved.
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms)), $ = (s) => document.querySelector(s), $$ = (s) => [...document.querySelectorAll(s)];
   const until = async (f, ms = 6000) => { const t0 = Date.now(); while (!f()) { if (Date.now() - t0 > ms) return false; await sleep(40); } return true; };
@@ -17,15 +18,43 @@
   // chat behaviour: no folding
   $$(".prefs-nav button").find((b) => b.textContent.includes("Chat")).click(); await sleep(50);
   row("Fold finished turns").querySelector(".switch").click(); await sleep(50);
-  // agent settings go through the App's own commands
-  $$(".prefs-nav button").find((b) => b.textContent.includes("Safety")).click(); await sleep(50);
+  // agent settings are drafts: nothing reaches the App before Apply
+  const tab = (name) => $$(".prefs-nav button").find((b) => b.textContent.includes(name));
+  tab("Safety").click(); await sleep(50);
   row("Language-server errors").querySelector(".switch").click();
   const sb = row("Sandbox").querySelector("select"); sb.value = "workspace"; sb.dispatchEvent(new Event("change"));
-  await sleep(700);                                                                // the two commands run on the server
-  const st = await get("/api/settings"); r.lspOn = st.lsp === true; r.sandbox = st.sandbox;
+  await sleep(300);
+  let st = await get("/api/settings"); r.notBeforeApply = st.lsp === false && st.sandbox === "off";
+  r.footerCounts = /7 changes not applied yet/.test($(".prefs-foot").textContent) && row("Sandbox").classList.contains("changed");
+  // leave the tab and come back: the drafts are still there, and the tab is marked
+  tab("Appearance").click(); await sleep(80); tab("Safety").click(); await sleep(80);
+  r.backShowsDrafts = row("Sandbox").querySelector("select").value === "workspace" && row("Language-server errors").querySelector(".switch").classList.contains("on") && tab("Safety").classList.contains("dirty");
+  // Apply runs them through the App's own commands, quietly
+  [...$$(".prefs-foot button")].find((b) => b.textContent === "Apply").click();
+  r.applied = await until(() => /No changes/.test($(".prefs-foot").textContent)) && await (async () => { st = await get("/api/settings"); return st.lsp === true && st.sandbox === "workspace"; })();
   r.noTranscriptNoise = !$(".rawout");
-  $$(".prefs-nav button").find((b) => b.textContent.includes("About")).click(); await sleep(80); r.aboutIcon = $(".about img")?.naturalWidth > 0;
-  $(".modal.prefs .icon-btn").click(); await sleep(50);
+  // Revert undoes a live preview
+  tab("Appearance").click(); await sleep(50);
+  row("Accent colour").querySelector('[title="pink"]').click(); await sleep(50);
+  const pinkShown = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() !== "#0f8f83";
+  [...$$(".prefs-foot button")].find((b) => b.textContent === "Revert").click(); await sleep(80);
+  r.revertUndoesPreview = pinkShown && getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() === "#0f8f83" && /No changes/.test($(".prefs-foot").textContent);
+  // closing with a change asks first; Discard puts it back
+  row("Density").querySelectorAll(".seg button")[0].click(); await sleep(50);
+  $(".modal.prefs .icon-btn").click(); await sleep(80);
+  r.closeAsks = !!$(".modal.prefs") && /Apply your 1 change before closing\?/.test($(".prefs-foot").textContent);
+  [...$$(".prefs-foot button")].find((b) => b.textContent === "Discard").click(); await sleep(80);
+  r.discardRestores = !$(".modal.prefs") && document.body.classList.contains("compact");
+  // a folder outside the project, from the new Folders and trust tab
+  $("#prefsBtn").click(); await until(() => !!$(".modal.prefs"));
+  tab("Folders").click(); await sleep(80);
+  const add = row("Folders outside this project").querySelector(".addrow input"); add.value = "/tmp"; add.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await sleep(80);
+  r.listDraft = row("Folders outside this project").querySelector(".pli.added")?.textContent.includes("/tmp");
+  [...$$(".prefs-foot button")].find((b) => b.textContent === "Apply").click();
+  r.folderApplied = await until(() => /No changes/.test($(".prefs-foot").textContent)) && !!row("Folders outside this project").querySelector(".pli:not(.added):not(.addrow)")?.textContent.includes("tmp");
+  r.trustedListed = !!row("Trusted folders");
+  tab("About").click(); await sleep(80); r.aboutIcon = $(".about img")?.naturalWidth > 0;
+  $(".modal.prefs .icon-btn").click(); await sleep(50); r.closesWhenClean = !$(".modal.prefs");
   // a finished turn now stays unfolded
   const input = $("#input"); input.value = "fix paginate"; input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await until(() => $(".modal .choice")); $(".modal .choice").click();
