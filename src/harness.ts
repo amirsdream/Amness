@@ -12,7 +12,7 @@ export type Message = { role: "system" | "user" | "assistant" | "tool"; content:
   raw?: unknown };
 export type ToolSpec = { name: string; description: string; parameters: Schema };
 /** Any chat model: messages + tool specs in, assistant message out (attach `usage` if known). See openai.ts. */
-export type ModelOpts = { signal?: AbortSignal; /** Cap on generated tokens for this call (used for cache keep-alive pings; adapters may ignore it). */ maxTokens?: number; /** Called with each piece of assistant text as it is generated (streaming adapters only). */ onText?: (delta: string) => void; /** Called with pieces of the model's reasoning summary, where the provider exposes one. */ onThinking?: (delta: string) => void };
+export type ModelOpts = { signal?: AbortSignal; /** "required": the model must call a tool (the server then constrains its output to a valid call); default "auto". */ toolChoice?: "auto" | "required"; /** Cap on generated tokens for this call (used for cache keep-alive pings; adapters may ignore it). */ maxTokens?: number; /** Called with each piece of assistant text as it is generated (streaming adapters only). */ onText?: (delta: string) => void; /** Called with pieces of the model's reasoning summary, where the provider exposes one. */ onThinking?: (delta: string) => void };
 export type Model = ((messages: Message[], tools: ToolSpec[], opts?: ModelOpts) => Promise<Message>) & {
   /** Set by adapters whose provider binds reasoning to the exact history (Claude): the harness then never edits past turns. */
   appendOnly?: boolean;
@@ -139,7 +139,9 @@ export class Budget {
 
 export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string; /** from the built-in safety floor: "don't ask again" shortcuts must not skip this prompt */ floor?: boolean }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
-export type Guard = "coverage" | "toolcache" | "nudge" | "loop" | "compact" | "readdelta" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation" | "review" | "redact";
+export type Guard = "coverage" | "toolcache" | "nudge" | "loop" | "compact" | "readdelta" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation" | "review" | "redact" | "pin" | "anchor" | "audit";
+/** Every guard name, for checking names that come from files and flags. */
+export const GUARD_NAMES: readonly Guard[] = ["coverage", "toolcache", "nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "review", "redact", "pin", "anchor", "audit"];
 
 export type Options = {
   model: Model;
@@ -160,7 +162,8 @@ export type Options = {
   /** Reuse results of pure read tools (`cacheable`) while nothing has changed, and answer a repeat with a one-line pointer when the first result is still in the conversation. Default on; `false` switches it off. A `ToolCache` can be shared across runs. */
   toolCache?: ToolCache | false;
   /** Checks run when the model tries to finish. Return a message to send it back to work (at most twice per run), or nothing to accept. The code agent uses one to refuse "I read every file" when it did not. */
-  finishChecks?: ((ctx: { task: string; summary: string; messages: Message[] }) => string | void)[];
+  /** Checks run when the model finishes; one that returns a reason refuses the finish (at most twice). Each is switched off by its `guard` (default `coverage`). */
+  finishChecks?: (((ctx: { task: string; summary: string; messages: Message[] }) => string | void) & { guard?: Guard })[];
   /** Send shorter tool definitions (see `compactSpec` in context.ts). For small context windows; default off. */
   compactSpecs?: boolean | (() => boolean);
   /** The model's context window in tokens (8192 for a small local model, 1_000_000 for a large one). When set, the loop keeps every request inside it: it shrinks old output as the window fills,
@@ -185,6 +188,10 @@ export type Options = {
   rollover?: { afterTokens?: number; afterChars?: number };
   /** Receives each handoff note (persist it; it is also a portable summary of the work so far). */
   onHandoff?: (note: string) => void;
+  /** The rules kept word for word through a handoff (guard `pin`): from the user's messages after the first, which a summary would otherwise paraphrase or drop. Default `pinRules`. */
+  pin?: (userTexts: string[]) => string[];
+  /** "required" asks the model for a tool call at every step (task runs that end with `finish`; a model profile sets it for models that drift into prose). */
+  toolChoice?: "auto" | "required";
   /** Rules that allow, force-ask or deny a call before the permission mode is consulted (see `Permissions`). Deny wins; allow skips the prompt. */
   permissions?: { check(tool: string, args: Record<string, any>): { action: "allow" | "ask" | "deny" | "none"; rule?: string; reason?: string; floor?: boolean } };
   /** Turns without any objective improvement (failing-test count, new files edited, new code) before the loop reflects, then stops. Default 8; 0 switches it off. */
@@ -215,7 +222,31 @@ GOAL: what the user wants, in your own words
 DONE: what is finished, with exact file paths and decisions made
 STATE: what you verified (commands run, results), what is still failing
 NEXT: the concrete next steps, in order
-GOTCHAS: facts learned the hard way (commands, quirks, dead ends not to repeat)`;
+GOTCHAS: facts learned the hard way (commands, quirks, dead ends not to repeat)
+RULES: every instruction the user gave about how to work or what not to do, word for word`;
+
+/** Words that make a sentence a rule about how to work, not a description of what to build. Summaries drop these about six times more often than specs (arXiv 2610.31778). */
+const RULE_WORD = /\b(never|don'?t|do not|doesn'?t|must(?:n'?t)?|always|only|avoid|without|instead|make sure|ensure|keep|stop|no more|not allowed|forbidden|prefer|remember|careful|important)\b/i;
+/** The sentences of the user's messages that state a rule, word for word, newest last; at most `max` characters (the oldest go first). */
+export function pinRules(userTexts: string[], max = 1500): string[] {
+  const out: string[] = [];
+  for (const t of userTexts) {
+    const body = t.split(/\n\n(?:<attached>|## |\[)/)[0];                        // not the notes, skills and files Amness appends
+    for (const sent of body.split(/(?<=[.!?])\s+|\n+/)) { const x = sent.trim().replace(/^[-*•]\s*/, ""); if (x.length >= 6 && x.length <= 400 && RULE_WORD.test(x) && !out.includes(x)) out.push(x); }
+  }
+  let total = 0; const kept: string[] = [];
+  for (const r of [...out].reverse()) { if (total + r.length > max) break; kept.unshift(r); total += r.length; }
+  return kept;
+}
+const RULES_MARK = "\n\n## Rules you were given (word for word; they still apply)";
+/** The one user message a conversation continues from after a handoff: the first message as it was, the note, and the rules from later messages word for word
+ * (also those carried by an earlier handoff). `pin: null` keeps no rules (guard `pin` off). Used by the automatic rollover and by /compact. */
+export function handoffSeed(msgs: Message[], note: string, pin: ((userTexts: string[]) => string[]) | null = pinRules): string {
+  const users = msgs.filter((x) => x.role === "user"), head = users[0]?.content ?? "", first = head.split(HANDOFF_MARK)[0];
+  const carried = head.split(RULES_MARK)[1]?.split("\n").map((l) => l.replace(/^- /, "").trim()).filter(Boolean) ?? [];
+  const rules = pin ? [...new Set([...carried, ...pin(users.slice(1).map((x) => x.content ?? ""))])] : [];
+  return `${first}${HANDOFF_MARK} (you are continuing, not starting over)\n${note}${rules.length ? `${RULES_MARK}\n${rules.map((r) => `- ${r}`).join("\n")}` : ""}`;
+}
 
 /** Ask the model to summarise the transcript so far. Tool specs are passed because some APIs require them when history contains tool calls. */
 export async function makeHandoff(model: Model, specs: ToolSpec[], msgs: Message[], budget?: Budget): Promise<string> {
@@ -447,8 +478,7 @@ export function createHarness(o: Options) {
         try { note = await makeHandoff(o.compactModel ?? o.model, specs, req, o.budget); break; }
         catch (e) { if (!isOverflow(e) || sig()?.aborted) throw e; if (tries >= 2) { note = mechanicalNote(msgs); break; } }   // the request for the note was itself too big: ask again with less, then write the note ourselves
       }
-      const first = (msgs.find((x) => x.role === "user")?.content ?? "").split(HANDOFF_MARK)[0];
-      msgs.splice(1, msgs.length, { role: "user", content: `${first}${HANDOFF_MARK} (you are continuing, not starting over)\n${note}` });
+      msgs.splice(1, msgs.length, { role: "user", content: handoffSeed(msgs, note, off.has("pin") ? null : o.pin ?? pinRules) });
       seen.clear(); nudges = 0; lastPrompt = 0;
       o.onHandoff?.(note); emit({ kind: "rollover", detail: note.slice(0, 200) });
     };
@@ -520,7 +550,7 @@ export function createHarness(o: Options) {
       let m!: Message;
       let streamed = false;
       for (;;) {
-        try { m = await o.model(msgs, specs, { signal: sig(), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); recoveries = 0; lastModelAt = Date.now(); sinceRewrite++; break; }
+        try { m = await o.model(msgs, specs, { signal: sig(), ...(o.toolChoice && specs.length && { toolChoice: o.toolChoice }), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); recoveries = 0; lastModelAt = Date.now(); sinceRewrite++; break; }
         catch (e) {
           if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
           // The provider says the request does not fit. Learn the window from the message (or guess it from our own estimate), shrink harder, and ask again.
@@ -578,7 +608,7 @@ export function createHarness(o: Options) {
             if (problems.length && ledgerRejects < 2) { ledgerRejects++; const detail = `the record does not support your summary: ${problems.join(" ")}`; emit({ kind: "rejected", detail }); return `REJECTED: ${detail}\nFix it (run the command, or correct the summary), then finish again.`; }
             if (problems.length) emit({ kind: "hook", event: "Ledger", detail: `finishing with unverified claims: ${problems.join(" ")}`, blocked: false });
           }
-          if (o.finishChecks && !off.has("coverage")) for (const chk of o.finishChecks) {
+          if (o.finishChecks) for (const chk of o.finishChecks.filter((c) => !off.has(c.guard ?? "coverage"))) {
             const why = chk({ task, summary: String(args.summary ?? ""), messages: msgs });
             if (why && coverageRejects < 2) { coverageRejects++; emit({ kind: "rejected", detail: why }); return `REJECTED: ${clip(why, 3000)}`; }
           }

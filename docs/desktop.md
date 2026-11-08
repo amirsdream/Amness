@@ -60,13 +60,14 @@ Everything is saved in `~/.amness/config.json`, the same file as the terminal ap
 |---|---|---|
 | Appearance | Theme (System, Dark, Light), accent colour, interface size, chat text size, code font, density, reduce motion | none (the terminal's own font and colours decide these) |
 | Chat | The mode a new window starts in, send with Enter or ⌘/Ctrl+Enter, fold finished turns, open the current step by itself, notifications | `/notify` (the others are window only) |
-| Model | Provider (cloud providers and your saved servers), keys and servers (**Manage…**), model, reasoning effort, fallback model, models for each job, router, wire API | `/provider`, `/connect`, `/model`, `/effort`, `/models`, `/router`, `/api` |
+| Model | Provider (cloud providers and your saved servers), keys and servers (**Manage…**), model, reasoning effort, fallback model, models for each job, tool call every step (per model, for task runs), server-side compaction (OpenAI), router, wire API | `/provider`, `/connect`, `/model`, `/effort`, `/models`, `/set toolChoice`, `/set compactAt`, `/router`, `/api` |
 | Context and limits | Budget per turn, context window, requests at once, Claude task budget | `/budget`, `/set contextWindow`, `/set maxConcurrent`, `/set taskBudget` |
 | Harness | Each guard on or off, step limit, no-progress limit, context budget, cost-aware rewrites, defaults | `/harness` |
 | Safety & quality | Sandbox, verify command, check after each edit, language-server errors, independent reviewer, approval reviewer, permission rules | `/sandbox`, `/verify`, `/check`, `/lsp`, `/reviewer`, `/approver`, `/permissions` |
 | Folders and trust | Folders outside the project the agent may use, trusted folders (add or remove) | `/dirs`, `/set trusted remove:<path>` |
 | Search and memory | Tavily key for web search, semantic memory, memory notes | `/set tavilyKey`, `/memory embeddings`, `/memory` |
-| Advanced | Shell, loop strategy, keep the cache warm, plan cache | `/shell`, `/strategy`, `/keepwarm`, `/plans` |
+| Advanced | Shell, loop strategy, system prompt, keep the cache warm, plan cache | `/shell`, `/strategy`, `/prompt`, `/keepwarm`, `/plans` |
+| Extend | Plugins, hooks, skills, subagents, MCP servers, the model profile, the tool list (each opens its own view) | `/plugins`, `/hooks`, `/skills`, `/agents`, `/mcp list`, `/profile`, `/tools` |
 | About | Version, project folder, settings file, shortcuts | |
 
 Tested in the real window by `npm run test:desktop-ui` (`test/desktop-ui/prefs-check.js`).

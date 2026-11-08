@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CodeIndex, createCodeAgent, indexFile, indexTools, type Message, type Model } from "../src/index.ts";
+import { CodeIndex, codeTools, createCodeAgent, indexFile, indexTools, relatedFiles, type Message, type Model } from "../src/index.ts";
 
 const root = () => mkdtempSync(join(tmpdir(), "amness-ix-"));
 const put = (base: string, rel: string, text: string) => { mkdirSync(join(base, rel, ".."), { recursive: true }); writeFileSync(join(base, rel), text); };
@@ -72,4 +72,16 @@ test("agent: the index tools exist only in repositories big enough to need them"
   assert.ok(!(await names(repo())).includes("repo_map"));                                      // 8 source files: grep is enough
   const big = root(); for (let i = 0; i < 30; i++) put(big, `src/m${i}.ts`, `export function f${i}() { return ${i}; }\n`);
   const n = await names(big); assert.ok(n.includes("repo_map") && n.includes("find_refs") && n.includes("impact"));
+});
+
+test("anchored search: grep adds who imports the files it hit and which tests cover them (guard anchor), and nothing when the index knows nothing", async () => {
+  const d = repo(); put(d, "test/tax.test.ts", "import { taxFor } from '../src/billing/tax.ts';\ntaxFor({ region: 'EU' }, 1);\n");
+  const ix = new CodeIndex(d);
+  assert.equal(relatedFiles(ix, ["src/billing/invoice.ts"]), "\n\nRelated files (from the code index):\n- src/billing/invoice.ts: imported by src/api/handler.ts");
+  assert.match(relatedFiles(ix, ["src/billing/tax.ts"]), /- src\/billing\/tax\.ts: imported by src\/billing\/invoice\.ts; tested in test\/tax\.test\.ts/);
+  assert.equal(relatedFiles(ix, ["README.md"]), "");
+  const grep = (related?: (f: string[]) => string) => codeTools(d, { related }).find((t) => t.name === "grep")!.run({ pattern: "taxFor" }, { registry: undefined as any, step: 0, emit: () => {} } as any) as Promise<string>;
+  const out = await grep((f) => relatedFiles(ix, f));
+  assert.match(out, /src\/billing\/tax\.ts:1:export const taxFor/); assert.match(out, /Related files \(from the code index\):[\s\S]*tested in test\/tax\.test\.ts/);
+  assert.doesNotMatch(await grep(), /Related files/);                                 // guard off: no related lines
 });

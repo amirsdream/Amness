@@ -217,6 +217,8 @@ mcp.close();
 
 Tools from the server get the prefix of the command name, then `__`, then the tool name. Tools that the server marks as changing things need approval. The server gets your full environment, and the output is treated as untrusted.
 
+**Protocol versions.** Amness speaks both generations of MCP over stdio. It first asks the server `server/discover` (protocol `2026-07-28`). A current server answers, and then every request carries the protocol version, client name and capabilities in `_meta`, with no handshake. An older server answers with an error or not at all (Amness waits up to 10 seconds, `probeMs`), and Amness falls back to the `initialize` handshake (`2025-11-25`). `mcp.era` says which one the server speaks. A server that asks for more input in the middle of a call (elicitation or sampling, `resultType: "input_required"`) gets a clear error: Amness does not answer such requests yet. HTTP servers are not supported yet. Tested with fake servers of both kinds in `test/dynamic.test.ts`; not yet tried against the official SDKs.
+
 ## Compare harness variants
 
 `evaluate` runs tasks with different harness settings and gives a table. A `Case` has `files`, a `task`, and a held-out `check` that the agent never sees.

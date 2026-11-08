@@ -1238,7 +1238,11 @@ Use it to compare a change (for example `--off compact`) with the current behavi
                  "claude-*": { "off": ["wrapup"] } } }
    ```
 
-   The profile can also have a `default` entry for all models. The allowed settings are `off`, `stagnationTurns`, `maxSteps`, `contextBudget`, `review` and `note`. The guards you can switch off are `nudge loop compact stuck wrapup condense schedule ledger stagnation review redact`.
+   The profile can also have a `default` entry for all models. The allowed settings are `off`, `stagnationTurns`, `maxSteps`, `contextBudget`, `review`, `toolChoice` and `note`. The guards you can switch off are `coverage toolcache nudge loop compact readdelta stuck wrapup condense schedule ledger stagnation review redact pin anchor audit`.
+
+   `"toolChoice": "required"` makes the model call a tool at every step of a task run (`amness run`; the chat ignores it, since a plain answer is fine there). The server then limits the model's output to a valid tool call. This helps local models that drift into describing what they will do, or that write broken calls. With Claude it is used only when thinking is off (Claude does not allow both). `amness run --tool-choice required` sets it for one run. Not measured yet.
+
+   `amness run` reads the profile too (earlier versions read it only in the chat app), so benchmark runs use the same per-model settings.
 2. See what applies to the current model:
 
    ```text

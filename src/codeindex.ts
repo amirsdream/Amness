@@ -147,6 +147,21 @@ export class CodeIndex {
 }
 
 /** Tools: `repo_map`, `find_refs`, `impact`. Read-only. */
+const isTest = (p: string) => /(^|\/)(tests?|__tests__|spec)\/|[._-](test|spec)\.[a-z]+$/i.test(p);
+const few = (xs: string[], n: number) => (xs.length <= n ? xs.join(", ") : `${xs.slice(0, n).join(", ")} and ${xs.length - n} more`);
+/** A few lines of structure about the files a search hit: who imports each, and which tests do. The model gets graph evidence
+ * through the search it already uses, without having to call a graph tool (LARGER, arXiv 2605.16352). Empty when the index knows nothing useful. */
+export function relatedFiles(index: CodeIndex, files: string[], max = 3): string {
+  try { index.refresh(); } catch { return ""; }
+  const lines: string[] = [];
+  for (const f of files.slice(0, max)) {
+    const by = index.importedBy(f); if (!by.length) continue;
+    const tests = by.filter(isTest), users = by.filter((x) => !isTest(x));
+    lines.push(`- ${f}: ${users.length ? `imported by ${few(users, 4)}` : "imported only by tests"}${tests.length ? `; tested in ${few(tests, 3)}` : ""}`);
+  }
+  return lines.length ? `\n\nRelated files (from the code index):\n${lines.join("\n")}` : "";
+}
+
 export function indexTools(index: CodeIndex): Tool[] {
   const ready = () => { index.refresh(); };
   return [

@@ -123,10 +123,13 @@ export async function readResponsesStream(r: Response, h: Pick<ModelOpts, "onTex
   throw new Error("the response stream ended before it completed");
 }
 
+/** A server that sends thinking text but no reasoning count (llama.cpp): about four characters per token, so the panel and the budget see it. */
+const thinkingTokens = (text: string): number | undefined => (text ? Math.ceil(text.length / 4) : undefined);
+
 // ------------------------------------------------------------------ Chat Completions: streaming reader
-async function readChatStream(r: Response, onText: (d: string) => void): Promise<Message> {
+async function readChatStream(r: Response, onText: (d: string) => void, onThinking?: (d: string) => void): Promise<Message> {
   const calls: { id: string; type: "function"; function: { name: string; arguments: string } }[] = [];
-  let content = "", usage: Message["usage"], buf = "";
+  let content = "", thinking = "", usage: Message["usage"], buf = "";
   const dec = new TextDecoder();
   for await (const chunk of r.body as unknown as AsyncIterable<Uint8Array>) {
     buf += dec.decode(chunk, { stream: true });
@@ -138,6 +141,8 @@ async function readChatStream(r: Response, onText: (d: string) => void): Promise
       const d = j.choices?.[0]?.delta;
       if (!d) continue;
       if (d.content) { content += d.content; onText(d.content); }
+      const think = d.reasoning_content ?? d.reasoning;                               // llama.cpp, vLLM, DeepSeek, Ollama: thinking arrives beside the answer
+      if (think) { thinking += think; onThinking?.(think); }
       for (const tc of d.tool_calls ?? []) {
         const c = (calls[tc.index ?? 0] ??= { id: "", type: "function", function: { name: "", arguments: "" } });
         if (tc.id) c.id = tc.id;
@@ -147,6 +152,7 @@ async function readChatStream(r: Response, onText: (d: string) => void): Promise
     }
   }
   const tool_calls = calls.filter(Boolean);
+  if (usage && usage.reasoning_tokens === undefined && thinking) usage = { ...usage, reasoning_tokens: thinkingTokens(thinking) };
   return { role: "assistant", content: content || null, ...(tool_calls.length && { tool_calls }), usage };
 }
 
@@ -193,7 +199,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
     const store = opts.store ?? false;
     const body: any = {
       model, input, ...(instructions && { instructions }), store, stream: !!o.onText,
-      ...(tools.length && { tools: tools.map(toResponsesTool), tool_choice: "auto" }),
+      ...(tools.length && { tools: tools.map(toResponsesTool), tool_choice: o.toolChoice ?? "auto" }),
       ...(reasoning && Object.keys(reasoning).length && { reasoning }),
       ...(reasoning && !store && { include: ["reasoning.encrypted_content"] }),     // older reasoning models only return the replayable blob when asked; newer ones always do
       ...(opts.promptCacheKey && official && { prompt_cache_key: opts.promptCacheKey, prompt_cache_retention: "24h" }),   // keep the cached prefix alive across idle gaps; dropped automatically if a model refuses it
@@ -212,18 +218,20 @@ export function openai(opts: OpenAIOptions = {}): Model {
     const body: any = {
       model,    // only wire fields: `raw` / `usage` belong to other adapters, and replayed tool calls need an explicit type
       messages: messages.map(({ role, content, tool_calls, tool_call_id, images }) => ({ role, content: images?.length ? [{ type: "text", text: content || "(continue)" }, ...images.map((i) => ({ type: "image_url", image_url: { url: `data:${i.mime};base64,${i.data}` } }))] : content, ...(tool_calls && { tool_calls: tool_calls.map((c) => ({ id: c.id, type: "function", function: c.function })) }), ...(tool_call_id && { tool_call_id }) })),
-      ...(tools.length && { tools: tools.map((t) => ({ type: "function", function: t })) }),
+      ...(tools.length && { tools: tools.map((t) => ({ type: "function", function: t })), ...(o.toolChoice && { tool_choice: o.toolChoice }) }),
       ...(stream && { stream: true, stream_options: { include_usage: true } }),
       ...(chatNoReasoning && isReasoningModel(model) ? { reasoning_effort: "none" } : opts.effort && isReasoningModel(model) && sendEffort ? { reasoning_effort: opts.effort } : {}),
       ...opts.extra,
     };
     for (const k of dropped) delete body[k];
     const r = await post("/chat/completions", body, o.signal);
-    if ((r.headers.get("content-type") ?? "").includes("text/event-stream")) return readChatStream(r, o.onText ?? (() => {}));
+    if ((r.headers.get("content-type") ?? "").includes("text/event-stream")) return readChatStream(r, o.onText ?? (() => {}), o.onThinking);
     const j = await r.json(), m = j.choices[0].message;                           // server ignored `stream`, or we did not ask
     if (stream && m.content) o.onText!(m.content);
-    const u = j.usage ?? {};
-    return { ...m, usage: { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens, total_tokens: u.total_tokens, cached_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens, reasoning_tokens: u.completion_tokens_details?.reasoning_tokens } };
+    const u = j.usage ?? {}, think: string = m.reasoning_content ?? m.reasoning ?? "";
+    if (think) o.onThinking?.(think);
+    const { reasoning_content: _rc, reasoning: _r, ...msg } = m;
+    return { ...msg, usage: { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens, total_tokens: u.total_tokens, cached_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens, reasoning_tokens: u.completion_tokens_details?.reasoning_tokens ?? thinkingTokens(think) } };
   }
 
   const call: Model = async (messages, tools, o2) => {

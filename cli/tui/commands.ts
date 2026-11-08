@@ -85,8 +85,8 @@ async function settingsPage(a: App) {
   for (;;) {
     const groups = settingsView(a, "terminal"), n = count();
     const g = await a.pick<string>(`Settings${n ? `   ${n} change${n === 1 ? "" : "s"} not applied yet` : ""}`, [
+      ...(n ? [{ label: `Apply ${n} change${n === 1 ? "" : "s"}`, value: "@apply" }, { label: "Revert", value: "@revert", hint: "forget the changes" }] : []),   // first, so they are never below the fold
       ...groups.map((x) => ({ label: x.label, value: x.id, hint: x.items.filter((i) => drafts.has(i.id) || lists.get(i.id)?.length).length ? "changed •" : x.lead })),
-      ...(n ? [{ label: `Apply ${n} change${n === 1 ? "" : "s"}`, value: "@apply" }, { label: "Revert", value: "@revert", hint: "forget the changes" }] : []),
     ]);
     if (g === "@apply") { await apply(); continue; }
     if (g === "@revert") { drafts.clear(); lists.clear(); continue; }

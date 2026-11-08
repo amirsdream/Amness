@@ -17,6 +17,9 @@ export const GUARDS: GuardInfo[] = [
   { name: "toolcache", label: "Read cache", what: "answers a repeated read of an unchanged file with a one-line pointer to the earlier result" },
   { name: "schedule", label: "Parallel reads", what: "runs read-only tool calls of one step at the same time" },
   { name: "redact", label: "Secret masking", what: "masks keys and passwords in tool output before the model sees them" },
+  { name: "audit", label: "Unused new files", what: "refuses the first finish when new source files the agent made are imported by nothing (tests passing while the real code is not wired up), unless they are meant to stand alone" },
+  { name: "anchor", label: "Related files in searches", what: "after a search, adds a few lines from the code index: which files import the files it hit, and which tests cover them" },
+  { name: "pin", label: "Keep your rules", what: "when the context is reset with a handoff note, the rules from your messages (never, always, don't…) are kept word for word, not only summarised" },
 ];
 export const HARNESS_DEFAULTS = { maxSteps: 60, stagnationTurns: 8, contextBudget: 60_000 } as const;     // the chat defaults in src/code.ts and src/harness.ts
 

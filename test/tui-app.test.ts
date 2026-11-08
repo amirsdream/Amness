@@ -458,6 +458,21 @@ test("a risky command asks with one line on what it will do and one on undo, not
   } finally { await t.key(KEY.esc); await t.key(KEY.esc); await t.key(KEY.ctrlD); }
 });
 
+test("settings: tool choice is saved in this model's profile (keeping the rest of the file); the Extend group lists plugins, hooks, skills, subagents, MCP, profile and tools", async () => {
+  const t = rig([], { model: "qwen-local" }); await t.start();
+  try {
+    const file = join(process.env.AMNESS_HOME!, "profile.json");
+    writeFileSync(file, JSON.stringify({ models: { "qwen-local": { maxSteps: 30 } } }));
+    await t.submit("/set toolChoice required"); assert.ok(await t.until(() => t.has("tool choice for qwen-local: required")));
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).models["qwen-local"], { maxSteps: 30, toolChoice: "required" });
+    assert.equal(t.app.profile.profile.toolChoice, "required");
+    await t.submit("/set toolChoice auto"); assert.ok(await t.until(() => !JSON.parse(readFileSync(file, "utf8")).models["qwen-local"].toolChoice));
+    await t.submit("/settings"); assert.ok(await t.until(() => t.has("Extend")));
+    await t.type("extend"); await t.key(KEY.enter);
+    assert.ok(await t.until(() => ["Plugins", "Hooks", "Skills", "Subagents", "MCP servers", "Model profile", "Tools"].every((x) => t.has(x))));
+  } finally { await t.key(KEY.esc); await t.key(KEY.esc); await t.key(KEY.ctrlD); }
+});
+
 test("# saves a memory note; ! runs a shell command now and feeds its output to the next turn", async () => {
   const t = rig([say("noted")]); await t.start();
   await t.submit("# always use pnpm in this repo");

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyBundle, createCodeAgent, createHarness, defineTool, MemoryStore, memoryTools, readBundle, startLive, unifiedDiff, type Event, type Message, type Model } from "../src/index.ts";
+import { applyBundle, createCodeAgent, createHarness, defineTool, MemoryStore, memoryTools, pinRules, readBundle, startLive, unifiedDiff, type Event, type Guard, type Message, type Model } from "../src/index.ts";
 
 let n = 0;
 const call = (...cs: [string, unknown][]): Message => ({
@@ -85,6 +85,26 @@ test("rollover: big context -> handoff note -> fresh context seeded with task + 
   const fresh = seen[3];                                                                       // after rollover: system + one seeded user message
   assert.equal(fresh.length, 2); assert.match(fresh[1].content!, /original task[\s\S]*Handoff from your earlier context[\s\S]*step two/);
   assert.ok(!fresh.some((m) => m.role === "tool"));
+});
+
+test("rollover keeps the user's later rules word for word (guard pin), carries them through a second handoff, and can be switched off", async () => {
+  const noop = defineTool({ name: "noop", description: "", schema: { type: "object" }, run: () => "ok" });
+  const hi = (p: number): Message => ({ ...call(["noop", { i: ++n }]), usage: { prompt_tokens: p, total_tokens: p + 10 } });
+  const history: Message[] = [{ role: "system", content: "s" }, { role: "user", content: "build the parser" }, { role: "assistant", content: "ok" },
+    { role: "user", content: "Looks good. Never edit the files in tests/. Always use pnpm, not npm.\n\n## Notes from earlier sessions\nmust ignore this appended note" }];
+  const run = async (off: Guard[] = []) => {
+    const { model, seen } = scripted(hi(900), { role: "assistant", content: "GOAL: parser\nNEXT: continue" }, hi(900), { role: "assistant", content: "GOAL: parser\nNEXT: more" }, call(["finish", { summary: "done" }]));
+    await createHarness({ model, tools: [noop], rollover: { afterTokens: 500 }, off }).run("now add the tokenizer", { resume: [...history.map((m) => ({ ...m })), { role: "user", content: "now add the tokenizer" }] });
+    return seen.filter((req) => req.length === 2).map((req) => req[1].content!);    // the fresh contexts after each handoff
+  };
+  const [first, second] = await run();
+  assert.match(first, /build the parser[\s\S]*Handoff from your earlier context[\s\S]*Rules you were given[\s\S]*- Never edit the files in tests\/\.[\s\S]*- Always use pnpm, not npm\./);
+  assert.doesNotMatch(first, /must ignore this appended note/);                       // Amness's own appended notes are not the user's rules
+  assert.match(second, /- Never edit the files in tests\/\.[\s\S]*- Always use pnpm, not npm\./);   // still there after a second handoff
+  assert.equal((second.match(/Never edit the files in tests/g) ?? []).length, 1);
+  const [plain] = await run(["pin"]);
+  assert.doesNotMatch(plain, /Rules you were given/);
+  assert.deepEqual(pinRules(["Please add a tokenizer.", "Don't touch the CI config! It is fine.", "x".repeat(10)]), ["Don't touch the CI config!"]);
 });
 
 test("portable bundle: export from one agent, import into another repo; safe path handling and no clobbering", async () => {

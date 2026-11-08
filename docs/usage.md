@@ -298,7 +298,7 @@ In the desktop app, open **Preferences → Harness**.
 
 | Setting | Default | What it does |
 |---|---|---|
-| guards (`loop`, `stagnation`, `stuck`, `nudge`, `wrapup`, `ledger`, `coverage`, `compact`, `condense`, `readdelta`, `toolcache`, `schedule`, `redact`) | all on | each one is explained in the list |
+| guards (`loop`, `stagnation`, `stuck`, `nudge`, `wrapup`, `ledger`, `coverage`, `compact`, `condense`, `readdelta`, `toolcache`, `schedule`, `redact`, `pin`, `anchor`, `audit`) | all on | each one is explained in the list |
 | `steps` | 60 | the most model turns in one run |
 | `stagnation` | 8 | turns without measurable progress before the run stops |
 | `budget` | 60000 | characters of history before old tool output is shortened (when the context window is not known) |
@@ -479,7 +479,7 @@ Notes are ranked, merged and removed in a way you can reverse. Details: [Feature
 
 ## Change settings in one place (`/settings`)
 
-**What it is.** `/settings` shows every setting in groups: Chat, Model, Context and limits, Harness, Safety & quality, Folders and trust, Search and memory, Advanced and Terminal. These are the same settings, from the same list, as **Preferences** in the desktop app.
+**What it is.** `/settings` shows every setting in groups: Chat, Model, Context and limits, Harness, Safety & quality, Folders and trust, Search and memory, Advanced, Extend (plugins, hooks, skills, subagents, MCP servers, the model profile, tools) and Terminal (colour theme, view, side panel, mouse, diff layout, vim keys). These are the same settings, from the same list, as **Preferences** in the desktop app.
 
 **How to use it.**
 

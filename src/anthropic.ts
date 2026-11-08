@@ -90,7 +90,7 @@ export function anthropic(o: AnthropicOptions = {}): Model {
     const { system, messages: msgs } = toAnthropic(messages);
     const req = {
       model, max_tokens: opts?.maxTokens ?? o.maxTokens ?? 32_000, ...(system && { system }), messages: msgs,
-      ...(tools.length && { tools: tools.map(toTool) }),
+      ...(tools.length && { tools: tools.map(toTool), ...(opts?.toolChoice === "required" && !thinking && { tool_choice: { type: "any" } }) }),   // Claude does not allow forced tool use while thinking
       ...((thinking || taskBudget) && { ...(thinking && { thinking: { type: "adaptive" } }), output_config: { ...(thinking && { effort: o.effort ?? "high" }), ...(taskBudget && { task_budget: { type: "tokens", total: taskBudget } }) } }),
       cache_control: { type: "ephemeral" }, // the transcript is append-only, so each turn reads the previous one from cache
     };

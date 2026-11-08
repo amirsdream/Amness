@@ -232,3 +232,17 @@ test("DeepSeek reports its prompt-cache hits as prompt_cache_hit_tokens, and tha
     assert.equal(r.usage!.cached_tokens, 64);
   } finally { s.close(); }
 });
+
+test("chat: thinking that a local server sends beside the answer (reasoning_content) is streamed to onThinking and counted, streamed or not", async () => {
+  const usage = { prompt_tokens: 40, completion_tokens: 30, total_tokens: 70 };     // llama.cpp sends no reasoning count
+  const chunks = [{ type: "c", choices: [{ delta: { reasoning_content: "Let me think about " } }] }, { type: "c", choices: [{ delta: { reasoning_content: "the answer carefully." } }] },
+    { type: "c", choices: [{ delta: { content: "42" } }] }, { type: "c", choices: [], usage }];
+  const s = await server({ "/v1/chat/completions": [sse(chunks), json(200, { choices: [{ message: { role: "assistant", content: "43", reasoning_content: "Thinking it over once more." } }], usage })] });
+  try {
+    const m = openai({ baseUrl: s.url, model: "qwen-local", api: "chat" }), thoughts: string[] = [];
+    const a = await m([user("x")], [], { onText: () => {}, onThinking: (d) => thoughts.push(d) });
+    assert.equal(a.content, "42"); assert.equal(thoughts.join(""), "Let me think about the answer carefully."); assert.equal(a.usage!.reasoning_tokens, Math.ceil("Let me think about the answer carefully.".length / 4));
+    const b = await openai({ baseUrl: s.url, model: "qwen-local", api: "chat" })([user("y")], [], { onThinking: (d) => thoughts.push(d) });
+    assert.equal(b.content, "43"); assert.equal((b as any).reasoning_content, undefined); assert.ok(b.usage!.reasoning_tokens! > 0); assert.match(thoughts.at(-1)!, /once more/);
+  } finally { s.close(); }
+});

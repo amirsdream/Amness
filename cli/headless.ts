@@ -2,10 +2,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { cachedModel } from "../src/respcache.ts";
-import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
+import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, keyFor, loadConfig, ready, useServer, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
 import { formatEvent } from "./format.ts";
+import { estimateCost } from "./tui/pricing.ts";
 import { createModel } from "./model.ts";
 
 export const HELP = `usage: amness run [flags] "task"
@@ -30,6 +31,10 @@ export const HELP = `usage: amness run [flags] "task"
   --plans              offer the plan of a similar finished task, and keep plans of finished tasks (.amness/plans)
   --cache              answer identical model requests from .amness/cache/responses (reruns and replays cost nothing; use a fixed temperature)
   --server <name>      use a server saved with /provider (its address, model and key)
+  --max-time <seconds> a wall-clock limit: the agent is told to wrap up near the end and stops cleanly at it (the result line says "stopped":"time")
+  --tool-choice <auto|required>  required: the model must call a tool every step (the server constrains the output to a valid call); default from the model's profile
+  --off <guard,...>    switch these guards off for this run (for ablations; see /harness for the names)
+  --plugin <file,...>  load these plugin files for this run (no trust prompt: you named them)
   --add-dir <path>     let the file tools use this folder outside the project too (repeatable; without it, outside paths are refused)
   --max-steps <n>      most model turns (default 40)        --context-window <tokens>   the model's window (8192 for a small local model); default: learned from the provider
   -                    as the task: read it from standard input (useful on Windows, where quoting a long task is painful)
@@ -93,24 +98,39 @@ export async function runHeadless(argv: string[]): Promise<number> {
   const tracer = val("--trace") || process.env.AMNESS_OTLP ? new Tracer({ file: val("--trace") ? resolve(val("--trace")!) : undefined, otlp: process.env.AMNESS_OTLP, sessionId: `run-${Date.now()}`, model: cfg.model }) : undefined;
   setShell(cfg.shell);
   const loadedPlugins = await loadPlugins(cwd, { trustProject: trustHooks });
+  for (const f of (val("--plugin") ?? "").split(",").filter(Boolean)) { const r = await importPlugins(resolve(f)); for (const w of r.warnings) console.error("plugin: " + w); loadedPlugins.plugins.push(...r.plugins); }   // named on the command line: you chose them, so no trust prompt
+  // The model's profile (~/.amness/profile.json, then the project's .amness/profile.json): settings tuned per model, as in the chat app; flags win.
+  let prof: Profile = {}; try { prof = loadProfile(cwd, cfg.model).profile; } catch (e) { console.error(`profile ignored: ${(e as Error).message}`); }
+  const off = [...new Set([...(prof.off ?? []), ...(val("--off") ?? "").split(",").map((x) => x.trim()).filter(Boolean)])] as Guard[];
+  const toolChoice = (val("--tool-choice") ?? prof.toolChoice) as "auto" | "required" | undefined;
+  if (toolChoice && toolChoice !== "auto" && toolChoice !== "required") { console.error(`--tool-choice must be auto or required, not ${toolChoice}`); return 2; }
+  { const bad = off.filter((g) => !GUARD_NAMES.includes(g)); if (bad.length) { console.error(`unknown guard ${bad.join(", ")} (guards: ${GUARD_NAMES.join(", ")})`); return 2; } }
   for (const w of loadedPlugins.warnings) console.error("plugin: " + w);
   if (loadedPlugins.untrusted) console.error(`note: ${loadedPlugins.untrusted.count} project plugin file(s) in .amness/plugins were not loaded; pass --trust-project to run them`);
+  // --max-time: a wall-clock limit (benchmarks kill an agent at theirs). Near the end the agent is told to wrap up; at the limit it stops cleanly, so the result line is still written.
+  const maxTime = Number(val("--max-time")) || 0, stop = new AbortController(), steer: string[] = [], timers: ReturnType<typeof setTimeout>[] = [];
+  if (maxTime > 0) {
+    const warnAt = Math.max(0, Math.min(maxTime * 0.8, maxTime - 120));
+    timers.push(setTimeout(() => steer.push(`Time is almost up: about ${Math.round(maxTime - warnAt)} seconds are left of ${maxTime}. Stop exploring. Make sure what you changed is saved and works, then finish: say what you did and what is left.`), warnAt * 1000));
+    timers.push(setTimeout(() => stop.abort(), maxTime * 1000));
+  }
+  const usage = { prompt: 0, completion: 0, cached: 0, requests: 0 };              // every model request, subagents included, for the result line (benchmarks read it)
   const agent = createCodeAgent({
     dirs: addDirs.length ? () => addDirs : undefined,
     plans: argv.includes("--plans") || cfg.plans || undefined,
     contextWindow: Number(val("--context-window")) || windowFor(cfg) || await detectWindow({ provider: cfg.provider, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model }),
-    maxSteps: Number(val("--max-steps")) || undefined,
+    maxSteps: Number(val("--max-steps")) || prof.maxSteps || undefined, off: off.length ? off : undefined, toolChoice, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
     model, modelById: (id) => createModel({ ...cfg, model: id }), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox: (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
-    onEvent: (e: Event) => { live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
+    onEvent: (e: Event) => { if (e.kind === "turn") { usage.prompt += e.prompt; usage.completion += e.completion; usage.cached += e.cached; usage.requests++; } live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
   try {
     const r = await agent.run(task, { bundle, images });
     if (exportTo) { await agent.exportBundle(r, exportTo); console.error(`session bundle: ${exportTo}`); }
-    const out = { kind: "result", finished: r.finished, text: r.text, steps: r.steps, tokens: budget.tokens, stopped: r.stopped };
+    const out = { kind: "result", finished: r.finished, text: r.text, steps: r.steps, tokens: budget.tokens, stopped: stop.signal.aborted && r.stopped === "aborted" ? "time" : r.stopped, model: cfg.model, usage, cost: estimateCost(cfg.model, usage.prompt, usage.completion, usage.cached) };
     if (json) console.log(JSON.stringify(out)); else console.log(r.text);
     return r.finished ? 0 : 1;
   } catch (e) {
     if (json) console.log(JSON.stringify({ kind: "error", message: (e as Error).message })); else console.error("error: " + (e as Error).message);
     return 1;
-  } finally { await agent.procs?.dispose(); await tracer?.close(); await live?.close(); }
+  } finally { for (const t of timers) clearTimeout(t); await agent.procs?.dispose(); await tracer?.close(); await live?.close(); }
 }

@@ -10,6 +10,7 @@ export * from "./web.ts";
 export * from "./deep.ts";
 export * from "./code.ts";
 export * from "./riskinfo.ts";
+export * from "./audit.ts";
 export * from "./evals.ts";
 export * from "./dynamic.ts";
 export * from "./anthropic.ts";

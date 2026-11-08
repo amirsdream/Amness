@@ -93,6 +93,19 @@ test("MCP: loads (paginated) tools, calls them, flags destructive ones, defers b
   try { assert.equal(big.tools.length, 22); assert.ok(big.tools.every((t) => t.deferred)); } finally { big.close(); }
 });
 
+test("MCP 2026-07-28: a modern server is probed with server/discover and used without a handshake (every call carries _meta); a legacy one falls back to initialize; asking for input is a clear error", async () => {
+  const modern = await loadMcp("node", ["test/fake-mcp.mjs"], { prefix: "m", env: { MODE: "modern" } });
+  try {
+    assert.equal(modern.era, "modern");
+    assert.deepEqual(modern.tools.map((t) => t.name), ["m__echo", "m__wipe"]);                   // tools/list worked: the fake rejects any request without _meta
+    assert.equal(await modern.tools[0].run({ text: "hi" }, { registry: new Registry(), step: 0 }), "echo:hi");
+  } finally { modern.close(); }
+  const legacy = await loadMcp("node", ["test/fake-mcp.mjs"], { prefix: "l" });
+  try { assert.equal(legacy.era, "legacy"); assert.equal(await legacy.tools[0].run({ text: "yo" }, { registry: new Registry(), step: 0 }), "echo:yo"); } finally { legacy.close(); }
+  const asks = await loadMcp("node", ["test/fake-mcp.mjs"], { prefix: "a", env: { MODE: "modern", INPUT: "1" } });
+  try { await assert.rejects(Promise.resolve(asks.tools[0].run({ text: "x" }, { registry: new Registry(), step: 0 })), /asked for more input/); } finally { asks.close(); }
+});
+
 test("code agent selfExtend: tool created at runtime is usable and reloaded in a new agent", async () => {
   const dir = tmp();
   const s = scripted(call(["create_tool", { name: "hello", description: "d", command: "echo hi", params: {} }]), call(["hello", {}]), call(["finish", { summary: "." }]));

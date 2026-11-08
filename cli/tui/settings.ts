@@ -1,10 +1,10 @@
 // One list of settings for both front ends: the desktop Preferences window and the terminal /settings page draw from it, and a change runs the same code
 // (most run the terminal command you would type, so there is one implementation of each). /set <id> <value> changes any of them by name.
-import { resolve, sep } from "node:path";
-import { existsSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { SHELL_CHOICES, STRATEGIES, effortsFor } from "../../src/index.ts";
-import { connections, keyIdOf, mask, windowFor } from "../config.ts";
+import { SHELL_CHOICES, STRATEGIES, effortsFor, loadPrompts } from "../../src/index.ts";
+import { connections, home, keyIdOf, mask, windowFor } from "../config.ts";
 import { loadState, saveState } from "../state.ts";
 import { GUARDS, harnessView } from "./harnessinfo.ts";
 import { themeNames } from "./themes.ts";
@@ -45,6 +45,7 @@ export const GROUPS: { id: string; label: string; lead: string }[] = [
   { id: "folders", label: "Folders and trust", lead: "Which folders Amness may work in." },
   { id: "search", label: "Search and memory", lead: "Web search and the agent's notes." },
   { id: "advanced", label: "Advanced", lead: "Rarely needed." },
+  { id: "extend", label: "Extend", lead: "Your own code and tools: plugins, hooks, skills, subagents, MCP servers, per-model profiles. Each opens its own view." },
   { id: "terminal", label: "Terminal", lead: "How the terminal app looks and types." },
 ];
 
@@ -62,6 +63,11 @@ const DEFS: Def[] = [
   ...(["explore", "compact", "review", "cheap"] as const).map((r): Def => ({ group: "model", id: `models.${r}`, label: `Model for ${r}`, kind: "text", placeholder: "same as the main model",
     help: { explore: "The read-only explorer subagents.", compact: "Handoff notes and /compact.", review: "The independent reviewer.", cheap: "Cheap steps when the router is on." }[r],
     read: (a) => ({ value: a.cfg.models?.[r] ?? "" }), write: (_, v) => `/models ${r} ${v || "off"}` })),
+  { group: "model", id: "toolChoice", label: "Tool call every step", help: "Task runs (amness run, benchmarks): the model must call a tool at every step, so the server limits its output to a valid call. Helps local models that drift into prose. Saved in this model's profile (~/.amness/profile.json); the chat ignores it.", kind: "choice",
+    read: (a) => ({ value: a.profile?.profile.toolChoice ?? "auto", options: [{ value: "auto", label: "auto (the model decides)" }, { value: "required", label: "required (task runs)" }] }),
+    write: (_, v) => (a) => { const choice = String(v); if (choice !== "auto" && choice !== "required") throw new Error(`auto or required, not ${v}`); setProfileField(a.cfg.model, "toolChoice", choice === "auto" ? undefined : choice); a.buildAgent(); return `tool choice for ${a.cfg.model}: ${choice} (in ~/.amness/profile.json)`; } },
+  { group: "model", id: "compactAt", label: "Server-side compaction", help: "OpenAI Responses only: the server compacts the conversation once the prompt passes this many tokens. Empty: off.", kind: "number", placeholder: "off",
+    read: (a) => (a.cfg.provider === "openai" ? { value: a.cfg.compactAt ?? "" } : null), write: (_, v) => (a) => { const n = Math.floor(num(v)); if (v === "" || v === "off") a.cfg.compactAt = undefined; else if (n >= 1000) a.cfg.compactAt = n; else throw new Error("at least 1000 tokens"); a.saveConfig(); a.buildAgent(); return `server-side compaction ${a.cfg.compactAt ? `at ${a.cfg.compactAt.toLocaleString()} tokens` : "off"}`; } },
   { group: "model", id: "router", label: "Router", help: "Send exploration steps to the cheap model when that pays off.", kind: "toggle", read: (a) => ({ value: !!a.cfg.router }), write: (_, v) => `/router ${onoff(v)}` },
   { group: "model", id: "api", label: "Wire API", help: "OpenAI-compatible providers only.", kind: "choice", read: (a) => (a.cfg.provider === "anthropic" ? null : { value: a.cfg.api ?? "auto", options: ["auto", "responses", "chat"].map((x) => ({ value: x, label: x })) }), write: (_, v) => `/api ${v}` },
   // limits
@@ -108,13 +114,38 @@ const DEFS: Def[] = [
   // advanced
   { group: "advanced", id: "shell", label: "Shell", help: "Which shell runs the agent's commands.", kind: "choice", read: (a) => ({ value: a.cfg.shell ?? "auto", options: ["auto", ...SHELL_CHOICES.filter((x) => x !== "auto")].map((x) => ({ value: x, label: x })) }), write: (_, v) => `/shell ${v}` },
   { group: "advanced", id: "strategy", label: "Loop strategy", help: "Plan first, explore then act, or none.", kind: "choice", read: (a) => ({ value: a.cfg.strategy ?? "off", options: ["off", ...Object.keys(STRATEGIES)].map((x) => ({ value: x, label: x })) }), write: (_, v) => `/strategy ${v}` },
+  { group: "advanced", id: "prompt", label: "System prompt", help: "Your own system prompt from .amness/prompts/<id>.md, or the built-in one.", kind: "choice",
+    read: (a) => ({ value: a.cfg.prompt ?? "built-in", options: [{ value: "built-in", label: "built-in" }, ...loadPrompts(a.cwd).map((x) => ({ value: x.id, label: x.id }))] }), write: (_, v) => `/prompt ${v === "built-in" ? "off" : v}` },
   { group: "advanced", id: "keepWarm", label: "Keep the cache warm", help: "While you are away, keep the prompt cache alive (a few cache reads).", kind: "toggle", read: (a) => ({ value: !!a.cfg.keepWarm }), write: (_, v) => `/keepwarm ${onoff(v)}` },
   { group: "advanced", id: "plans", label: "Plan cache", help: "Offer the plan of a similar finished task as a starting point.", kind: "toggle", read: (a) => ({ value: !!a.cfg.plans }), write: (_, v) => `/plans ${onoff(v)}` },
   // terminal only
   { group: "terminal", id: "theme", label: "Colour theme", help: "The terminal app's colours.", kind: "choice", only: "terminal", read: (a) => ({ value: a.cfg.theme ?? "", options: themeNames().map((x) => ({ value: x, label: x })) }), write: (_, v) => `/theme ${v}` },
   { group: "terminal", id: "ui", label: "View", help: "Full screen, or inline in your terminal's scrollback.", kind: "choice", only: "terminal", read: (a) => ({ value: a.ui === "inline" ? "inline" : "full", options: [{ value: "full", label: "full screen" }, { value: "inline", label: "inline" }] }), write: (_, v) => `/ui ${v}` },
+  { group: "terminal", id: "sidebar", label: "Side panel", help: "The panel on the right of the full-screen view (Ctrl+B).", kind: "toggle", only: "terminal", read: (a) => (a.full ? { value: a.full.showSidebar } : null), write: (_, v) => (a) => { if (a.full && a.full.showSidebar !== !!v) { a.full.showSidebar = !!v; a.full.invalidate(); } return `side panel ${v ? "shown" : "hidden"}`; } },
+  { group: "terminal", id: "mouse", label: "Mouse", help: "Click and scroll in the full-screen view. Off gives back the terminal's own text selection.", kind: "toggle", only: "terminal", read: (a) => (a.full ? { value: a.full.mouseOn } : null), write: (_, v) => `/mouse ${onoff(v)}` },
+  { group: "terminal", id: "diffMode", label: "Diff layout", help: "How edits are shown: side by side when there is room, stacked, or split.", kind: "choice", only: "terminal", read: (a) => (a.full ? { value: a.full.diffMode, options: ["auto", "stacked", "split"].map((x) => ({ value: x, label: x })) } : null), write: (_, v) => `/diffmode ${v}` },
   { group: "terminal", id: "vim", label: "Vim keys", help: "Vim-style editing in the input box (Esc for normal mode).", kind: "toggle", only: "terminal", read: (a) => ({ value: !!a.cfg.vim }), write: (_, v) => `/vim ${onoff(v)}` },
+  // extend: views of your own code and tools (each a command with its own dialog)
+  { group: "extend", id: "plugins", label: "Plugins", help: "Code in .amness/plugins (and ~/.amness/plugins) that adds tools, hooks, gates, routing, memory, commands and eval graders.", kind: "action", command: "/plugins", button: "Show…" },
+  { group: "extend", id: "hooks", label: "Hooks", help: "Commands that run before or after tool calls and model turns (.amness/hooks.json, ~/.amness/hooks.json).", kind: "action", command: "/hooks", button: "Show…" },
+  { group: "extend", id: "skills", label: "Skills", help: "SKILL.md instructions the agent loads when a task matches: list, add, switch on or off, review drafts.", kind: "action", command: "/skills", button: "Show…" },
+  { group: "extend", id: "agents", label: "Subagents", help: "Custom subagents in .amness/agents/*.md that the agent can hand work to.", kind: "action", command: "/agents", button: "Show…" },
+  { group: "extend", id: "mcp", label: "MCP servers", help: "Tool servers attached to this session. Attach one with /mcp <command>.", kind: "action", command: "/mcp list", button: "Show…" },
+  { group: "extend", id: "profile", label: "Model profile", help: "Settings for this model only (~/.amness/profile.json, .amness/profile.json): guards off, limits, tool choice.", kind: "action", command: "/profile", button: "Show…" },
+  { group: "extend", id: "tools", label: "Tools", help: "Every tool the agent can use right now, built in and added.", kind: "action", command: "/tools", button: "Show…" },
 ];
+
+/** Set (or with undefined, remove) one field of `model`'s entry in the user's profile file, keeping everything else in it. */
+function setProfileField(model: string, key: "toolChoice", value: string | undefined) {
+  const file = join(home(), "profile.json");
+  let j: { default?: Record<string, unknown>; models?: Record<string, Record<string, unknown>> } = {};
+  try { j = JSON.parse(readFileSync(file, "utf8")); } catch { /* none yet */ }
+  const entry = { ...(j.models?.[model] ?? {}) };
+  if (value === undefined) delete entry[key]; else entry[key] = value;
+  j.models = { ...(j.models ?? {}), [model]: entry };
+  if (!Object.keys(entry).length) delete j.models[model];
+  mkdirSync(home(), { recursive: true }); writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
+}
 
 const shownIn = (d: Def, front: "terminal" | "desktop") => !d.only || d.only === front;
 

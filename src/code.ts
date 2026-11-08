@@ -8,8 +8,9 @@ import { unifiedDiff } from "./diff.ts";
 import { createToolTool, loadSavedTools } from "./dynamic.ts";
 import { ToolCache } from "./cache.ts";
 import { coverageCheck } from "./coverage.ts";
+import { auditCheck } from "./audit.ts";
 import { PlanCache, planBlock, planFrom } from "./plancache.ts";
-import { createHarness, defineTool, clip, isSmallTalk, makeHandoff, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
+import { createHarness, defineTool, clip, handoffSeed, isSmallTalk, makeHandoff, pinRules, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, isMemoryBackend, memoryTools, type MemoryBackend } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
 import { Guidance } from "./guidance.ts";
@@ -18,7 +19,7 @@ import { ProcessManager } from "./procs.ts";
 import { reviewedApprove } from "./approver.ts";
 import { Diagnostics, type LspServer } from "./lsp.ts";
 import { Ledger } from "./ledger.ts";
-import { CodeIndex, indexTools } from "./codeindex.ts";
+import { relatedFiles, CodeIndex, indexTools } from "./codeindex.ts";
 import { AGENT_TOOLS, WRITE_TOOLS, isWriter, loadAgents, type AgentDef } from "./agents.ts";
 import type { Roles } from "./route.ts";
 import { applyDiff, createWorktree, isRepo, removeWorktree, worktreeDiff, type Worktree } from "./worktree.ts";
@@ -65,9 +66,10 @@ export function runShell(cmd: string, cwd: string, ms = 60_000, signal?: AbortSi
 /** A file tool wants a path outside the project: the file or folder, the folder access would cover, and whether it would change something there. */
 export type OutsideRequest = { path: string; dir: string; write: boolean };
 /** File + shell tools confined to `cwd`. Enforces read-before-edit; flags dangerous shell commands as risky. */
-export function codeTools(cwd: string, o: { /** called before a command that may change files runs (snapshots, irreversibility notes) */ beforeShell?: (cmd: string) => Promise<void>; /** OS sandbox for shell commands, read each time so it can be switched live */ sandbox?: () => SandboxMode; /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: (paths: string[]) => Promise<string>;
+export function codeTools(cwd: string, o: { /** called before a command that may change files runs (snapshots, irreversibility notes) */ beforeShell?: (cmd: string) => Promise<void>; /** OS sandbox for shell commands, read each time so it can be switched live */ sandbox?: () => SandboxMode; /** background processes (sh_start, sh_read, sh_stop, sh_list) */ procs?: ProcessManager; /** folder-level instruction files, appended to results the first time the agent works in that folder */ guidance?: Guidance; onChange?: (path: string, created?: boolean) => void; mode?: () => PermMode; /** Run after each successful edit; returns text to append to the tool result (empty when all is well). */ check?: (paths: string[]) => Promise<string>;
   /** Folders outside the project the file tools may use too, read each time (the user allowed them) */ dirs?: () => string[];
-  /** Asked before a file tool uses a path outside the project and every allowed folder; true lets it (the caller adds `dir` to `dirs`). Without it such paths are refused. */ outside?: (req: OutsideRequest) => Promise<boolean> } = {}): Tool[] {
+  /** Asked before a file tool uses a path outside the project and every allowed folder; true lets it (the caller adds `dir` to `dirs`). Without it such paths are refused. */ outside?: (req: OutsideRequest) => Promise<boolean>;
+  /** Extra lines after a search for the files it hit most (guard `anchor`: who imports them, which tests cover them). */ related?: (files: string[]) => string } = {}): Tool[] {
   const mode = o.mode;
   const mutating = mode ? { risky: () => (mode() === "default" ? "modify a file" : false), when: () => mode() !== "plan" } : {};
   const root = resolve(cwd);
@@ -127,8 +129,10 @@ export function codeTools(cwd: string, o: { /** called before a command that may
       schema: { type: "object", required: ["pattern"], properties: { pattern: { type: "string" }, path: { type: "string" } } }, readOnly: true, cacheable: true,
       run: ({ pattern, path }) => path && !existsSync(abs(path)) ? `ERROR: ${path} does not exist, so nothing was searched.${suggest(path)}` : new Promise<string>((res) => execFile("grep", ["-rnIE", "-m", "20", ...[...IGNORE].map((d) => `--exclude-dir=${d}`), "-e", pattern, path ?? "."],
         { cwd: root, maxBuffer: 10 << 20 }, (_e, out) => {
-          for (const l of out.split("\n")) { const f = l.split(":")[0]; if (f) { try { readSet.add(abs(f)); } catch { /* outside */ } } }
-          res(out.split("\n").slice(0, 100).join("\n") || "no matches");
+          const hits = new Map<string, number>();
+          for (const l of out.split("\n")) { const f = l.split(":")[0]; if (f) { try { readSet.add(abs(f)); } catch { /* outside */ } const k = slash(f).replace(/^\.\//, ""); hits.set(k, (hits.get(k) ?? 0) + 1); } }
+          const top = [...hits].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+          res((out.split("\n").slice(0, 100).join("\n") || "no matches") + (top.length && o.related ? o.related(top) : ""));
         })) }),
     defineTool<{ path: string; content: string }>({ name: "write_file", gate: reach(true, (a) => [a.path]), description: "Create a file, or fully overwrite one you have already read.",
       schema: { type: "object", required: ["path", "content"], properties: { path: { type: "string" }, content: { type: "string" } } }, ...mutating,
@@ -136,7 +140,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
       run: async ({ path, content }, ctx) => {
         mustRead(path);
         const a = abs(path), before = existsSync(a) ? readFileSync(a, "utf8") : null;
-        mkdirSync(dirname(a), { recursive: true }); writeFileSync(a, content); readSet.add(a); o.onChange?.(path);
+        mkdirSync(dirname(a), { recursive: true }); writeFileSync(a, content); readSet.add(a); o.onChange?.(path, before === null);
         ctx.emit?.({ kind: "edit", ...unifiedDiff(path, before, content), before: before === null || before.length < 500_000 ? before : undefined });
         return `wrote ${content.length} chars to ${path}` + (await o.check?.([path]) ?? "") + (o.guidance?.nested(path) ?? "");
       } }),
@@ -167,7 +171,7 @@ export function codeTools(cwd: string, o: { /** called before a command that may
         for (const x of r.applied) {
           const a = abs(x.path);
           if (x.after === null) { rmSync(a, { force: true }); readSet.delete(a); } else { mkdirSync(dirname(a), { recursive: true }); writeFileSync(a, x.after); readSet.add(a); }
-          o.onChange?.(x.path);
+          o.onChange?.(x.path, x.before === null);
           const ch = unifiedDiff(x.path, x.before, x.after ?? "");
           ctx.emit?.({ kind: "edit", ...ch, before: x.before === null || x.before.length < 500_000 ? x.before : undefined });
           lines.push(`${x.after === null ? "deleted" : x.before === null ? "added" : "updated"} ${x.path} (+${ch.added} -${ch.removed})${x.fuzzy ? `, ${x.fuzzy} hunk(s) matched ignoring indentation` : ""}`);
@@ -301,6 +305,8 @@ export type CodeAgentOptions = {
   approvalReviewer?: boolean | { model?: Model };
   /** Turns without any measurable improvement before the loop reflects and then stops (default 8; 0 = off). */
   stagnationTurns?: number;
+  /** "required": a tool call at every step, for task runs (ignored in chat, where a plain answer is fine). Usually set by the model's profile. */
+  toolChoice?: "auto" | "required";
   /** Background process tools (sh_start / sh_read / sh_stop / sh_list). Default on. Call `agent.procs?.dispose()` when you are done. */
   background?: boolean;
   /** Lifecycle hooks, e.g. `Hooks.load(cwd, { trustProject: true })`. Nothing runs unless you pass this. */
@@ -342,7 +348,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const small = () => { const w = typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow; return !!w && w <= 16_384; };
   const SYS = (chat: boolean | undefined) => applySystem(plugins, (small() ? COMPACT_SYSTEM : chat ? CHAT_SYSTEM : CODE_SYSTEM) + "\n" + shellNote(), o.cwd);
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
-  const touched = new Set<string>();
+  const touched = new Set<string>(), created = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
   const toolCache = new ToolCache();     // results of pure reads, shared by every run of this agent
   const plans = o.plans ? new PlanCache(resolve(o.cwd, ".amness/plans")) : undefined;
@@ -373,7 +379,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const shellCheck = o.check ? async () => { const out = await runShell(o.check!, o.cwd, 60_000); return out.startsWith("exit=0") ? "" : `\n\n[post-edit check \`${o.check}\` failed; fix this before moving on]\n${clip(out, 1500)}`; } : undefined;
   const postEdit = shellCheck || lsp ? async (paths: string[]) => (await shellCheck?.() ?? "") + (await lsp?.report(paths) ?? "") : undefined;
   const wrap = o.wrapTools ?? ((t: Tool[]) => t);
-  const registry = new Registry(wrap([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p) => touched.add(p), mode, check: postEdit, dirs: o.dirs, outside: o.outside }), ...(backend ? memoryTools(backend) : []), ...(o.tools ?? [])]));
+  const registry = new Registry(wrap([...codeTools(o.cwd, { guidance, procs, beforeShell: o.beforeShell, sandbox: sandboxMode, onChange: (p, isNew) => { touched.add(p); if (isNew) created.add(slash(p).replace(/^\.\//, "")); }, mode, check: postEdit, dirs: o.dirs, outside: o.outside, related: o.off?.includes("anchor") ? undefined : (files) => (codeIndex ? relatedFiles(codeIndex, files) : "") }), ...(backend ? memoryTools(backend) : []), ...(o.tools ?? [])]));
   const shown = new Set<string>();   // memory notes already in this conversation
   const rescanIndex = () => { if (codeIndex && !registry.get("repo_map") && codeIndex.list().length >= indexMin) registry.add(...indexTools(codeIndex)); };
   rescan(); rescanIndex();
@@ -416,7 +422,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
           if (unknown) o.onEvent?.({ kind: "nudge", detail: `no agent named "${unknown}"; used the read-only explorer` });
           const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name, parent: ctx.callId } as unknown as Event);
           if (!d) {
-            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan", dirs: o.dirs, outside: o.outside }), maxSteps: 14, contextBudget: 120_000, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan", dirs: o.dirs, outside: o.outside, related: o.off?.includes("anchor") ? undefined : (files) => (codeIndex ? relatedFiles(codeIndex, files) : "") }), maxSteps: 14, contextBudget: 120_000, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
             const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";
             return note + clip(r.text || "(the explorer returned nothing)", 8000);                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
           }
@@ -466,8 +472,8 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const sessionFile = resolve(o.cwd, ".amness/handoff.md");
   let task = "";
   const h = createHarness({
-    model: o.model, toolCache, finishChecks: [coverageCheck], compactSpecs: () => o.compactSchemas ?? small(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    model: o.model, toolCache, finishChecks: [coverageCheck, auditCheck(o.cwd, () => codeIndex, () => [...created])], compactSpecs: () => o.compactSchemas ?? small(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
+    budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? undefined : o.toolChoice, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 
@@ -547,8 +553,8 @@ ${note}
     async compact(messages: Message[]): Promise<{ messages: Message[]; note: string }> {
       const specs = registry.visible({ step: 0, messages }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }));
       const note = await makeHandoff(o.models?.compact ?? o.model, specs, messages, o.budget);
-      const first = (messages.find((m) => m.role === "user")?.content ?? task).split("\n\n## Handoff from your earlier context")[0];
-      return { note, messages: [messages[0], { role: "user", content: `${first}\n\n## Handoff from your earlier context (you are continuing, not starting over)\n${note}` }] };
+      const msgs = messages.some((m) => m.role === "user") ? messages : [...messages, { role: "user" as const, content: task }];
+      return { note, messages: [messages[0], { role: "user", content: handoffSeed(msgs, note, o.off?.includes("pin") ? null : pinRules) }] };
     },
     /** Package the work so far for another machine / model / day. Asks the model for a handoff note unless one is supplied. */
     async exportBundle(result: { messages: Message[]; finished: boolean; text: string }, path?: string, handoff?: string): Promise<{ bundle: Bundle; path?: string }> {

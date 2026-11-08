@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -36,7 +36,9 @@ test("amness run: full headless session over HTTP, JSONL events, live diff, bund
     const lines = r.out.trim().split("\n").map((l) => JSON.parse(l));
     const edit = lines.find((l) => l.kind === "edit");
     assert.deepEqual([edit.path, edit.created, edit.added], ["hello.js", true, 1]);
-    assert.deepEqual(lines.at(-1), { kind: "result", finished: true, text: "created hello.js", steps: 3, tokens: 240 });
+    const { usage, cost, ...rest } = lines.at(-1);
+    assert.deepEqual(rest, { kind: "result", finished: true, text: "created hello.js", steps: 3, tokens: 240, model: "m" });
+    assert.deepEqual([usage.prompt, usage.completion, usage.cached, usage.requests], [150, 30, 0, 3]); assert.equal(cost, null);   // what benchmarks read (the unknown model "m" has no price)
     assert.equal(existsSync(join(dir, "hello.js")), true);
     assert.equal(JSON.parse(readFileSync(bundle, "utf8")).files["hello.js"], "console.log('hi');\n");
     assert.match(JSON.parse(readFileSync(bundle, "utf8")).handoff, /DONE: wrote hello.js/);
@@ -62,4 +64,49 @@ test("amness run --help prints usage and exits 0 without calling any model", asy
   const srv = await mockOpenAI([]); const out: string[] = [];
   const code = await new Promise<number>((res) => { const p = spawn("node", ["cli/amness.ts", "run", "--help"], { env: { ...process.env, OPENAI_BASE_URL: srv.url, OPENAI_API_KEY: "k" } }); p.stdout.on("data", (d) => out.push(String(d))); p.on("close", (c) => res(c ?? 1)); });
   srv.close(); assert.equal(code, 0); assert.match(out.join(""), /usage: amness run/); assert.equal(srv.seen.length, 0);
+});
+
+test("amness run: --plugin loads a plugin file for this run (its tool is offered), --off switches guards off, and an unknown guard is a usage error", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "amness-pl-")), plugin = join(dir, "p.mjs");
+  writeFileSync(plugin, `export default { name: "bench-probe", tools: [{ name: "probe_tool", description: "probe", schema: { type: "object", properties: {} }, run: () => "ok" }] };`);
+  const api = await mockOpenAI([tc("1", "finish", { summary: "done" })]);
+  try {
+    const r = await cli(["run", "--provider", "custom", "--base-url", api.url, "--model", "m", "--cwd", dir, "--json", "--plugin", plugin, "--off", "nudge,compact", "go"]);
+    assert.equal(r.code, 0, r.err);
+    assert.ok(api.seen[0].tools.some((t: any) => t.function.name === "probe_tool"));
+    const bad = await cli(["run", "--provider", "custom", "--base-url", api.url, "--model", "m", "--cwd", dir, "--off", "nosuch", "go"]);
+    assert.equal(bad.code, 2); assert.match(bad.err, /unknown guard nosuch/);
+  } finally { api.close(); }
+});
+
+test("amness run: --max-time tells the agent to wrap up near the end, then stops cleanly and still writes the result line (stopped: time)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "amness-mt-")), seen: any[] = [];
+  const srv = createServer((req, res) => {
+    let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
+      if (req.method !== "POST") { res.statusCode = 404; return void res.end("{}"); }
+      seen.push(JSON.parse(b));
+      setTimeout(() => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ choices: [{ message: tc(String(seen.length), "list_files", { path: "." + "/".repeat(seen.length % 3) }) }], usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 } })); }, 400);   // a slow model that never finishes
+    });
+  });
+  await new Promise<void>((ok) => srv.listen(0, "127.0.0.1", ok));
+  try {
+    const t0 = Date.now(), r = await cli(["run", "--provider", "custom", "--base-url", `http://127.0.0.1:${(srv.address() as any).port}/v1`, "--model", "m", "--cwd", dir, "--json", "--max-time", "3", "--off", "loop", "go"]);
+    const last = JSON.parse(r.out.trim().split("\n").at(-1)!);
+    assert.equal(last.kind, "result"); assert.equal(last.stopped, "time"); assert.ok(last.usage.requests >= 2);
+    assert.ok(Date.now() - t0 < 9000, "it stopped near the limit");
+    assert.ok(seen.some((x) => x.messages.some((m: any) => m.role === "user" && /Time is almost up/.test(m.content ?? ""))), "the wrap-up note reached the model");
+  } finally { srv.close(); }
+});
+
+test("amness run: tool choice comes from --tool-choice or the model's profile and reaches the server as tool_choice; profiles accept every guard name", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "amness-tc-")), home = mkdtempSync(join(tmpdir(), "amness-h-"));
+  const run = async (args: string[], env: Record<string, string> = {}) => { const api = await mockOpenAI([tc("1", "finish", { summary: "done" })]);
+    try { const r = await cli(["run", "--provider", "custom", "--base-url", api.url, "--model", "qwen-local", "--cwd", dir, "--json", ...args, "go"], env); return { r, body: api.seen[0] }; } finally { api.close(); } };
+  let { r, body } = await run(["--tool-choice", "required"]);
+  assert.equal(r.code, 0, r.err); assert.equal(body.tool_choice, "required");
+  ({ body } = await run([])); assert.equal(body.tool_choice, undefined);                // nothing set: the server decides
+  writeFileSync(join(home, "profile.json"), JSON.stringify({ models: { "qwen-*": { toolChoice: "required", off: ["anchor", "audit", "pin"] } } }));
+  ({ r, body } = await run([], { AMNESS_HOME: home })); assert.equal(r.code, 0, r.err); assert.equal(body.tool_choice, "required");
+  const bad = await cli(["run", "--provider", "custom", "--base-url", "http://127.0.0.1:9/v1", "--model", "m", "--cwd", dir, "--tool-choice", "always", "go"]);
+  assert.equal(bad.code, 2); assert.match(bad.err, /--tool-choice must be auto or required/);
 });

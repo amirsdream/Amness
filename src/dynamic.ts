@@ -57,14 +57,15 @@ export function loadSavedTools(file: string, cwd: string): Tool[] {
 }
 
 // ------------------------------------------------------------ MCP (stdio JSON-RPC)
-export type McpHandle = { tools: Tool[]; close: () => void };
+export type McpHandle = { tools: Tool[]; close: () => void; /** which protocol generation the server speaks: modern (2026-07-28, stateless) or legacy (initialize handshake) */ era: "modern" | "legacy" };
+const MODERN = "2026-07-28", LEGACY = "2025-11-25", CLIENT = { name: "amness", version: "1" };
 
 /**
  * Connect to an MCP server over stdio and expose its tools. Names become `<prefix>__<tool>`.
  * Tools the server marks destructive (or not read-only) need approval; override with `risky`.
  * With more than `deferAbove` tools they are deferred behind `tool_search` so the prompt stays small.
  */
-export async function loadMcp(command: string, args: string[] = [], o: { prefix?: string; env?: Record<string, string>; risky?: (t: any) => boolean; deferAbove?: number; timeoutMs?: number } = {}): Promise<McpHandle> {
+export async function loadMcp(command: string, args: string[] = [], o: { prefix?: string; env?: Record<string, string>; risky?: (t: any) => boolean; deferAbove?: number; timeoutMs?: number; /** how long to wait for the server/discover probe before treating the server as legacy */ probeMs?: number } = {}): Promise<McpHandle> {
   const child = spawn(command, args, { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...o.env } });
   const pending = new Map<number, { ok: (v: any) => void; fail: (e: Error) => void }>();
   let id = 0, buf = "";
@@ -73,20 +74,32 @@ export async function loadMcp(command: string, args: string[] = [], o: { prefix?
     for (let i; (i = buf.indexOf("\n")) >= 0; ) {
       const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
       if (!line) continue;
-      try { const m = JSON.parse(line), p = pending.get(m.id); if (p) { pending.delete(m.id); m.error ? p.fail(new Error(m.error.message)) : p.ok(m.result); } } catch { /* not JSON-RPC; ignore */ }
+      try { const m = JSON.parse(line), p = pending.get(m.id); if (p) { pending.delete(m.id); m.error ? p.fail(Object.assign(new Error(m.error.message), { code: m.error.code, data: m.error.data })) : p.ok(m.result); } } catch { /* not JSON-RPC; ignore */ }
     }
   });
   const dead = (why: string) => { for (const p of pending.values()) p.fail(new Error(why)); pending.clear(); };
   child.on("exit", (c) => dead(`MCP server exited (${c})`)); child.on("error", (e) => dead(`MCP server failed: ${e.message}`));
-  const rpc = (method: string, params?: unknown) => new Promise<any>((ok, fail) => {
+  let era: "modern" | "legacy" | undefined;
+  const meta = () => ({ "io.modelcontextprotocol/protocolVersion": MODERN, "io.modelcontextprotocol/clientInfo": CLIENT, "io.modelcontextprotocol/clientCapabilities": {} });
+  const rpc = (method: string, params?: Record<string, unknown>, ms = o.timeoutMs ?? 30_000) => new Promise<any>((ok, fail) => {
     const n = ++id;
-    const timer = setTimeout(() => { pending.delete(n); fail(new Error(`MCP ${method} timed out`)); }, o.timeoutMs ?? 30_000);
-    pending.set(n, { ok: (v) => (clearTimeout(timer), ok(v)), fail: (e) => (clearTimeout(timer), fail(e)) });
-    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: n, method, params }) + "\n");
+    const timer = setTimeout(() => { pending.delete(n); fail(new Error(`MCP ${method} timed out`)); }, ms);
+    pending.set(n, { ok: (v) => (clearTimeout(timer), v?.resultType === "input_required" ? fail(new Error(`MCP ${method}: the server asked for more input (elicitation or sampling), which Amness does not support yet`)) : ok(v)), fail: (e) => (clearTimeout(timer), fail(e)) });
+    const p = era === "modern" ? { ...params, _meta: { ...meta(), ...(params?._meta as object) } } : params;      // a modern server needs the per-request fields on every request
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: n, method, params: p }) + "\n");
   });
   try {
-    await rpc("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "amness", version: "0.1.0" } });
-    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+    // Dual-era client (MCP 2026-07-28, "Versioning and Compatibility"): probe with server/discover. A modern server answers it, or says which versions it supports
+    // (-32022); then every request carries the protocol version, client info and capabilities in _meta, with no handshake. Anything else (method not found,
+    // another error, silence) is a legacy server: fall back to the initialize handshake.
+    let modern = false;
+    try { await rpc("server/discover", { _meta: meta() }, o.probeMs ?? 10_000); modern = true; }
+    catch (e) { const code = (e as { code?: number }).code; if (code === -32022) throw new Error(`MCP server does not support protocol ${MODERN} (it supports ${JSON.stringify((e as { data?: { supported?: string[] } }).data?.supported ?? [])})`); }
+    era = modern ? "modern" : "legacy";
+    if (!modern) {
+      await rpc("initialize", { protocolVersion: LEGACY, capabilities: {}, clientInfo: CLIENT });
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+    }
     const listed: any[] = [];
     for (let cursor: string | undefined; ; ) {
       const r = await rpc("tools/list", cursor ? { cursor } : {});
@@ -108,7 +121,7 @@ export async function loadMcp(command: string, args: string[] = [], o: { prefix?
         },
       };
     });
-    return { tools, close: () => child.kill() };
+    return { tools, close: () => child.kill(), era: era! };
   } catch (e) { child.kill(); throw e; }
 }
 

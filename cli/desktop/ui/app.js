@@ -1071,7 +1071,7 @@ async function showPrefs() {
   const shared = (id) => { const g = (s.groups ?? []).find((x) => x.id === id); return g ? g.items.map((it) => prow(it.id, false, it.label, it.help, control(it))) : []; };
   const draw = () => {
     const groups = (s.groups ?? []).filter((g) => g.id !== "chat");
-    const TABS = [["appearance", "◐", "Appearance"], ["chat", "✉", "Chat"], ...groups.map((g) => [g.id, { model: "◆", limits: "▤", harness: "⟳", safety: "⛨", folders: "▣", search: "⌕", advanced: "⚙" }[g.id] ?? "·", g.label]), ["about", "ⓘ", "About"]];
+    const TABS = [["appearance", "◐", "Appearance"], ["chat", "✉", "Chat"], ...groups.map((g) => [g.id, { model: "◆", limits: "▤", harness: "⟳", safety: "⛨", folders: "▣", search: "⌕", advanced: "⚙", extend: "✚" }[g.id] ?? "·", g.label]), ["about", "ⓘ", "About"]];
     if (!TABS.some((t) => t[0] === prefsTab)) prefsTab = "appearance";
     nav.replaceChildren(...TABS.map(([id, ic, l]) => h("button", { class: id === prefsTab ? "on" : "", dataset: { tab: id }, onclick: () => { prefsTab = id; draw(); } }, h("span", { class: "ic", text: ic }), l, h("span", { class: "dot" }))));
     const lead = (g) => h("div", { class: "lead", text: g?.lead ?? "" });
