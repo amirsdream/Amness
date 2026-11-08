@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.4 (2026-11-08)
 
 - **The conversation list no longer reorders when you open a conversation.** Opening another conversation saved the one you left and moved it to the top, although nothing in it changed. Now a conversation moves only when its messages change; opening it, leaving it, renaming it or changing a setting keeps its place. This applies to the desktop list and to `/resume` in the terminal.
 
