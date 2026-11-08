@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 (2026-11-08)
+
+**0.5.0 was not published to npm** (its release check failed), so 0.5.1 is the first version with everything listed under 0.5.0 below.
+
+- **Settings: a refused change is reported.** If a setting's command refuses a value (for example the sandbox on a machine without one), Apply in Preferences, `/settings` and `/set` now say it was not applied, with the reason. Before, they counted it as applied.
+
 ## 0.5.0 (2026-11-08)
 
 - **Preferences: Apply, Revert, and up-to-date tabs.** In the desktop app, switching tabs in Preferences showed the values from when it opened, not what you had just changed. Fixed. Every change is now a draft: appearance previews at once, agent settings run on **Apply**, **Revert** undoes everything, and closing with changes left asks first. Changed settings and tabs get a dot.
