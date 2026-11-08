@@ -29,7 +29,7 @@ const secs = (ms: number) => (ms / 1000).toFixed(1) + "s";
 
 function banner() {
   const p = PROVIDERS[cfg.provider];
-  const key = !p.needsKey ? gray("no key needed") : cfg.apiKey ? green("key set") : red("no API key");
+  const key = !p.needsKey ? (cfg.apiKey ? green("key set") : gray("no key needed")) : cfg.apiKey ? green("key set") : red("no API key");
   console.log("\n" + box([
     bold("Amness") + dim("  ·  reliable agents for GPT-style models"),
     `${dim("model")} ${cyan(cfg.model)}  ${dim("via")} ${p.label}  ${dim("·")} ${key}  ${dim("·")} ${dim("budget")} ${cfg.maxTokens.toLocaleString()} tok`,
@@ -73,6 +73,7 @@ async function ensureReady(): Promise<boolean> {
   Object.assign(cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model });
   if (id === "custom" || id === "ollama") { cfg.baseUrl = (await ask("Base URL", cfg.baseUrl)) || cfg.baseUrl; cfg.model = (await ask("Model", cfg.model)) || cfg.model; }
   if (PROVIDERS[id].needsKey) cfg.apiKey = keyFor(id).key ?? ((await ask(`API key (hidden; ${where()})`, "", { secret: true })) || undefined);
+  else cfg.apiKey = keyFor(id).key ?? ((await ask(`API key or token, only if your server needs one (hidden; ${where()}; Enter skips)`, "", { secret: true })) || undefined);
   saveConfig(cfg);
   if (!ready(cfg)) return false;
   return (await testConnection(true)) || (await confirm("The test failed. Keep going anyway?", false));

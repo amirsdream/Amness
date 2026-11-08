@@ -333,6 +333,30 @@ test("an expired key is asked for again, saved, and the message is sent again", 
   } finally { if (saved) process.env.OPENAI_API_KEY = saved; await t.key(KEY.ctrlD); }
 });
 
+test("a local server that asks for a key (401) gets one: asked, saved for that provider, and the message is sent again", async () => {
+  const saved = process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY_FILE;
+  const t = rig([async () => { throw new Error("HTTP 401: Unauthorized"); }, say("served")]); await t.start();   // the rig's provider is "custom" with no key
+  try {
+    await t.submit("hi"); assert.ok(await t.until(() => t.has("asks for a key")));
+    await t.type("local-token"); await t.key(KEY.enter);
+    assert.ok(await t.until(() => t.has("served") && t.idle()));
+    assert.equal(t.app.cfg.apiKey, "local-token");
+    assert.equal((await import("../cli/config.ts")).keyFor("custom").key, "local-token");
+  } finally { if (saved) process.env.OPENAI_API_KEY = saved; await t.key(KEY.ctrlD); }
+});
+
+test("/connect saves a key for a local provider too (a server started with an API key)", async () => {
+  const saved = process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY_FILE;
+  const t = rig([]); await t.start();
+  try {
+    await t.submit("/connect"); assert.ok(await t.until(() => t.has("Ollama (local)")));
+    assert.match(plain(t.screen()), /Ollama \(local\)\s+local · no key \(optional\)/);
+    await t.type("ollama"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("only if your server needs one")));
+    await t.type("ollama-token"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Ollama (local) connected")));
+    assert.equal((await import("../cli/config.ts")).keyFor("ollama").key, "ollama-token");
+  } finally { if (saved) process.env.OPENAI_API_KEY = saved; await t.key(KEY.esc); await t.key(KEY.ctrlD); }
+});
+
 test("# saves a memory note; ! runs a shell command now and feeds its output to the next turn", async () => {
   const t = rig([say("noted")]); await t.start();
   await t.submit("# always use pnpm in this repo");

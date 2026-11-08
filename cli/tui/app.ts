@@ -496,7 +496,7 @@ export class App {
       this.session.turns.pop();
       if (prefix) this.pendingContext.unshift(prefix);                              // the shell output or mode note this turn carried is not lost: the next message (or the retry) sends it again
       const msg = (e as Error).message;
-      badKey = PROVIDERS[this.cfg.provider].needsKey && /\b401\b|unauthori[sz]ed|authentication[_ ]error|invalid[_ ]api[_ ]key|incorrect api key|(api[_ ]key|token|credential)s?\b.{0,30}\b(expired|revoked|invalid|disabled)/i.test(msg);   // not any 403 or "expired": those also mean region limits or an expired response id
+      badKey = /\b401\b|unauthori[sz]ed|authentication[_ ]error|invalid[_ ]api[_ ]key|incorrect api key|(api[_ ]key|token|credential)s?\b.{0,30}\b(expired|revoked|invalid|disabled)/i.test(msg);   // not any 403 or "expired": those also mean region limits or an expired response id. A local server started with a key answers 401 too
       this.notify("error", one(msg, 400) + (badKey ? "  (key rejected: enter a new one)" : ""), ["", `  ${red("✗")} ${one(msg, this.width * 2)}`]);
     }
     this.flushStream(true); this.blocks.endAssistant(); this.blocks.endThinking(); this.blocks.closeRunning(ok ? "ended without a result" : "interrupted");
@@ -517,7 +517,7 @@ export class App {
   private async reconnect(text: string): Promise<boolean> {
     const id = this.cfg.provider, label = PROVIDERS[id].label;
     if (keyFor(id).source === "env") { this.note(`${label}: the key comes from an environment variable. Update it and restart, or unset it and use /connect.`); return false; }
-    const key = await this.askText(`${label} key was rejected. New API key (hidden; ${where()}), Esc to skip`, { secret: true });
+    const key = await this.askText(`${label} ${this.cfg.apiKey ? "key was rejected. New API key" : "asks for a key. API key or token"} (hidden; ${where()}), Esc to skip`, { secret: true });
     if (!key) return false;
     storeKey(id, key); this.cfg.apiKey = key; this.buildAgent();
     this.note(`${label} reconnected (${noStore() ? "this session only" : where()}); sending your message again`);

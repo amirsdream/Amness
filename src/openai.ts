@@ -170,7 +170,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
     for (let i = 0; ; i++) {
       let err: Error;
       try {
-        const r = await fetch(base + path, { method: "POST", body: payload, signal, headers: { "content-type": "application/json", authorization: `Bearer ${key}` } });
+        const r = await fetch(base + path, { method: "POST", body: payload, signal, headers: { "content-type": "application/json", ...(key && { authorization: `Bearer ${key}` }) } });   // no key (a local server): no header, not an empty "Bearer"
         if (r.ok) return r;
         const status = r.status, text = await r.text();
         const ra = r.headers.get("retry-after-ms") ? Number(r.headers.get("retry-after-ms")) : r.headers.get("retry-after") && Number.isFinite(Number(r.headers.get("retry-after"))) ? Number(r.headers.get("retry-after")) * 1000 : undefined;

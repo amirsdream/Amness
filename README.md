@@ -36,7 +36,7 @@ Give Amness the key once, in whichever way suits you:
 | **Docker** | `docker run -it --rm -v "$PWD":/work -e ANTHROPIC_API_KEY amness` | No. Inside a container nothing is saved. |
 | **Library or CI** | pass `apiKey` in code, or set the variable as a CI secret | No. |
 
-Each provider keeps its own saved key, so you can connect several and switch with `/provider`; `/connect` shows which are connected. `OPENAI_API_KEY` is used for every provider except Anthropic (OpenRouter prefers `OPENROUTER_API_KEY`). To remove a saved key, clear "API key" in the settings. A Linux server with no keyring falls back to `~/.amness/config.json` (mode 600, **not encrypted**), so use an environment variable or your platform's secret manager there. Details: [Safety](docs/safety.md).
+Each provider keeps its own saved key, so you can connect several and switch with `/provider`; `/connect` shows which are connected. A local server (Ollama, vLLM, LM Studio) needs no key, but you can add one in `/connect` if it checks a key or token. `OPENAI_API_KEY` is used for every provider except Anthropic (OpenRouter prefers `OPENROUTER_API_KEY`). To remove a saved key, clear "API key" in the settings. A Linux server with no keyring falls back to `~/.amness/config.json` (mode 600, **not encrypted**), so use an environment variable or your platform's secret manager there. Details: [Safety](docs/safety.md).
 
 More ways to start:
 

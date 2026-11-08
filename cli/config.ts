@@ -63,7 +63,7 @@ export function storeKey(p: ProviderId, key?: string) {
 export type Connection = { id: ProviderId; label: string; needsKey: boolean; source: KeyState["source"]; env: string };
 /** Every provider and whether it is ready to use. */
 export function connections(): Connection[] {
-  return (Object.keys(PROVIDERS) as ProviderId[]).map((id) => ({ id, label: PROVIDERS[id].label, needsKey: PROVIDERS[id].needsKey, source: PROVIDERS[id].needsKey ? keyFor(id).source : "saved", env: envNameFor(id) }));
+  return (Object.keys(PROVIDERS) as ProviderId[]).map((id) => ({ id, label: PROVIDERS[id].label, needsKey: PROVIDERS[id].needsKey, source: keyFor(id).source, env: envNameFor(id) }));
 }
 
 const readFileCfg = (): Config => { try { return { ...defaults(), ...JSON.parse(readFileSync(file(), "utf8")) }; } catch { return defaults(); } };

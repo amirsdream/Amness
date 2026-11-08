@@ -27,14 +27,16 @@ export type Cmd = { name: string; help: string; alias?: string; args?: string; /
 const INIT_PROMPT = "Explore this repository and write an AGENTS.md at the repo root for future coding sessions: what the project is, how to build/test/run it (exact commands), the code layout, conventions you can verify from the code, and gotchas. Keep it under 80 lines and do not invent anything you cannot confirm from the files.";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
-const keyStatus = (c: Connection) => !c.needsKey ? "local, no key needed" : c.source === "env" ? `connected · from ${c.env}` : c.source === "saved" ? `connected · ${noStore() ? "this session only" : where()}` : "not connected";
+const keyStatus = (c: Connection) => c.source === "env" ? `${c.needsKey ? "connected" : "local · key"} · from ${c.env}` : c.source === "saved" ? (c.needsKey ? `connected · ${noStore() ? "this session only" : where()}` : `local · key ${noStore() ? "for this session only" : where()}`) : c.needsKey ? "not connected" : "local · no key (optional)";
+/** A local server (Ollama, vLLM, LM Studio…) usually needs no key, but one started with an API key or behind a proxy does. */
+const keyPrompt = (id: ProviderId) => PROVIDERS[id].needsKey ? `${PROVIDERS[id].label} API key (hidden; ${where()})` : `${PROVIDERS[id].label} API key or token, only if your server needs one (hidden; ${where()}; Enter skips)`;
 
 /** Make `id` the active provider, using its saved key (or asking for one). Returns false if the user gave up. */
 async function switchProvider(a: App, id: ProviderId): Promise<boolean> {
   let apiKey = keyFor(id).key;
-  if (PROVIDERS[id].needsKey && !apiKey) { apiKey = await a.askText(`${PROVIDERS[id].label} API key (hidden; ${where()})`, { secret: true }); if (!apiKey) return false; }
+  if (PROVIDERS[id].needsKey && !apiKey) { apiKey = await a.askText(keyPrompt(id), { secret: true }); if (!apiKey) return false; }
   Object.assign(a.cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model, apiKey });
-  if (id === "custom" || id === "ollama") { const m = await a.askText("Model id", { initial: a.cfg.model }); if (m) a.cfg.model = m; const u = await a.askText("Base URL", { initial: a.cfg.baseUrl }); if (u) a.cfg.baseUrl = u; }
+  if (id === "custom" || id === "ollama") { const m = await a.askText("Model id", { initial: a.cfg.model }); if (m) a.cfg.model = m; const u = await a.askText("Base URL", { initial: a.cfg.baseUrl }); if (u) a.cfg.baseUrl = u; if (!apiKey) a.cfg.apiKey = (await a.askText(keyPrompt(id), { secret: true })) || undefined; }
   a.saveConfig(); a.buildAgent(); a.say(`provider → ${cyan(PROVIDERS[id].label)}, model ${cyan(a.cfg.model)}`, dim);
   return true;
 }
@@ -69,7 +71,6 @@ export function buildCommands(): Cmd[] {
         const id = await a.pick<ProviderId>("Providers   ● connected   ○ not connected", list.map((c) => ({ label: `${!c.needsKey || c.source !== "none" ? "●" : "○"} ${c.label}${c.id === a.cfg.provider ? "  (in use)" : ""}`, value: c.id, hint: keyStatus(c) })));
         if (!id) return;
         const c = list.find((x) => x.id === id)!;
-        if (!c.needsKey) { a.say(`${c.label} needs no key. Use /provider to switch to it.`, dim); continue; }
         const act = c.source === "none" ? "add" : await a.pick("What do you want to do?", [
           ...(id === a.cfg.provider ? [] : [{ label: "Use this provider now", value: "use" }]),
           { label: c.source === "env" ? `Also save a key (${c.env} still wins while it is set)` : "Replace the key", value: "add" },
@@ -78,7 +79,7 @@ export function buildCommands(): Cmd[] {
         if (!act) continue;
         if (act === "use") { await switchProvider(a, id); continue; }
         if (act === "add") {
-          const key = await a.askText(`${c.label} API key (hidden; ${where()})`, { secret: true });
+          const key = await a.askText(keyPrompt(id), { secret: true });
           if (!key) continue;
           storeKey(id, key);
           if (id === a.cfg.provider) { a.cfg.apiKey = keyFor(id).key; a.buildAgent(); }

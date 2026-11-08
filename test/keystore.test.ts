@@ -100,7 +100,7 @@ test("container mode: a key typed in is kept in memory only, and a *_FILE secret
 test("several providers: each keeps its own key, switching does not overwrite, env wins per provider, removing one leaves the others", () => {
   const home = fresh(), env = { AMNESS_KEYSTORE: "file" };
   child(home, `c.storeKey("openai", "sk-openai-1111"); c.storeKey("anthropic", "sk-ant-2222");`, env);
-  assert.equal(child(home, `console.log(JSON.stringify(c.connections().map((x) => [x.id, x.source])))`, env), '[["anthropic","saved"],["openai","saved"],["openrouter","none"],["ollama","saved"],["custom","saved"]]');
+  assert.equal(child(home, `console.log(JSON.stringify(c.connections().map((x) => [x.id, x.source])))`, env), '[["anthropic","saved"],["openai","saved"],["openrouter","none"],["ollama","none"],["custom","none"]]');   // a local provider reports its real key state: it can have a key, for a server that checks one
   // the active provider's key is the one for that provider
   writeFileSync(join(home, "config.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(home, "config.json"), "utf8")), provider: "anthropic" }));
   assert.equal(child(home, `console.log(c.loadConfig().apiKey)`, env), "sk-ant-2222");

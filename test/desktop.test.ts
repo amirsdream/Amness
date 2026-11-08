@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,13 +10,13 @@ import { electronBinary } from "../cli/desktop.ts";
 import { call, say, sleep } from "./helpers/apprig.ts";
 
 /** A desktop server over a temp project with a scripted model, plus a reader for its event stream. */
-async function boot(replies: Message[], files: Record<string, string> = { "a.txt": "one\ntwo\n" }) {
+async function boot(replies: Message[], files: Record<string, string> = { "a.txt": "one\ntwo\n" }, o: { cfg?: Record<string, unknown>; realModel?: boolean } = {}) {
   process.env.AMNESS_HOME = mkdtempSync(join(tmpdir(), "amness-home-"));
   const dir = mkdtempSync(join(tmpdir(), "amness-desk-"));
   for (const [f, c] of Object.entries(files)) writeFileSync(join(dir, f), c);
   const queue = [...replies];
   const model: Model = async (_m, _s, o) => { const r = queue.shift() ?? say("(done)"); if (r.content && o?.onText) o.onText(r.content); return r; };
-  const srv = await startDesktopServer({ cfg: { provider: "custom", baseUrl: "http://x/v1", model: "test-model", maxTokens: 100000 } as any, cwd: dir, version: "0.0.0", persist: false, makeModel: () => model });
+  const srv = await startDesktopServer({ cfg: { provider: "custom", baseUrl: "http://x/v1", model: "test-model", maxTokens: 100000, ...o.cfg } as any, cwd: dir, version: "0.0.0", persist: false, makeModel: o.realModel ? undefined : () => model });
   await sleep(50);
   const base = srv.url.split("/#")[0], events: any[] = [], ctrl = new AbortController();
   const es = await fetch(`${base}/events?t=${srv.token}`, { signal: ctrl.signal });
@@ -172,4 +173,62 @@ test("desktop: /todos edit and plan edits open the long-text dialog; harness set
     const st = (await d.api("/api/settings")).json;
     assert.equal(st.harness.guards.find((g: any) => g.name === "loop").on, false); assert.equal(st.harness.maxSteps, 60);
   } finally { await d.close(); }
+});
+
+/** llama.cpp behind nginx: without the right bearer token nginx answers its HTML 401 page; with it, llama.cpp's /v1/models, /props and /v1/chat/completions. */
+async function llamaBehindNginx(token?: string) {
+  const seen: { path: string; auth?: string }[] = [];
+  const srv = createServer((req, res) => {
+    req.resume(); req.on("end", () => {
+      seen.push({ path: req.url!, auth: req.headers.authorization });
+      if (token && req.headers.authorization !== `Bearer ${token}`) { res.writeHead(401, { "content-type": "text/html" }); return void res.end("<html><head><title>401 Authorization Required</title></head><body><center><h1>401 Authorization Required</h1></center><hr><center>nginx</center></body></html>"); }
+      res.writeHead(200, { "content-type": "application/json" });
+      if (req.url === "/v1/models") return void res.end(JSON.stringify({ object: "list", data: [{ id: "qwen-coder", object: "model" }] }));
+      if (req.url === "/props") return void res.end(JSON.stringify({ default_generation_settings: { n_ctx: 32768 } }));
+      res.end(JSON.stringify({ id: "c1", object: "chat.completion", choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "pong from llama.cpp" } }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } }));
+    });
+  });
+  await new Promise<void>((ok) => srv.listen(0, "127.0.0.1", ok));
+  return { url: `http://127.0.0.1:${(srv.address() as any).port}/v1`, seen, close: () => srv.closeAllConnections?.() ?? srv.close() };
+}
+
+/** The open dialog of this kind whose text matches, waiting for it. */
+const dialogOf = async (d: Awaited<ReturnType<typeof boot>>, kind: string, re: RegExp) => {
+  const find = () => d.events.find((e) => e.type === "dialog" && e.dialog.kind === kind && re.test(JSON.stringify(e.dialog)) && !d.events.some((x) => x.type === "dialogClose" && x.id === e.dialog.id))?.dialog;
+  assert.ok(await d.until(() => !!find()), `no ${kind} dialog matching ${re}: ${JSON.stringify(d.events.filter((e) => e.type === "dialog").slice(-2))}`);
+  return find();
+};
+
+test("desktop: a local server behind a token (llama.cpp + nginx) answers 401; the window asks for the key, saves it, and sends the message again with it", async () => {
+  const saved = process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY_FILE;
+  const llama = await llamaBehindNginx("srv-token");
+  const d = await boot([], undefined, { cfg: { baseUrl: llama.url, model: "qwen-coder", api: "chat" }, realModel: true });
+  try {
+    await d.api("/api/send", { text: "ping" });
+    const ask = await dialogOf(d, "input", /asks for a key/); assert.equal(ask.secret, true);
+    await d.api("/api/dialog", { id: ask.id, value: "srv-token" });
+    assert.ok(await d.until(() => JSON.stringify(d.events).includes("pong from llama.cpp"), 8000), "the message was sent again and answered");
+    const chats = llama.seen.filter((s) => s.path === "/v1/chat/completions");
+    assert.equal(chats[0].auth, undefined); assert.equal(chats.at(-1)!.auth, "Bearer srv-token");
+    assert.equal((await import("../cli/config.ts")).keyFor("custom").key, "srv-token");
+  } finally { if (saved) process.env.OPENAI_API_KEY = saved; llama.close(); await d.close(); }
+});
+
+test("desktop: /provider for a local server asks for an optional key; Enter skips it and requests go without one", async () => {
+  const saved = process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_API_KEY_FILE;
+  const llama = await llamaBehindNginx();
+  const d = await boot([], undefined, { cfg: { provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-6.1-sol", apiKey: "sk-x", api: "chat" }, realModel: true });
+  try {
+    await d.api("/api/send", { text: "/provider" });
+    const pick = await dialogOf(d, "pick", /Ollama \(local\)/);                         // Ollama: the test above saved a key for "custom"
+    await d.api("/api/dialog", { id: pick.id, value: pick.items.findIndex((i: any) => /Ollama/.test(i.label)) });
+    await d.api("/api/dialog", { id: (await dialogOf(d, "input", /Model id/)).id, value: "qwen-coder" });
+    await d.api("/api/dialog", { id: (await dialogOf(d, "input", /Base URL/)).id, value: llama.url });
+    const key = await dialogOf(d, "input", /only if your server needs one/); assert.equal(key.secret, true);
+    await d.api("/api/dialog", { id: key.id, value: "" });
+    assert.ok(await d.until(() => JSON.stringify(d.events).includes("provider →")));
+    await d.api("/api/send", { text: "ping" });
+    assert.ok(await d.until(() => JSON.stringify(d.events).includes("pong from llama.cpp"), 8000));
+    assert.ok(llama.seen.some((s) => s.path === "/v1/chat/completions") && llama.seen.every((s) => s.auth === undefined), JSON.stringify(llama.seen));
+  } finally { if (saved) process.env.OPENAI_API_KEY = saved; llama.close(); await d.close(); }
 });
