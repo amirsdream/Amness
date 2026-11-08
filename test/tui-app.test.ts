@@ -427,6 +427,9 @@ test("/set changes one setting by name (the same list as desktop Preferences); a
     await t.submit("/set lsp on"); assert.ok(await t.until(() => t.app.cfg.lsp === true));
     await t.submit("/set maxConcurrent 0"); assert.ok(await t.until(() => t.has("between 1 and 64"))); assert.equal(t.app.cfg.maxConcurrent, undefined);
     await t.submit("/set nosuch 1"); assert.ok(await t.until(() => t.has('no setting called "nosuch"')));
+    const { applySettings } = await import("../cli/tui/settings.ts");                  // a command that refuses is reported, not counted as applied
+    const [r] = await applySettings(t.app, [{ id: "router", value: true }], async () => ["router needs a cheap model first"]);
+    assert.equal(r.ok, false); assert.match(r.message, /Router is still off: router needs a cheap model first/);
   } finally { await t.key(KEY.ctrlD); }
 });
 
@@ -435,13 +438,12 @@ test("/settings: the same groups as desktop Preferences; changes are drafts unti
   try {
     await t.submit("/settings"); assert.ok(await t.until(() => t.has("Safety & quality") && t.has("Folders and trust") && t.has("Context and limits")));
     await t.type("safety"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Sandbox")));
-    await t.type("sandbox"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Workspace")));
-    await t.type("workspace"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("Off → Workspace •")));
-    assert.equal(t.app.cfg.sandbox, undefined);                                         // a draft: nothing changed yet
+    await t.type("language"); await t.key(KEY.enter); assert.ok(await t.until(() => t.has("off → on •")));
+    assert.equal(t.app.cfg.lsp, undefined);                                             // a draft: nothing changed yet
     await t.key(KEY.esc); assert.ok(await t.until(() => t.has("1 change not applied yet") && t.has("Apply 1 change")));
     await t.key(KEY.esc); assert.ok(await t.until(() => t.has("Apply them") && t.has("Discard them")));   // Esc with a draft asks
     await t.type("apply them"); await t.key(KEY.enter);
-    assert.ok(await t.until(() => t.app.cfg.sandbox === "workspace" && t.has("1 of 1 setting applied")));
+    assert.ok(await t.until(() => t.app.cfg.lsp === true && t.has("1 of 1 setting applied")));
   } finally { await t.key(KEY.esc); await t.key(KEY.ctrlD); }
 });
 

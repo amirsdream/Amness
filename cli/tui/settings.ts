@@ -138,7 +138,10 @@ export async function applySettings(a: App, changes: SettingChange[], run: (cmd:
     try {
       const w = d.write(a, c.value);
       const message = typeof w === "string" ? (await run(w)).join(" ").trim() || "done" : w(a);
-      out.push({ id: c.id, ok: true, message });
+      // A command can refuse (no OS sandbox on this machine, an unknown model): for a switch or a choice, read it back, and report a value that did not stick
+      const now = (d.kind === "toggle" || d.kind === "choice") && d.read ? d.read(a)?.value : undefined;
+      const stuck = now === undefined || String(now) === String(d.kind === "toggle" ? onoff(c.value) === "on" : c.value);
+      out.push({ id: c.id, ok: stuck, message: stuck ? message : `${d.label} is still ${d.kind === "toggle" ? (now ? "on" : "off") : now}${message !== "done" ? `: ${message}` : ""}` });
     } catch (e) { out.push({ id: c.id, ok: false, message: (e as Error).message }); }
   }
   return out;
