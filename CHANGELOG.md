@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-11-08)
 
 - **Preferences: Apply, Revert, and up-to-date tabs.** In the desktop app, switching tabs in Preferences showed the values from when it opened, not what you had just changed. Fixed. Every change is now a draft: appearance previews at once, agent settings run on **Apply**, **Revert** undoes everything, and closing with changes left asks first. Changed settings and tabs get a dot.
 - **One settings list for both apps.** Desktop Preferences and the new terminal `/settings` page come from one shared list, so they show the same settings and change them with the same code. `/settings` has the same groups and the same Apply. `/set <name> <value>` changes one setting by name.
