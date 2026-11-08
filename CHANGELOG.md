@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-11-09)
 
 - **More settings in one place.** `/settings` and desktop Preferences now also have: tool call every step (per model, saved in its profile), server-side compaction (OpenAI), the system prompt, and in the terminal the side panel, mouse and diff layout. A new **Extend** group opens plugins, hooks, skills, subagents, MCP servers, the model profile and the tool list. The new guards (`pin`, `anchor`, `audit`) are in the Harness group.
 - **Your rules survive a context reset.** When the context fills and Amness continues from a handoff note (or after `/compact`), the rules from your later messages ("never edit tests/", "always use pnpm") are now kept word for word after the note, and through later resets too. Before, only the first message was kept and the rest lived only in the summary, which tends to drop such rules. The summary itself now also lists them. New guard `pin` (on by default, switch off with `/harness off pin`).
