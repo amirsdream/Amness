@@ -1,4 +1,5 @@
 // Conversation persistence per project, plus undo/rewind of the file changes each turn made.
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Message } from "../../src/index.ts";
@@ -26,12 +27,21 @@ export const newSession = (cwd: string, model: string): SessionData => ({
   created: new Date().toISOString(), updated: new Date().toISOString(), title: "", cwd, model, messages: [], turns: [], usage: { prompt: 0, completion: 0, calls: 0, series: [] },
 });
 
+const contentHash = (s: SessionData) => createHash("sha1").update(JSON.stringify([s.messages, s.turns])).digest("hex");
+
 export class SessionStore {
   dir: string;
   constructor(cwd: string) { this.dir = join(cwd, ".amness", "chats"); }
   private file(id: string) { return join(this.dir, id.replace(/[^\w-]/g, "") + ".json"); }
-  save(s: SessionData) { mkdirSync(this.dir, { recursive: true }); s.updated = new Date().toISOString(); writeFileSync(this.file(s.id), JSON.stringify(s)); }
-  load(id: string): SessionData | undefined { try { return JSON.parse(readFileSync(this.file(id), "utf8")); } catch { return undefined; } }
+  /** A hash of each conversation's content as last loaded or saved, so a save that changed nothing keeps its place in the list. */
+  private seen = new Map<string, string>();
+  /** Save `s`. Its time (`updated`, which orders the conversation list) moves only when its messages or turns changed: opening another conversation, renaming or a settings change saves too, and must not move it to the top. */
+  save(s: SessionData) {
+    mkdirSync(this.dir, { recursive: true });
+    const h = contentHash(s); if (this.seen.get(s.id) !== h) s.updated = new Date().toISOString();
+    this.seen.set(s.id, h); writeFileSync(this.file(s.id), JSON.stringify(s));
+  }
+  load(id: string): SessionData | undefined { try { const s = JSON.parse(readFileSync(this.file(id), "utf8")) as SessionData; this.seen.set(s.id, contentHash(s)); return s; } catch { return undefined; } }
   list(): SessionInfo[] {
     if (!existsSync(this.dir)) return [];
     return readdirSync(this.dir).filter((f) => f.endsWith(".json")).flatMap((f) => {

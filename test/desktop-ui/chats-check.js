@@ -28,5 +28,15 @@
   // a search shows every match, folded or not
   const q = $("#sessionSearch"); q.value = "Older task"; q.dispatchEvent(new Event("input"));
   r.searchShowsAll = await until(() => $$(".chat-row:not(.new)").length === 8 && !$(".chat-group.folded"));
+  // opening conversations one after another does not reorder the list: leaving one saves it, but nothing in it changed
+  q.value = ""; q.dispatchEvent(new Event("input")); await sleep(150);
+  const order = () => $$(".chat-row:not(.new) .ct").map((x) => x.textContent).join(" | ");
+  const byTitle = (t) => $$(".chat-row").find((x) => x.querySelector(".ct")?.textContent === t);
+  await until(() => byTitle("Add retry to webhook sender") && byTitle("Fix flaky invoice export test")); const before = order();
+  byTitle("Add retry to webhook sender").click(); await until(() => $("#sessionTitle").textContent === "Add retry to webhook sender");
+  await sleep(400); byTitle("Fix flaky invoice export test").click(); await until(() => $("#sessionTitle").textContent === "Fix flaky invoice export test");
+  await sleep(600);
+  r.openingKeepsOrder = order() === before;
+  if (!r.openingKeepsOrder) r.orderAfter = order().slice(0, 200);
   return r;
 })()

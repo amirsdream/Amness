@@ -84,6 +84,12 @@ test("session: save/list/load round-trips, newest first, empty sessions hidden",
   assert.deepEqual(st.list().map((s) => s.title), ["first"]);
   const c = newSession(dir, "m"); c.title = "second"; c.turns.push({ at: 2, text: "x", t: 1, snaps: {} }); c.updated = "2999-01-01T00:00:00.000Z"; writeFileSync(join(st.dir, c.id + ".json"), JSON.stringify(c));
   assert.deepEqual(st.list().map((s) => s.title), ["second", "first"]); assert.equal(st.latest()!.title, "second"); assert.equal(st.load(a.id)!.turns[0].text, "hi");
+  // opening a conversation and leaving it again (a save with nothing new) keeps its place; a new message moves it up
+  const old = st.load(a.id)!; old.updated = "2000-01-01T00:00:00.000Z"; writeFileSync(join(st.dir, a.id + ".json"), JSON.stringify(old));
+  const opened = st.load(a.id)!; opened.title = "first, renamed"; opened.model = "other-model"; st.save(opened);
+  assert.equal(st.load(a.id)!.updated, "2000-01-01T00:00:00.000Z");
+  opened.messages.push({ role: "user", content: "more" }); st.save(opened);
+  assert.notEqual(st.load(a.id)!.updated, "2000-01-01T00:00:00.000Z");
   st.remove(a.id); assert.equal(st.load(a.id), undefined);
 });
 
