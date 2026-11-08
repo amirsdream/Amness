@@ -100,7 +100,7 @@ test("container mode: a key typed in is kept in memory only, and a *_FILE secret
 test("several providers: each keeps its own key, switching does not overwrite, env wins per provider, removing one leaves the others", () => {
   const home = fresh(), env = { AMNESS_KEYSTORE: "file" };
   child(home, `c.storeKey("openai", "sk-openai-1111"); c.storeKey("anthropic", "sk-ant-2222");`, env);
-  assert.equal(child(home, `console.log(JSON.stringify(c.connections().map((x) => [x.id, x.source])))`, env), '[["anthropic","saved"],["openai","saved"],["openrouter","none"],["ollama","none"],["custom","none"]]');   // a local provider reports its real key state: it can have a key, for a server that checks one
+  assert.equal(child(home, `console.log(JSON.stringify(c.connections().map((x) => [x.id, x.source])))`, env), '[["anthropic","saved"],["openai","saved"],["openrouter","none"]]');   // custom and Ollama are listed as their saved servers (none here)
   // the active provider's key is the one for that provider
   writeFileSync(join(home, "config.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(home, "config.json"), "utf8")), provider: "anthropic" }));
   assert.equal(child(home, `console.log(c.loadConfig().apiKey)`, env), "sk-ant-2222");
@@ -137,4 +137,20 @@ test("macOS Keychain: the single entry an older version made moves to the active
     assert.ok(!has("apiKey"), "the old entry is gone");
     assert.equal(child(home, `console.log(String(c.keyFor("openai").key))`, env), "undefined"); // and the other providers have nothing
   } finally { for (const a of ["apiKey", "apiKey-anthropic", "apiKey-openai"]) spawnSync("security", ["delete-generic-password", "-s", service, "-a", a]); }
+});
+
+test("saved servers: a custom setup from before becomes a named server with its key; each server keeps its own key; a model change is remembered with it; forgetting one removes its key", () => {
+  const home = fresh(), env = { AMNESS_KEYSTORE: "file" };
+  writeFileSync(join(home, "config.json"), JSON.stringify({ provider: "custom", baseUrl: "https://llm.example.com/v1", model: "qwen" }));
+  child(home, `c.storeKey("custom", "tok-llm")`, env);
+  assert.equal(child(home, `const x = c.loadConfig(); console.log(JSON.stringify([x.server, x.servers, x.apiKey]))`, env),
+    JSON.stringify(["llm.example.com", [{ name: "llm.example.com", provider: "custom", baseUrl: "https://llm.example.com/v1", model: "qwen" }], "tok-llm"]));
+  child(home, `const x = c.loadConfig(); c.useServer(x, { name: "box", provider: "custom", baseUrl: "http://box:8080/v1", model: "m2" }); x.apiKey = "tok-box"; c.saveConfig(x);`, env);
+  assert.equal(child(home, `const x = c.loadConfig(); console.log(JSON.stringify([x.server, x.apiKey, x.baseUrl]))`, env), '["box","tok-box","http://box:8080/v1"]');
+  child(home, `const x = c.loadConfig(); c.useServer(x, x.servers.find((s) => s.name === "llm.example.com")); x.model = "qwen-big"; c.saveConfig(x);`, env);   // back to the first: its own key, and /model is remembered
+  assert.equal(child(home, `const x = c.loadConfig(); console.log(JSON.stringify([x.server, x.apiKey, x.servers.find((s) => s.name === "llm.example.com").model]))`, env), '["llm.example.com","tok-llm","qwen-big"]');
+  assert.equal(child(home, `console.log(JSON.stringify(c.connections(c.loadConfig()).map((x) => [x.id, x.source])))`, env),
+    '[["anthropic","none"],["openai","none"],["openrouter","none"],["server:llm.example.com","saved"],["server:box","saved"]]');
+  child(home, `const x = c.loadConfig(); c.forgetServer(x, "box"); c.saveConfig(x);`, env);
+  assert.equal(child(home, `console.log(JSON.stringify([c.keyFor("server:box").source, c.loadConfig().servers.map((s) => s.name)]))`, env), '["none",["llm.example.com"]]');
 });

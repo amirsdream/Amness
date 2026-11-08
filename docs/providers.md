@@ -129,24 +129,32 @@ amness run --provider ollama --model qwen2.5-coder:7b "list the TODO comments in
 amness run --provider custom --base-url http://localhost:1234/v1 --model <model-name> "your task"
 ```
 
-In the chat, run `/provider`, pick "Custom OpenAI-compatible", and type the model id and the base URL when Amness asks.
+**Save a server and pick it again.** Amness remembers each Ollama or custom server you set up, with its address, model and its own key. You set it up once, and then pick it by name. This works the same in the terminal and in the desktop app (model menu → **Switch provider…**).
 
-**Use a server that needs a key.** Some local servers check a key or token. Examples: vLLM started with `--api-key`, LM Studio with authentication on, or Ollama behind a proxy. Amness sends the key as `Authorization: Bearer <key>`. When there is no key, Amness sends no `Authorization` header.
+1. Type `/provider` and pick **+ Custom OpenAI-compatible server…** (or **+ Ollama server…**).
+2. Type the base URL, usually ending in `/v1`, for example `https://llm.example.com/v1`.
+3. Type the API key or token if the server needs one. The key is hidden. Press `Enter` to skip it.
+4. Pick the model. Amness asks the server for its models (`/v1/models`) and lists them. If the server lists none, type the model id.
+5. Give the server a name, for example `lab`. The default is its host.
 
-1. When you pick "Ollama (local)" or "Custom OpenAI-compatible" with `/provider`, Amness asks for an API key or token after the base URL. The key is hidden. Press `Enter` to skip it if your server needs none.
-2. To add, replace or remove the key later, type `/connect` and choose the local provider. Its hint shows `local · no key (optional)` until you add one.
-3. If the server answers 401 (unauthorized), Amness asks for a key and sends your message again.
+Next time, `/provider` lists `lab` with its address, model and key status. Pick it, and Amness switches without asking anything. In `amness run`, use `--server lab`.
 
-**Example: llama.cpp behind nginx.** Your server runs `llama-server` and nginx in front of it checks a token. In the chat (terminal or desktop):
+**Manage saved servers.** Type `/connect` and pick a server. You can use it, add or replace its key, remove the key, change its address or model, or forget it (its key too). When you change the model with `/model` while a server is in use, the server remembers the new model.
 
-1. Type `/provider` and pick "Custom OpenAI-compatible".
-2. Model id: the name your server uses for the model (`/model` lists what `/v1/models` returns).
-3. Base URL: the address nginx serves, ending in `/v1`, for example `https://llm.example.com/v1`.
-4. Key: the token nginx (or `llama-server --api-key`) expects.
+**Keys stay with their server.** Each server has its own key, so a token for one server is never sent to another. If you passed `--provider` or `--base-url` to `amness run`, the saved server's key is not used.
 
-Amness also uses the token to ask the server for its context window (`/props`), so you do not have to type the window. nginx must pass `/v1/chat/completions`, `/v1/models` and `/props` through. Nginx's own 401 page counts as "the server asks for a key".
+**Upgrading.** If you used a custom or Ollama server before this version, Amness saves it on the first start as a server named after its host, with its key.
 
-The key is saved like other keys, one per provider. `OPENAI_API_KEY` also counts as the key for `ollama` and `custom`. When it is set, Amness sends it to your local server. Unset it if you do not want your OpenAI key sent there. Covered by automated tests.
+**Example: llama.cpp behind nginx.** Your server runs `llama-server` and nginx in front of it checks a token.
+
+1. Type `/provider` and pick **+ Custom OpenAI-compatible server…**.
+2. Base URL: the address nginx serves, ending in `/v1`, for example `https://llm.example.com/v1`.
+3. Key: the token nginx (or `llama-server --api-key`) expects.
+4. Model: pick it from the list the server returns.
+
+Amness sends the key as `Authorization: Bearer <key>`. With no key, it sends no `Authorization` header. Amness also uses the token to ask the server for its context window (`/props`), so you do not have to type the window. nginx must pass `/v1/chat/completions`, `/v1/models` and `/props` through. If the server answers 401 (for example nginx's own 401 page), Amness asks for a key and sends your message again.
+
+`OPENAI_API_KEY` also counts as the key for every Ollama and custom server. When it is set, Amness sends it to your server. Unset it if you do not want your OpenAI key sent there. Covered by automated tests (`test/keystore.test.ts`, `test/tui-app.test.ts`, `test/desktop.test.ts`).
 
 **Set the context window.** A local server often runs a model with a small context window, such as 8,192 tokens. Amness keeps every request inside the window you give it. When the window fills up, it shortens old tool output first, then writes a handoff note and continues from that. Tell Amness the window in one of three ways:
 

@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { cachedModel } from "../src/respcache.ts";
 import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
-import { PROVIDERS, loadConfig, ready, windowFor, type ProviderId } from "./config.ts";
+import { PROVIDERS, keyFor, loadConfig, ready, useServer, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
 import { formatEvent } from "./format.ts";
 import { createModel } from "./model.ts";
@@ -29,6 +29,7 @@ export const HELP = `usage: amness run [flags] "task"
   --max-tokens <n>     hard token cap (default 300000)      --no-memory   disable memory
   --plans              offer the plan of a similar finished task, and keep plans of finished tasks (.amness/plans)
   --cache              answer identical model requests from .amness/cache/responses (reruns and replays cost nothing; use a fixed temperature)
+  --server <name>      use a server saved with /provider (its address, model and key)
   --add-dir <path>     let the file tools use this folder outside the project too (repeatable; without it, outside paths are refused)
   --max-steps <n>      most model turns (default 40)        --context-window <tokens>   the model's window (8192 for a small local model); default: learned from the provider
   -                    as the task: read it from standard input (useful on Windows, where quoting a long task is painful)
@@ -45,10 +46,13 @@ export async function runHeadless(argv: string[]): Promise<number> {
     if (!(provider in PROVIDERS)) { console.error(`unknown provider ${provider}\n${HELP}`); return 2; }
     Object.assign(cfg, { provider, baseUrl: PROVIDERS[provider].baseUrl, model: PROVIDERS[provider].model });
     const k = provider === "anthropic" ? process.env.ANTHROPIC_API_KEY : process.env.OPENAI_API_KEY;
-    cfg.apiKey = k ?? (loadConfig().provider === provider ? loadConfig().apiKey : undefined);
+    cfg.apiKey = k ?? keyFor(provider).key;
   }
+  const server = val("--server"), baseUrl = val("--base-url");
+  if (server) { const s = cfg.servers?.find((x) => x.name === server); if (!s) { console.error(`no saved server named "${server}" (saved: ${(cfg.servers ?? []).map((x) => x.name).join(", ") || "none"}; add one with /provider)`); return 2; } useServer(cfg, s); }
+  else if (provider || baseUrl) { cfg.server = undefined; if (!provider) cfg.apiKey = keyFor(cfg.provider).key; }   // an address given here must not get a saved server's key
   cfg.model = val("--model") ?? cfg.model;
-  cfg.baseUrl = val("--base-url") ?? cfg.baseUrl;
+  cfg.baseUrl = baseUrl ?? cfg.baseUrl;
   cfg.api = (val("--api") as typeof cfg.api) ?? cfg.api;
   cfg.effort = (val("--effort") as typeof cfg.effort) ?? cfg.effort;
   const addDirs: string[] = []; for (let d = val("--add-dir"); d; d = val("--add-dir")) addDirs.push(resolve(d));   // repeatable

@@ -16,7 +16,7 @@ import { runSkills } from "./skillcli.ts";
 import { runSchedule } from "./schedulecli.ts";
 import { ACP_HELP, runAcp } from "./acpcli.ts";
 import { runEval, runTune } from "./evalcli.ts";
-import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, home, keyFor, loadConfig, mask, ready, rememberWindow, saveConfig, windowFor, type Config, type ProviderId } from "./config.ts";
+import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, home, keyFor, keyIdOf, loadConfig, mask, ready, rememberWindow, saveConfig, serverName, useServer, windowFor, type Config, type ProviderId } from "./config.ts";
 import { where } from "./keystore.ts";
 import { DEMO_TASK, explain, runDemo } from "./demo.ts";
 import { formatEvent } from "./format.ts";
@@ -71,9 +71,12 @@ async function ensureReady(): Promise<boolean> {
   ]);
   if (!id) return false;
   Object.assign(cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model });
-  if (id === "custom" || id === "ollama") { cfg.baseUrl = (await ask("Base URL", cfg.baseUrl)) || cfg.baseUrl; cfg.model = (await ask("Model", cfg.model)) || cfg.model; }
+  if (id === "custom" || id === "ollama") {                                      // saved as a named server, so /provider offers it again
+    const baseUrl = (await ask("Base URL", cfg.baseUrl)) || cfg.baseUrl, model = (await ask("Model", cfg.model)) || cfg.model;
+    useServer(cfg, { name: (await ask("Name for this server", serverName(id, baseUrl))) || serverName(id, baseUrl), provider: id, baseUrl, model });
+  } else cfg.server = undefined;
   if (PROVIDERS[id].needsKey) cfg.apiKey = keyFor(id).key ?? ((await ask(`API key (hidden; ${where()})`, "", { secret: true })) || undefined);
-  else cfg.apiKey = keyFor(id).key ?? ((await ask(`API key or token, only if your server needs one (hidden; ${where()}; Enter skips)`, "", { secret: true })) || undefined);
+  else cfg.apiKey = keyFor(keyIdOf(cfg)).key ?? ((await ask(`API key or token, only if your server needs one (hidden; ${where()}; Enter skips)`, "", { secret: true })) || undefined);
   saveConfig(cfg);
   if (!ready(cfg)) return false;
   return (await testConnection(true)) || (await confirm("The test failed. Keep going anyway?", false));
@@ -327,7 +330,7 @@ async function settings() {
   for (;;) {
     const p = PROVIDERS[cfg.provider];
     const what = await select("Settings", [
-      { label: "Provider", value: "provider", hint: p.label },
+      { label: "Provider", value: "provider", hint: cfg.server ? `${cfg.server} (${p.label})` : p.label },
       { label: "Model", value: "model", hint: cfg.model },
       { label: "Base URL", value: "url", hint: cfg.baseUrl },
       { label: "API key", value: "key", hint: mask(cfg.apiKey) },
@@ -340,8 +343,15 @@ async function settings() {
     if (!what || what === "back") return;
     try {
     if (what === "provider") {
-      const id = await select("Provider", (Object.keys(PROVIDERS) as ProviderId[]).map((k) => ({ label: PROVIDERS[k].label, value: k, hint: PROVIDERS[k].baseUrl })));
-      if (id) Object.assign(cfg, { provider: id, baseUrl: PROVIDERS[id].baseUrl, model: PROVIDERS[id].model, apiKey: keyFor(id).key });
+      const cloud = (["anthropic", "openai", "openrouter"] as const).map((k) => ({ label: PROVIDERS[k].label, value: k as string, hint: PROVIDERS[k].baseUrl }));
+      const saved = (cfg.servers ?? []).map((s) => ({ label: s.name, value: "server:" + s.name, hint: `${s.baseUrl} · ${s.model}` }));
+      const id = await select("Provider", [...cloud, ...saved, { label: "+ Ollama server…", value: "ollama", hint: PROVIDERS.ollama.baseUrl }, { label: "+ Custom OpenAI-compatible server…", value: "custom", hint: "vLLM, llama.cpp, LM Studio" }]);
+      const s = id?.startsWith("server:") ? cfg.servers?.find((x) => "server:" + x.name === id) : undefined;
+      if (s) useServer(cfg, s);
+      else if (id === "custom" || id === "ollama") {
+        const baseUrl = (await ask("Base URL", PROVIDERS[id].baseUrl)) || PROVIDERS[id].baseUrl, model = (await ask("Model", PROVIDERS[id].model)) || PROVIDERS[id].model;
+        useServer(cfg, { name: (await ask("Name for this server", serverName(id, baseUrl))) || serverName(id, baseUrl), provider: id, baseUrl, model });
+      } else if (id) Object.assign(cfg, { provider: id as ProviderId, baseUrl: PROVIDERS[id as ProviderId].baseUrl, model: PROVIDERS[id as ProviderId].model, apiKey: keyFor(id as ProviderId).key, server: undefined });
     }
     else if (what === "model") {
       if (cfg.provider === "anthropic" || cfg.provider === "openai") {
