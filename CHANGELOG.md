@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 (2026-11-08)
+
+- **Windows: skill files are listed with `/`.** A skill's file list showed paths such as `scripts\run.sh` on Windows; it now shows `scripts/run.sh` on every system, as on macOS and Linux.
+- **Tests:** the `/undo` snapshot test no longer fails at random when it checks a file in the moment the undo is putting it back.
+
 ## 0.3.0 (2026-11-07)
 
 **Update from 0.2.0:** in the 0.2.0 desktop app, clicking an item in a list (the model button, `/resume`, `/theme`…) often did nothing; the keyboard worked. This release fixes it (see below).
