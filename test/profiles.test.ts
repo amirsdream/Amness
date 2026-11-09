@@ -34,3 +34,11 @@ test("recommend: remove only what the data supports; load-bearing guards stay; w
   assert.deepEqual(r.profile.off, ["nudge"]); assert.match(r.strength, /40 tasks × 3 trial/);
   const few = recommend(analyze(rows.filter((x) => Number(x.case.slice(1)) < 4), { baseline: "full" })); assert.match(few.strength, /weak evidence/);
 });
+
+test("profile: a thinking budget and extra request fields are read and checked", () => {
+  const p = dir(), u = dir(); mkdirSync(join(p, ".amness"));
+  writeFileSync(join(p, ".amness", "profile.json"), JSON.stringify({ models: { "qwen*": { thinkingBudget: 4096, request: { temperature: 0.6 } } } }));
+  const r = loadProfile(p, "qwen-vllm", { userDir: u }).profile; assert.equal(r.thinkingBudget, 4096); assert.deepEqual(r.request, { temperature: 0.6 });
+  writeFileSync(join(p, ".amness", "profile.json"), JSON.stringify({ models: { "qwen*": { thinkingBudget: -1 } } })); assert.throws(() => loadProfile(p, "qwen-vllm", { userDir: u }), /thinkingBudget/);
+  writeFileSync(join(p, ".amness", "profile.json"), JSON.stringify({ models: { "qwen*": { request: [1] } } })); assert.throws(() => loadProfile(p, "qwen-vllm", { userDir: u }), /"request" must be an object/);
+});

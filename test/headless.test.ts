@@ -110,3 +110,21 @@ test("amness run: tool choice comes from --tool-choice or the model's profile an
   const bad = await cli(["run", "--provider", "custom", "--base-url", "http://127.0.0.1:9/v1", "--model", "m", "--cwd", dir, "--tool-choice", "always", "go"]);
   assert.equal(bad.code, 2); assert.match(bad.err, /--tool-choice must be auto or required/);
 });
+
+test("amness run: options never leak into the task text, wherever they are read (the agent once got '--trace --max-time -' as its task)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "amness-args-")), trace = join(dir, "t.jsonl");
+  const api = await mockOpenAI([tc("1", "finish", { summary: "done" })]);
+  try {
+    const r = await cli(["run", "--provider", "custom", "--base-url", api.url, "--model", "m", "--cwd", dir, "--json", "--yes", "--no-memory", "--trace", trace, "--max-time", "600", "--off", "nudge",
+      "--tool-choice", "auto", "--max-steps", "9", "--plans", "--quarantine", "fix", "the", "bug", "--context-window", "32768"]);
+    assert.equal(r.code, 0, r.err);
+    const user = api.seen[0].messages.find((m: any) => m.role === "user").content as string;
+    assert.match(user, /^fix the bug(\n|$)/); assert.doesNotMatch(user.split("\n")[0], /--|600|32768|nudge/);
+  } finally { api.close(); }
+  const viaStdin = await mockOpenAI([tc("1", "finish", { summary: "done" })]);
+  try {
+    const p = spawn("node", ["--no-warnings", "cli/amness.ts", "run", "--provider", "custom", "--base-url", viaStdin.url, "--model", "m", "--cwd", dir, "--json", "--trace", trace, "--max-time", "600", "-"], { env: { ...process.env, AMNESS_HOME: mkdtempSync(join(tmpdir(), "amness-h-")) } });
+    p.stdin.end("the task from stdin"); await new Promise((ok) => p.on("close", ok));
+    assert.match(viaStdin.seen[0].messages.find((m: any) => m.role === "user").content, /^the task from stdin/);   // the Harbor adapter's shape: options, then "-"
+  } finally { viaStdin.close(); }
+});

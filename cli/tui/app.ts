@@ -946,7 +946,7 @@ export class App {
   }
   private profileOptions(): { off?: Guard[]; stagnationTurns?: number; maxSteps?: number } {
     try { this.profile = loadProfile(this.cwd, this.cfg.model); } catch (e) { this.profile = { profile: {}, sources: [] }; this.note(`profile ignored: ${(e as Error).message}`); }
-    const p = this.profile.profile; return { ...(p.off?.length && { off: p.off }), ...(p.stagnationTurns !== undefined && { stagnationTurns: p.stagnationTurns }), ...(p.maxSteps !== undefined && { maxSteps: p.maxSteps }) };
+    const p = this.profile.profile; return { ...(p.off?.length && { off: p.off }), ...(p.stagnationTurns !== undefined && { stagnationTurns: p.stagnationTurns }), ...(p.maxSteps !== undefined && { maxSteps: p.maxSteps }), ...(p.thinkingBudget !== undefined && { thinkingBudget: p.thinkingBudget }), ...(p.request && { request: p.request }) };
   }
   setCheck(cmd: string | undefined) { this.check = cmd; this.buildAgent(); }
   setVerify(cmd: string | undefined) { this.verify = cmd; if (this.persist) { const st = loadState(); if (cmd) st.verifyByDir[this.cwd] = cmd; else delete st.verifyByDir[this.cwd]; saveState(st); } this.buildAgent(); }

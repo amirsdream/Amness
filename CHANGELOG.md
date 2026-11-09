@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.2 (2026-11-09)
+
+Found by running Terminal-Bench tasks with a local Qwen model and reading every run.
+
+- **`amness run` no longer reads its own options as the task.** Some option orders (for example `--trace <file> --max-time <n> -`) left option words in the task text, so the model was asked to do "--trace --max-time -". Every option is now taken out before the task is built.
+- **Re-reading a file gets the lines that were cut.** When a file read was longer than the tool-output cap, its middle was cut. A second read of the same file was cut in the same place, and the lines around the cut were then replaced by "already above" markers, so the model could never get the cut lines by reading again. Now the repeated lines become markers first, and only what is left is shortened; only the lines the model really received count as delivered.
+- **The system prompt names the working directory.** Models guessed a directory (`cd /home/user`) and lost steps; the environment line now says where commands start.
+- **`apply_patch`:** a unified `@@ -2,20 +2,20 @@` header inside a `*** Begin Patch` patch is read as a line hint, not as text to find. When a hunk does not apply, the error now says how many of its lines matched and which line differs (for example a hunk that skips lines), instead of naming its first line and suggesting a re-read.
+- **Thinking budget and extra request fields per model.** `thinkingBudget` in the model's profile (Preferences or `/settings`: **Thinking budget**; `amness run --thinking-budget <n>`) caps the thinking tokens of each request on local servers that support it (llama.cpp `thinking_budget_tokens`; `0` turns thinking off). A slow local model that thinks for minutes no longer uses up a timed run. `request` (**Extra request fields**; `amness run --request '<json>'`) adds any fields to every model request, such as sampling settings or `chat_template_kwargs`.
+- **Terminal-Bench adapter:** Node and Amness are installed once on the host into a cached bundle that each task container unpacks, with no network (`--ak runtime=off` for the old way); new options `thinking_budget` and `request`. For long evaluations see [Amness Evaluation Studio](https://github.com/amirsdream/amness-eval-studio).
+
 ## 0.7.1 (2026-11-09)
 
 - **Docker sandbox engine on Windows.** Docker on Windows runs Linux containers, which cannot use a `C:\` path, so the project is now mounted at `/workspace` there (on macOS and Linux it stays at the same path). Everything else is as in 0.7.0.

@@ -6,7 +6,9 @@ import { join } from "node:path";
 import type { Analysis } from "./evals.ts";
 import { GUARD_NAMES, type Guard } from "./harness.ts";
 
-export type Profile = { off?: Guard[]; stagnationTurns?: number; maxSteps?: number; contextBudget?: number; review?: boolean; note?: string; /** task runs: "required" makes the model call a tool every step (for models that drift into prose or malformed calls) */ toolChoice?: "auto" | "required" };
+export type Profile = { off?: Guard[]; stagnationTurns?: number; maxSteps?: number; contextBudget?: number; review?: boolean; note?: string; /** task runs: "required" makes the model call a tool every step (for models that drift into prose or malformed calls) */ toolChoice?: "auto" | "required";
+  /** cap on thinking tokens per model request, for OpenAI-compatible servers that support it (llama.cpp: `thinking_budget_tokens`); 0 = no thinking */ thinkingBudget?: number;
+  /** extra fields merged into every model request (sampling such as `temperature`, `chat_template_kwargs`, …): whatever the server accepts */ request?: Record<string, unknown> };
 export type ProfileFile = { default?: Profile; models?: Record<string, Profile> };
 const GUARDS = GUARD_NAMES;
 
@@ -15,7 +17,8 @@ function check(file: string, j: ProfileFile): ProfileFile {
   const bad = (m: string) => new Error(`${file}: ${m}`), one = (name: string, p: Profile) => {
     if (p.off !== undefined && (!Array.isArray(p.off) || p.off.some((g) => !GUARDS.includes(g)))) throw bad(`${name}: "off" must be a list of guards (${GUARDS.join(", ")})`);
     if (p.toolChoice !== undefined && p.toolChoice !== "auto" && p.toolChoice !== "required") throw bad(`${name}: "toolChoice" must be "auto" or "required"`);
-    for (const k of ["stagnationTurns", "maxSteps", "contextBudget"] as const) if (p[k] !== undefined && (typeof p[k] !== "number" || p[k]! < 0)) throw bad(`${name}: "${k}" must be a non-negative number`);
+    if (p.request !== undefined && (typeof p.request !== "object" || p.request === null || Array.isArray(p.request))) throw bad(`${name}: "request" must be an object of request fields`);
+    for (const k of ["stagnationTurns", "maxSteps", "contextBudget", "thinkingBudget"] as const) if (p[k] !== undefined && (typeof p[k] !== "number" || p[k]! < 0)) throw bad(`${name}: "${k}" must be a non-negative number`);
   };
   if (j.default) one("default", j.default); for (const [m, p] of Object.entries(j.models ?? {})) one(m, p);
   return j;

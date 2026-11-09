@@ -66,6 +66,12 @@ const DEFS: Def[] = [
   { group: "model", id: "toolChoice", label: "Tool call every step", help: "Task runs (amness run, benchmarks): the model must call a tool at every step, so the server limits its output to a valid call. Helps local models that drift into prose. Saved in this model's profile (~/.amness/profile.json); the chat ignores it.", kind: "choice",
     read: (a) => ({ value: a.profile?.profile.toolChoice ?? "auto", options: [{ value: "auto", label: "auto (the model decides)" }, { value: "required", label: "required (task runs)" }] }),
     write: (_, v) => (a) => { const choice = String(v); if (choice !== "auto" && choice !== "required") throw new Error(`auto or required, not ${v}`); setProfileField(a.cfg.model, "toolChoice", choice === "auto" ? undefined : choice); a.buildAgent(); return `tool choice for ${a.cfg.model}: ${choice} (in ~/.amness/profile.json)`; } },
+  { group: "model", id: "thinkingBudget", label: "Thinking budget", help: "Most thinking tokens per model request, for local servers that support it (llama.cpp). A slow local model that thinks for minutes uses up a timed run; 0 turns thinking off. Empty: the server's default. Saved in this model's profile (~/.amness/profile.json).", kind: "number", placeholder: "server default",
+    read: (a) => (a.cfg.provider === "anthropic" ? null : { value: a.profile?.profile.thinkingBudget ?? "" }),
+    write: (_, v) => (a) => { const n = Math.floor(num(v)); if (v !== "" && !(n >= 0)) throw new Error("a number of tokens, 0 or more"); setProfileField(a.cfg.model, "thinkingBudget", v === "" ? undefined : n); a.buildAgent(); return `thinking budget for ${a.cfg.model}: ${v === "" ? "server default" : `${n.toLocaleString()} tokens`} (in ~/.amness/profile.json)`; } },
+  { group: "model", id: "request", label: "Extra request fields", help: "JSON merged into every model request, for what the server accepts: sampling ({\"temperature\": 0.6, \"top_p\": 0.95}), {\"chat_template_kwargs\": {\"enable_thinking\": false}}, … Empty: none. Saved in this model's profile.", kind: "text", placeholder: "{}",
+    read: (a) => ({ value: a.profile?.profile.request ? JSON.stringify(a.profile.profile.request) : "" }),
+    write: (_, v) => (a) => { let j: Record<string, unknown> | undefined; if (String(v).trim()) { try { j = JSON.parse(String(v)); } catch (e) { throw new Error(`not JSON: ${(e as Error).message}`); } if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("a JSON object, like {\"temperature\": 0.6}"); } setProfileField(a.cfg.model, "request", j); a.buildAgent(); return `extra request fields for ${a.cfg.model}: ${j ? JSON.stringify(j) : "none"} (in ~/.amness/profile.json)`; } },
   { group: "model", id: "compactAt", label: "Server-side compaction", help: "OpenAI Responses only: the server compacts the conversation once the prompt passes this many tokens. Empty: off.", kind: "number", placeholder: "off",
     read: (a) => (a.cfg.provider === "openai" ? { value: a.cfg.compactAt ?? "" } : null), write: (_, v) => (a) => { const n = Math.floor(num(v)); if (v === "" || v === "off") a.cfg.compactAt = undefined; else if (n >= 1000) a.cfg.compactAt = n; else throw new Error("at least 1000 tokens"); a.saveConfig(); a.buildAgent(); return `server-side compaction ${a.cfg.compactAt ? `at ${a.cfg.compactAt.toLocaleString()} tokens` : "off"}`; } },
   { group: "model", id: "router", label: "Router", help: "Send exploration steps to the cheap model when that pays off.", kind: "toggle", read: (a) => ({ value: !!a.cfg.router }), write: (_, v) => `/router ${onoff(v)}` },
@@ -145,7 +151,7 @@ const DEFS: Def[] = [
 ];
 
 /** Set (or with undefined, remove) one field of `model`'s entry in the user's profile file, keeping everything else in it. */
-function setProfileField(model: string, key: "toolChoice", value: string | undefined) {
+function setProfileField(model: string, key: "toolChoice" | "thinkingBudget" | "request", value: unknown) {
   const file = join(home(), "profile.json");
   let j: { default?: Record<string, unknown>; models?: Record<string, Record<string, unknown>> } = {};
   try { j = JSON.parse(readFileSync(file, "utf8")); } catch { /* none yet */ }

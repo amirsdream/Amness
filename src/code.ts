@@ -308,6 +308,10 @@ export type CodeAgentOptions = {
   stagnationTurns?: number;
   /** "required": a tool call at every step, for task runs (ignored in chat, where a plain answer is fine). Usually set by the model's profile. */
   toolChoice?: "auto" | "required";
+  /** Cap on thinking tokens per model request (OpenAI-compatible servers that support it). Usually set by the model's profile. */
+  thinkingBudget?: number;
+  /** Extra fields merged into every model request. Usually set by the model's profile (`request`). */
+  request?: Record<string, unknown>;
   /** Read untrusted tool output (web, MCP) with a separate tool-less model call first (dual LLM); true uses the cheap-role model (or the main one), a function replaces the reader. A plugin's \`quarantine\` wins. */
   quarantine?: boolean | Quarantine;
   /** Background process tools (sh_start / sh_read / sh_stop / sh_list). Default on. Call `agent.procs?.dispose()` when you are done. */
@@ -349,7 +353,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const policyFn = plugins.some((p) => p.policy) ? (c: { tool: string; args: Record<string, unknown> }) => checkPolicies(plugins, { ...c, cwd: o.cwd }) : undefined;
   /** A small context window (16k tokens or less, like a local 30B model on 8k): a shorter system prompt, compact skills and memory blocks, and the rarely used tools out of the prompt. A request for "hi" then costs about 1.5k tokens instead of 3.4k. */
   const small = () => { const w = typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow; return !!w && w <= 16_384; };
-  const SYS = (chat: boolean | undefined) => applySystem(plugins, (small() ? COMPACT_SYSTEM : chat ? CHAT_SYSTEM : CODE_SYSTEM) + "\n" + shellNote(), o.cwd);
+  const SYS = (chat: boolean | undefined) => applySystem(plugins, (small() ? COMPACT_SYSTEM : chat ? CHAT_SYSTEM : CODE_SYSTEM) + "\n" + shellNote() + ` Working directory: ${slash(resolve(o.cwd))} (commands and relative paths start there).`, o.cwd);   // without it a model guesses (\`cd /home/user\`) and loses steps
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>(), created = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
@@ -476,7 +480,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, toolCache, finishChecks: [coverageCheck, auditCheck(o.cwd, () => codeIndex, () => [...created])], compactSpecs: () => o.compactSchemas ?? small(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? undefined : o.toolChoice, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? undefined : o.toolChoice, thinkingBudget: o.thinkingBudget, request: o.request, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 

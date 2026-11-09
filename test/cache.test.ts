@@ -169,3 +169,13 @@ test("supersede keeps a read that a later marker points at; a tool with overlap 
   await createHarness({ model, tools: [t], toolCache: false, stagnationTurns: 0 }).run("go");
   assert.match(toolMsgs(seen)[1], /^1\tline 1/);
 });
+
+test("re-reading a file whose first read was condensed delivers the lines that were cut (dedupe before condense), and the system prompt names the working directory", async () => {
+  const dir = tmp(); writeFileSync(join(dir, "syn.txt"), Array.from({ length: 110 }, (_, i) => `word${i + 1}, ${"synonym ".repeat(6)}end`).join("\n") + "\n");   // ~7 KB: over the 6,000-character cap
+  const { model, seen } = scripted(call(["read_file", { path: "syn.txt" }]), call(["read_file", { path: "syn.txt", start: 1, end: 110 }]), fin);
+  await createCodeAgent({ model, cwd: dir, stagnationTurns: 0 } as never).run("go");
+  const [first, second] = toolMsgs(seen);
+  assert.match(first, /chars cut/); assert.ok(!/^60\tword60,/m.test(first));                     // the first read lost its middle
+  assert.match(second, /^60\tword60,/m); assert.match(second, /unchanged: already above/); assert.doesNotMatch(second, /chars cut/);
+  assert.match(String(seen[0][0].content), new RegExp(`Working directory: ${dir.replace(/\\/g, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+});

@@ -2,6 +2,8 @@
 
 [Harbor](https://pypi.org/project/harbor/) is the harness of Terminal-Bench 2.0: it starts each task in a Docker container, runs an agent in it, and checks the result with the task's own tests. `amness_agent.py` lets Harbor run Amness.
 
+For long evaluations (resumable campaigns, a live view of each run's conversation, controls in the browser, and harness checks on every run), use [Amness Evaluation Studio](https://github.com/amirsdream/amness-eval-studio). It uses this adapter.
+
 In this page you will learn:
 
 - how to run one task, and then a whole dataset
@@ -47,6 +49,10 @@ By default the adapter packs **this working tree** (`npm run build` and `npm pac
 | `--ak max_steps=60` | The most model turns. |
 | `--ak max_tokens=300000` | The token cap for the run. |
 | `--ak context_window=32768` | The model's window, for a small local model. |
+| `--ak tool_choice=required` | A tool call at every step (the server constrains the output to a valid call). |
+| `--ak thinking_budget=4096` | The most thinking tokens per model request, for a slow local server (llama.cpp). |
+| `--ak request='{"temperature":0.6}'` | Extra fields for every model request. |
+| `--ak runtime=off` | Install Node and Amness in every container (by default they are installed once on the host into a cached bundle that each container unpacks). |
 | `--ak api=chat` | The OpenAI wire API (`auto`, `responses`, `chat`). |
 | `--ak verify="pytest -q"` | A command that must pass before Amness may finish. |
 | `--ak max_time=600` | A time limit in seconds. By default the adapter reads the task's own limit and gives Amness that minus a margin, so Amness wraps up and reports before Harbor stops it. |

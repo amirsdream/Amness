@@ -12,6 +12,7 @@ export function parsePatch(text: string): FileOp[] {
   return L.some((l) => l.startsWith("*** Begin Patch") || /^\*\*\* (Update|Add|Delete) File:/.test(l)) ? parseEnvelope(L) : parseUnified(L);
 }
 
+const UNIFIED_HEAD = /^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@\s*(.*)$/;
 function parseEnvelope(L: string[]): FileOp[] {
   const ops: FileOp[] = []; let cur: FileOp | undefined, hunk: Hunk | undefined;
   const flush = () => { if (cur && hunk && hunk.lines.length) cur.hunks.push(hunk); hunk = undefined; };
@@ -21,7 +22,7 @@ function parseEnvelope(L: string[]): FileOp[] {
     if ((m = /^\*\*\* (Update|Add|Delete) File:\s*(.+)$/.exec(l))) { flush(); cur = { path: strip(m[2]), op: m[1].toLowerCase() as FileOp["op"], hunks: [] }; ops.push(cur); continue; }
     if (!cur) continue;
     if ((m = /^\*\*\* Move to:\s*(.+)$/.exec(l))) { cur.moveTo = strip(m[1]); continue; }
-    if (l.startsWith("@@")) { flush(); hunk = { anchor: l.slice(2).trim() || undefined, lines: [] }; continue; }
+    if (l.startsWith("@@")) { flush(); const u = UNIFIED_HEAD.exec(l); hunk = u ? { hint: Number(u[1]), anchor: u[2] || undefined, lines: [] } : { anchor: l.slice(2).trim() || undefined, lines: [] }; continue; }   // models often write a unified header here: a line hint, not text to find
     if (cur.op === "delete") continue;
     const c = l[0];
     if (c === "+" || c === "-" || c === " " || l === "") { hunk ??= { lines: [] }; hunk.lines.push({ t: (c === "+" || c === "-" ? c : " ") as Line["t"], s: l === "" ? "" : l.slice(1) }); }
@@ -42,7 +43,7 @@ function parseUnified(L: string[]): FileOp[] {
       cur = { path: strip(del ? from : to), op: add ? "add" : del ? "delete" : "update", hunks: [] }; ops.push(cur); continue;
     }
     if (!cur) continue;
-    const h = /^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@\s*(.*)$/.exec(l);
+    const h = UNIFIED_HEAD.exec(l);
     if (h) { flush(); hunk = { hint: Number(h[1]), anchor: h[2] || undefined, lines: [] }; continue; }
     if (!hunk || l.startsWith("\\")) continue;
     const c = l[0]; if (c === "+" || c === "-" || c === " ") hunk.lines.push({ t: c, s: l.slice(1) }); else if (l === "") hunk.lines.push({ t: " ", s: "" });
@@ -63,6 +64,19 @@ function find(file: string[], seq: string[], from: number): { at: number; fuzzy:
     for (let i = from; i + seq.length <= file.length; i++) { let ok = true; for (let j = 0; j < seq.length && ok; j++) ok = eq(file[i + j], seq[j]); if (ok) return { at: i, fuzzy }; }
   }
   return undefined;
+}
+/** Where `seq` comes closest to matching: the start with the longest run of matching lines (ignoring indentation). */
+function nearest(file: string[], seq: string[]): { at: number; n: number } {
+  let best = { at: -1, n: 0 };
+  for (let i = 0; i < file.length; i++) { let n = 0; while (n < seq.length && i + n < file.length && loose(file[i + n], seq[n])) n++; if (n > best.n) best = { at: i, n }; }
+  return best;
+}
+const quote = (s: string | undefined) => (s === undefined ? "(end of file)" : JSON.stringify(s.length > 160 ? s.slice(0, 160) + "…" : s));
+/** Why a hunk did not apply, naming the first line that differs, so the model fixes that line instead of re-reading the file. */
+function mismatch(path: string, hi: number, anchor: string | undefined, file: string[], seq: string[]): string {
+  const head = `${path}, hunk ${hi + 1}: the lines to replace were not found${anchor ? ` after "${anchor}"` : ""}.`, b = nearest(file, seq);
+  if (b.n === 0) return `${head} No line of the file matches its first line: ${quote(seq.find((s) => s.trim()) ?? seq[0])}`;
+  return `${head} Its first ${b.n} line${b.n > 1 ? "s" : ""} match file lines ${b.at + 1}-${b.at + b.n}, then the hunk has ${quote(seq[b.n])} where line ${b.at + b.n + 1} is ${quote(file[b.at + b.n])}. A hunk lists every line of its range in order: to skip lines, start a new @@ hunk.`;
 }
 /** Re-indent replacement lines when the match was found ignoring indentation: shift by the difference in leading whitespace of the first matched line. */
 function reindent(newLines: string[], oldFirst: string, fileFirst: string): string[] {
@@ -89,7 +103,7 @@ export function applyOps(ops: FileOp[], read: (path: string) => string | undefin
       if (h.anchor) { const a = find(file, [h.anchor], cursor); if (a) from = a.at; }                        // "@@ function name" narrows where to look
       else if (h.hint && h.hint - 1 >= cursor && h.hint - 1 <= file.length) { const near = find(file, oldSeq, Math.max(cursor, h.hint - 1 - 3)); if (near && near.at <= h.hint - 1 + 3) from = near.at; }
       const m = find(file, oldSeq, from) ?? (from > cursor ? find(file, oldSeq, cursor) : undefined);
-      if (!m) { errors.push(`${o.path}, hunk ${hi + 1}: the lines to replace were not found${h.anchor ? ` after "${h.anchor}"` : ""}. First line looked for: ${JSON.stringify(oldSeq.find((s) => s.trim()) ?? oldSeq[0] ?? "")}`); bad = true; return; }
+      if (!m) { errors.push(mismatch(o.path, hi, h.anchor, file, oldSeq)); bad = true; return; }
       if (m.fuzzy) fuzzy++;
       file.splice(m.at, oldSeq.length, ...(m.fuzzy ? reindent(newSeq, oldSeq[0] ?? "", file[m.at] ?? "") : newSeq));
       cursor = m.at + newSeq.length;

@@ -84,3 +84,14 @@ test("permissions: a patch is judged file by file (floor, deny, ask, allow)", ()
   assert.equal(p.check("apply_patch", patch("src/a.ts", ".git/config")).floor, true);
   assert.equal(p.check("apply_patch", patch(".amness/permissions.json")).action, "deny");
 });
+
+test("patch: a unified @@ header inside the envelope is a line hint, and a hunk that skips lines is told where it stops matching", () => {
+  const ops = parsePatch("*** Begin Patch\n*** Update File: t.txt\n@@ -2,3 +2,3 @@\n b\n-c\n+C\n*** End Patch");
+  assert.equal(ops[0].hunks[0].hint, 2); assert.equal(ops[0].hunks[0].anchor, undefined);
+  const file = { "t.txt": "a\nb\nc\nd\ne\nf\n" };
+  assert.deepEqual(applyOps(ops, files(file)).errors, []);
+  const skip = applyOps(parsePatch("*** Begin Patch\n*** Update File: t.txt\n@@ -2,5 +2,5 @@\n b\n-c\n+C\n-f\n+F\n*** End Patch"), files(file));   // jumps from c to f in one hunk
+  assert.equal(skip.errors.length, 1);
+  assert.match(skip.errors[0], /first 2 lines match file lines 2-3, then the hunk has "f" where line 4 is "d"\. .*start a new @@ hunk/);
+  assert.doesNotMatch(skip.errors[0], /after "-2,5/);
+});

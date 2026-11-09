@@ -49,8 +49,11 @@ const NUMBERED = /^(\d+)\t/;
 export class ReadLedger {
   /** characters the model did not have to receive again */ saved = 0;
   private files = new Map<string, { stamp: string; lines: Map<number, string> }>();
-  /** `result` is a numbered file read (`N<TAB>text` per line). Returns it with runs of at least `minRun` already-delivered lines replaced by a marker, and records what this result now delivers. */
-  dedupe(path: string, stamp: string, result: string, callId: string, isAbove: (callId: string) => boolean, minRun = 6): string {
+  /**
+   * `result` is a numbered file read (`N<TAB>text` per line). Returns it with runs of at least `minRun` already-delivered lines replaced by a marker, and records what this result now delivers.
+   * With `record` false nothing is recorded: the caller shortens the result further (condensing) and then records what was really sent with `record()`.
+   */
+  dedupe(path: string, stamp: string, result: string, callId: string, isAbove: (callId: string) => boolean, minRun = 6, record = true): string {
     const seen = new Map<string, boolean>(), above = (id: string) => { let v = seen.get(id); if (v === undefined) { v = isAbove(id); seen.set(id, v); } return v; };   // one transcript scan per call id, not per line
     let f = this.files.get(path); if (!f || f.stamp !== stamp) { f = { stamp, lines: new Map() }; this.files.set(path, f); }
     const rows = result.split("\n"), out: string[] = [], delivered: number[] = [];
@@ -62,8 +65,13 @@ export class ReadLedger {
       if (j - i >= minRun) { out.push(`(lines ${n}-${n + (j - i) - 1} unchanged: already above in the output of call ${prior})`); this.saved += rows.slice(i, j).join("\n").length - out[out.length - 1].length; i = j; }
       else { for (let k = i; k < j; k++) { out.push(rows[k]); delivered.push(n + (k - i)); } i = j; }                                // too short to be worth a marker: send the lines again
     }
-    for (const n of delivered) f.lines.set(n, callId);
+    if (record) for (const n of delivered) f.lines.set(n, callId);
     return out.join("\n");
+  }
+  /** Record the numbered lines that `sent` (the text the model got) delivers. */
+  record(path: string, stamp: string, sent: string, callId: string): void {
+    let f = this.files.get(path); if (!f || f.stamp !== stamp) { f = { stamp, lines: new Map() }; this.files.set(path, f); }
+    for (const row of sent.split("\n")) { const m = NUMBERED.exec(row); if (m) f.lines.set(Number(m[1]), callId); }
   }
 }
 

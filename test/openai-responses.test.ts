@@ -246,3 +246,14 @@ test("chat: thinking that a local server sends beside the answer (reasoning_cont
     assert.equal(b.content, "43"); assert.equal((b as any).reasoning_content, undefined); assert.ok(b.usage!.reasoning_tokens! > 0); assert.match(thoughts.at(-1)!, /once more/);
   } finally { s.close(); }
 });
+
+test("chat: a thinking budget goes to a local server as thinking_budget_tokens, never to api.openai.com; profile request fields are merged in", async () => {
+  const s = await server({ "/v1/chat/completions": [json(200, { choices: [{ message: { role: "assistant", content: "ok" } }] }), json(200, { choices: [{ message: { role: "assistant", content: "ok" } }] })] });
+  try {
+    const m = openai({ baseUrl: s.url, model: "qwen-local", api: "chat" });
+    await m([user("x")], [], { thinkingBudget: 2048, request: { temperature: 0.6, chat_template_kwargs: { enable_thinking: true } } });
+    assert.equal(s.seen[0].body.thinking_budget_tokens, 2048); assert.equal(s.seen[0].body.temperature, 0.6); assert.deepEqual(s.seen[0].body.chat_template_kwargs, { enable_thinking: true });
+    await m([user("y")], []);
+    assert.equal("thinking_budget_tokens" in s.seen[1].body, false); assert.equal("temperature" in s.seen[1].body, false);
+  } finally { s.close(); }
+});

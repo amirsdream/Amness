@@ -204,7 +204,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
       ...(reasoning && !store && { include: ["reasoning.encrypted_content"] }),     // older reasoning models only return the replayable blob when asked; newer ones always do
       ...(opts.promptCacheKey && official && { prompt_cache_key: opts.promptCacheKey, prompt_cache_retention: "24h" }),   // keep the cached prefix alive across idle gaps; dropped automatically if a model refuses it
       ...(opts.compactAt && official && { context_management: [{ type: "compaction", compact_threshold: opts.compactAt }] }),
-      ...opts.extra,
+      ...opts.extra, ...o.request,
     };
     for (const k of dropped) delete body[k];
     const r = await post("/responses", body, o.signal);
@@ -221,7 +221,8 @@ export function openai(opts: OpenAIOptions = {}): Model {
       ...(tools.length && { tools: tools.map((t) => ({ type: "function", function: t })), ...(o.toolChoice && { tool_choice: o.toolChoice }) }),
       ...(stream && { stream: true, stream_options: { include_usage: true } }),
       ...(chatNoReasoning && isReasoningModel(model) ? { reasoning_effort: "none" } : opts.effort && isReasoningModel(model) && sendEffort ? { reasoning_effort: opts.effort } : {}),
-      ...opts.extra,
+      ...(o.thinkingBudget !== undefined && !official && { thinking_budget_tokens: o.thinkingBudget }),   // llama.cpp's per-request thinking cap; other servers ignore an unknown field
+      ...opts.extra, ...o.request,
     };
     for (const k of dropped) delete body[k];
     const r = await post("/chat/completions", body, o.signal);

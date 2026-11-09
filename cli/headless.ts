@@ -36,6 +36,8 @@ export const HELP = `usage: amness run [flags] "task"
   --server <name>      use a server saved with /provider (its address, model and key)
   --max-time <seconds> a wall-clock limit: the agent is told to wrap up near the end and stops cleanly at it (the result line says "stopped":"time")
   --tool-choice <auto|required>  required: the model must call a tool every step (the server constrains the output to a valid call); default from the model's profile
+  --thinking-budget <n>  most thinking tokens per model request, for local servers that support it (llama.cpp); 0 = no thinking; default from the model's profile
+  --request <json>     extra fields for every model request, e.g. '{"temperature":0.6}'; merged over the profile's "request"
   --off <guard,...>    switch these guards off for this run (for ablations; see /harness for the names)
   --plugin <file,...>  load these plugin files for this run (no trust prompt: you named them)
   --add-dir <path>     let the file tools use this folder outside the project too (repeatable; without it, outside paths are refused)
@@ -43,11 +45,26 @@ export const HELP = `usage: amness run [flags] "task"
   -                    as the task: read it from standard input (useful on Windows, where quoting a long task is painful)
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
 
+/** The options of `amness run` (keep in step with HELP). Anything else in the arguments is the task. */
+const VALUE_FLAGS = new Set(["--cwd", "--verify", "--check", "--bundle", "--export", "--trace", "--sandbox", "--sandbox-engine", "--provider", "--model", "--base-url", "--effort", "--api", "--best-of", "--parts", "--image", "--max-tokens",
+  "--server", "--add-dir", "--max-steps", "--context-window", "--max-time", "--off", "--plugin", "--tool-choice", "--thinking-budget", "--request"]);   // --live takes an optional port: it is read on its own, before the task
+const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine"]);
+
 export async function runHeadless(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(HELP); return 0; }       // asking for help must never start a model run
   const args = [...argv];
-  const val = (f: string) => { const i = args.indexOf(f); return i < 0 ? undefined : args.splice(i, 2)[1]; };
-  const bool = (f: string) => { const i = args.indexOf(f); return i >= 0 && !!args.splice(i, 1); };
+  // Every option is taken out of the arguments before the task text is built (what is left is the task), even when the code reads it much later.
+  // Before, an option read after that point (--trace, --off, --max-time…) or only looked up with argv.includes (--cache, --plans…) became part of the task.
+  const taken = new Map<string, string[]>(), flagsOf = (f: string) => taken.get(f) ?? [];
+  for (let i = 0; i < args.length; ) {
+    const f = args[i];
+    if (VALUE_FLAGS.has(f) && i + 1 < args.length) { taken.set(f, [...flagsOf(f), args[i + 1]]); args.splice(i, 2); }
+    else if (BOOL_FLAGS.has(f)) { taken.set(f, [...flagsOf(f), "1"]); args.splice(i, 1); }
+    else i++;
+  }
+  /** The next value of a value option (repeatable ones give one per call), or undefined. */
+  const val = (f: string) => { const l = taken.get(f); return l?.length ? l.shift() : undefined; };
+  const bool = (f: string) => !!taken.get(f)?.length;
   const cfg = loadConfig();
   const provider = val("--provider") as ProviderId | undefined;
   if (provider) {
@@ -81,7 +98,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   if (live) console.error(`live view: ${live.url}`);
   const approve: Approve = yes ? () => true : () => "non-interactive run: risky commands are denied unless --yes is passed";
   const budget = new Budget({ maxTokens });
-  const model = argv.includes("--cache") ? cachedModel(createModel(cfg), { dir: join(cwd, ".amness", "cache", "responses"), salt: `${cfg.provider}|${cfg.baseUrl}|${cfg.model}|${cfg.effort ?? ""}` }) : createModel(cfg);
+  const model = bool("--cache") ? cachedModel(createModel(cfg), { dir: join(cwd, ".amness", "cache", "responses"), salt: `${cfg.provider}|${cfg.baseUrl}|${cfg.model}|${cfg.effort ?? ""}` }) : createModel(cfg);
   const loadedPlugins = await loadPlugins(cwd, { trustProject: trustHooks });
   for (const f of (val("--plugin") ?? "").split(",").filter(Boolean)) { const r = await importPlugins(resolve(f)); for (const w of r.warnings) console.error("plugin: " + w); loadedPlugins.plugins.push(...r.plugins); }   // named on the command line: you chose them, so no trust prompt
   const bestOf = Number(val("--best-of") ?? 0), partsFile = val("--parts");
@@ -92,7 +109,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
       if (bestOf) {
         // Each attempt after a failure starts from what the failed ones did; with several passing attempts (--best-of-all), a tournament of short comparisons picks one.
         const select = loadedPlugins.plugins.find((p) => p.select)?.select;
-        const r = await bestOfN({ repo: cwd, n: bestOf, verify, apply: true, maxTokens, parallel: argv.includes("--best-of-all"),
+        const r = await bestOfN({ repo: cwd, n: bestOf, verify, apply: true, maxTokens, parallel: bool("--best-of-all"),
           judge: select ? (g) => select(g.map((c) => ({ summary: rolloutSummary(c), diff: c.diff }))) : modelJudge(model, task),
           attempt: async (dir, _i, earlier) => { const b = new Budget({ maxTokens: Math.max(1, Math.floor(maxTokens / bestOf)) }); const a = createCodeAgent({ model, cwd: dir, verify, approve, sandbox: cfg.sandbox, memory: false, budget: b }); const x = await a.run(withEarlier(task, earlier)); await a.procs?.dispose(); return { tokens: b.tokens, summary: x.text }; }, onCandidate: (c) => console.error(`attempt ${c.index + 1}: ${c.passed ? "passed verify" : c.error ? "error: " + c.error : "failed verify"} (${c.tokens} tokens)`) });
         if (json) console.log(JSON.stringify({ kind: "result", finished: !!r.winner, applied: r.applied, tokens: r.tokens, attempts: r.candidates.length })); else console.log(r.winner ? `attempt ${r.winner.index + 1} won and was ${r.applied ? "applied" : "NOT applied: " + r.applyError}\n${r.winner.summary ?? ""}` : `no attempt passed ${verify} (${r.candidates.length} tried, ${r.tokens} tokens)`);
@@ -113,6 +130,10 @@ export async function runHeadless(argv: string[]): Promise<number> {
   const off = [...new Set([...(prof.off ?? []), ...(val("--off") ?? "").split(",").map((x) => x.trim()).filter(Boolean)])] as Guard[];
   const toolChoice = (val("--tool-choice") ?? prof.toolChoice) as "auto" | "required" | undefined;
   if (toolChoice && toolChoice !== "auto" && toolChoice !== "required") { console.error(`--tool-choice must be auto or required, not ${toolChoice}`); return 2; }
+  const tb = val("--thinking-budget"), thinkingBudget = tb !== undefined ? Number(tb) : prof.thinkingBudget;
+  if (thinkingBudget !== undefined && !(Number.isInteger(thinkingBudget) && thinkingBudget >= 0)) { console.error(`--thinking-budget must be a whole number of tokens (0 or more), not ${tb}`); return 2; }
+  let request = prof.request; const rq = val("--request");
+  if (rq !== undefined) { try { const j = JSON.parse(rq); if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("not an object"); request = { ...request, ...j }; } catch (e) { console.error(`--request must be a JSON object: ${(e as Error).message}`); return 2; } }
   { const bad = off.filter((g) => !GUARD_NAMES.includes(g)); if (bad.length) { console.error(`unknown guard ${bad.join(", ")} (guards: ${GUARD_NAMES.join(", ")})`); return 2; } }
   for (const w of loadedPlugins.warnings) console.error("plugin: " + w);
   if (loadedPlugins.untrusted) console.error(`note: ${loadedPlugins.untrusted.count} project plugin file(s) in .amness/plugins were not loaded; pass --trust-project to run them`);
@@ -126,9 +147,9 @@ export async function runHeadless(argv: string[]): Promise<number> {
   const usage = { prompt: 0, completion: 0, cached: 0, requests: 0 };              // every model request, subagents included, for the result line (benchmarks read it)
   const agent = createCodeAgent({
     dirs: addDirs.length ? () => addDirs : undefined,
-    plans: argv.includes("--plans") || cfg.plans || undefined,
+    plans: bool("--plans") || cfg.plans || undefined,
     contextWindow: Number(val("--context-window")) || windowFor(cfg) || await detectWindow({ provider: cfg.provider, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model }),
-    maxSteps: Number(val("--max-steps")) || prof.maxSteps || undefined, off: off.length ? off : undefined, toolChoice, quarantine: argv.includes("--quarantine") || cfg.quarantine || undefined, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
+    maxSteps: Number(val("--max-steps")) || prof.maxSteps || undefined, off: off.length ? off : undefined, toolChoice, thinkingBudget, request, quarantine: bool("--quarantine") || cfg.quarantine || undefined, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
     model, modelById: (id) => createModel({ ...cfg, model: id }), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox: (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e: Event) => { if (e.kind === "turn") { usage.prompt += e.prompt; usage.completion += e.completion; usage.cached += e.cached; usage.requests++; } live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
