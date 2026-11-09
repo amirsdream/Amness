@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.4 (2026-11-10)
+
+Found by the harness checks of Amness Evaluation Studio on a local Qwen.
+
+- **Keep the model's thinking across steps (`keepThinking`).** Amness dropped a reply's thinking from the conversation it sends back, so a thinking model saw only its earlier answers and tool calls. On a Terminal-Bench task the model then worked out the same plan five times in a row, at its thinking budget each time, and changed nothing before time ran out. With `keepThinking` on (the model's profile, Preferences or `/settings`: **Keep thinking**, or `amness run --keep-thinking`), each reply's thinking goes back as `reasoning_content`, with `chat_template_kwargs.preserve_thinking` for templates such as Qwen's. When the prompt must shrink, old thinking is dropped first. Off by default; whether it raises the pass rate is not measured yet.
+- **Large context windows take larger tool outputs.** The cap on one tool result grows with the window up to 12,000 characters (it stopped at 6,000), so a 6 KB file is read whole with a large window.
+- **The `config` line of `amness run --json`** also says whether thinking is kept.
+
 ## 0.7.3 (2026-11-10)
 
 - **`amness run --json` says what is in effect.** Its first line is now `{"kind":"config", ...}`: the version, provider and model, server address, context window, step and time limits, the guards on and off, tool choice, thinking budget, extra request fields, where the model's profile came from, the sandbox, plugins and memory. An evaluation (such as [Amness Evaluation Studio](https://github.com/amirsdream/amness-eval-studio)) records it with each run, so results say which features really ran. No key is ever included.

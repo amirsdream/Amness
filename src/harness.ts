@@ -9,10 +9,12 @@ export type ToolCall = { id: string; type?: "function"; function: { name: string
 export type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** set when the provider reported nothing and the harness estimated (about 4 characters per token) */ estimated?: boolean; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
 export type Message = { role: "system" | "user" | "assistant" | "tool"; content: string | null; /** pictures attached to a user message (base64) */ images?: { mime: string; data: string }[]; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: Usage;
   /** Provider-native content blocks (e.g. Claude thinking blocks). Kept verbatim in history and handed back to the adapter. */
-  raw?: unknown };
+  raw?: unknown;
+  /** The thinking that came with this reply from an OpenAI-compatible server (llama.cpp, vLLM, Ollama). Sent back only when the model keeps its thinking (`keepThinking`). */
+  thinking?: string };
 export type ToolSpec = { name: string; description: string; parameters: Schema };
 /** Any chat model: messages + tool specs in, assistant message out (attach `usage` if known). See openai.ts. */
-export type ModelOpts = { signal?: AbortSignal; /** "required": the model must call a tool (the server then constrains its output to a valid call); default "auto". */ toolChoice?: "auto" | "required"; /** Cap on generated tokens for this call (used for cache keep-alive pings; adapters may ignore it). */ maxTokens?: number; /** Cap on thinking tokens for this call (OpenAI-compatible servers that support it; others ignore it). */ thinkingBudget?: number; /** Extra fields for the request body (from the model's profile). */ request?: Record<string, unknown>; /** Called with each piece of assistant text as it is generated (streaming adapters only). */ onText?: (delta: string) => void; /** Called with pieces of the model's reasoning summary, where the provider exposes one. */ onThinking?: (delta: string) => void };
+export type ModelOpts = { signal?: AbortSignal; /** "required": the model must call a tool (the server then constrains its output to a valid call); default "auto". */ toolChoice?: "auto" | "required"; /** Cap on generated tokens for this call (used for cache keep-alive pings; adapters may ignore it). */ maxTokens?: number; /** Cap on thinking tokens for this call (OpenAI-compatible servers that support it; others ignore it). */ thinkingBudget?: number; /** Send the earlier replies' thinking back with the history, so the model does not work it all out again. */ keepThinking?: boolean; /** Extra fields for the request body (from the model's profile). */ request?: Record<string, unknown>; /** Called with each piece of assistant text as it is generated (streaming adapters only). */ onText?: (delta: string) => void; /** Called with pieces of the model's reasoning summary, where the provider exposes one. */ onThinking?: (delta: string) => void };
 export type Model = ((messages: Message[], tools: ToolSpec[], opts?: ModelOpts) => Promise<Message>) & {
   /** Set by adapters whose provider binds reasoning to the exact history (Claude): the harness then never edits past turns. */
   appendOnly?: boolean;
@@ -198,6 +200,8 @@ export type Options = {
   thinkingBudget?: number;
   /** Extra fields merged into every model request (the profile's `request`). */
   request?: Record<string, unknown>;
+  /** Send the model's earlier thinking back with the history (OpenAI-compatible servers). Without it a thinking model works out the same analysis again at every step. */
+  keepThinking?: boolean;
   /** Rules that allow, force-ask or deny a call before the permission mode is consulted (see `Permissions`). Deny wins; allow skips the prompt. */
   permissions?: { check(tool: string, args: Record<string, any>): { action: "allow" | "ask" | "deny" | "none"; rule?: string; reason?: string; floor?: boolean } };
   /** Turns without any objective improvement (failing-test count, new files edited, new code) before the loop reflects, then stops. Default 8; 0 switches it off. */
@@ -474,7 +478,7 @@ export function createHarness(o: Options) {
     /** Tokens a request may use: the window minus room for the reply. */
     const usable = () => { const w = Math.min(win ?? 0, 150_000); return w - Math.min(Math.round(w * 0.15), 2048); };   // a 1M window is not a reason to carry 800k tokens: long contexts cost money and blur the model
     /** Size cap for one tool result entering the transcript: a small window cannot afford 6000 characters per call. */
-    const entryCap = () => (win ? Math.max(1200, Math.min(6000, Math.round(win * 0.07 * 3.5))) : 6000);
+    const entryCap = () => (win ? Math.max(1200, Math.min(12_000, Math.round(win * 0.07 * 3.5))) : 6000);   // 12,000 characters from a 49k window up: a 6 KB file with line numbers is not cut
     /** Replace the conversation by a handoff note. The request that asks for the note must itself fit, so it is made from a shrunk copy. */
     const roll = async (specs: ToolSpec[]) => {
       let note = "";
@@ -556,7 +560,7 @@ export function createHarness(o: Options) {
       let m!: Message;
       let streamed = false;
       for (;;) {
-        try { m = await o.model(msgs, specs, { signal: sig(), ...(o.toolChoice && specs.length && { toolChoice: o.toolChoice }), ...(o.thinkingBudget !== undefined && { thinkingBudget: o.thinkingBudget }), ...(o.request && { request: o.request }), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); recoveries = 0; lastModelAt = Date.now(); sinceRewrite++; break; }
+        try { m = await o.model(msgs, specs, { signal: sig(), ...(o.toolChoice && specs.length && { toolChoice: o.toolChoice }), ...(o.thinkingBudget !== undefined && { thinkingBudget: o.thinkingBudget }), ...(o.keepThinking && { keepThinking: true }), ...(o.request && { request: o.request }), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); recoveries = 0; lastModelAt = Date.now(); sinceRewrite++; break; }
         catch (e) {
           if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
           // The provider says the request does not fit. Learn the window from the message (or guess it from our own estimate), shrink harder, and ask again.

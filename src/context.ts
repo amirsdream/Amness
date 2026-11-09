@@ -4,7 +4,7 @@
 import type { Message, ToolSpec } from "./harness.ts";
 
 const CHARS_PER_TOKEN = 3.5; // code and JSON run denser than prose (about 4); a low number errs on the safe side
-const charsOf = (m: Message) => (m.content?.length ?? 0) + (m.tool_calls ?? []).reduce((k, c) => k + c.function.name.length + c.function.arguments.length + 20, 0) + (m.raw !== undefined ? JSON.stringify(m.raw).length : 0) + 16;
+const charsOf = (m: Message) => (m.content?.length ?? 0) + (m.thinking?.length ?? 0) + (m.tool_calls ?? []).reduce((k, c) => k + c.function.name.length + c.function.arguments.length + 20, 0) + (m.raw !== undefined ? JSON.stringify(m.raw).length : 0) + 16;
 
 /** Size of a request in tokens, counting what a plain text count misses: tool-call arguments, provider extras and the tool definitions. */
 export const estimateTokens = (msgs: Message[], specs: ToolSpec[] = []): number => Math.ceil((msgs.reduce((n, m) => n + charsOf(m), 0) + JSON.stringify(specs).length) / CHARS_PER_TOKEN);
@@ -112,6 +112,10 @@ export function dropOldest(msgs: Message[], specs: ToolSpec[], target: number, k
 /** Shrink the transcript, in place, until the request is estimated at `target` tokens or less. Returns whether it fits and what was done. */
 export function fit(msgs: Message[], specs: ToolSpec[], target: number, tail: number, drop = false): { fits: boolean; stages: string[]; saved: number } {
   const before = estimateTokens(msgs, specs), stages: string[] = [];
+  // Kept thinking goes first: the model's old reasoning is the cheapest thing to lose (the newest reply keeps its own).
+  const last = msgs.findLastIndex((m) => m.role === "assistant"); let thought = 0;
+  for (let i = 0; i < last && estimateTokens(msgs, specs) > target; i++) if (msgs[i].thinking) { delete msgs[i].thinking; thought++; }
+  if (thought) { stages.push("old thinking"); if (estimateTokens(msgs, specs) <= target) return { fits: true, stages, saved: before - estimateTokens(msgs, specs) }; }
   for (const [label, t] of [["old tool output", tail], ["old tool output (shorter tail)", tail / 3], ["old tool output (minimal tail)", 0]] as const) {
     const upto = tailStart(msgs, t), a = maskOutputs(msgs, upto), b = shrinkArgs(msgs, upto);
     if (a + b > 0) stages.push(b ? `${label} and tool arguments` : label);

@@ -179,3 +179,10 @@ test("re-reading a file whose first read was condensed delivers the lines that w
   assert.match(second, /^60\tword60,/m); assert.match(second, /unchanged: already above/); assert.doesNotMatch(second, /chars cut/);
   assert.match(String(seen[0][0].content), new RegExp(`Working directory: ${dir.replace(/\\/g, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 });
+
+test("with a large context window a 7 KB file is read whole (the tool-output cap grows with the window up to 12,000 characters)", async () => {
+  const dir = tmp(); writeFileSync(join(dir, "syn.txt"), Array.from({ length: 110 }, (_, i) => `word${i + 1}, ${"synonym ".repeat(6)}end`).join("\n") + "\n");
+  const { model, seen } = scripted(call(["read_file", { path: "syn.txt" }]), fin);
+  await createCodeAgent({ model, cwd: dir, stagnationTurns: 0, contextWindow: 131_072 } as never).run("go");
+  const [first] = toolMsgs(seen); assert.doesNotMatch(first, /chars cut/); assert.match(first, /^60\tword60,/m);
+});

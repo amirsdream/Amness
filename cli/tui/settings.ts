@@ -69,6 +69,9 @@ const DEFS: Def[] = [
   { group: "model", id: "thinkingBudget", label: "Thinking budget", help: "Most thinking tokens per model request, for local servers that support it (llama.cpp). A slow local model that thinks for minutes uses up a timed run; 0 turns thinking off. Empty: the server's default. Saved in this model's profile (~/.amness/profile.json).", kind: "number", placeholder: "server default",
     read: (a) => (a.cfg.provider === "anthropic" ? null : { value: a.profile?.profile.thinkingBudget ?? "" }),
     write: (_, v) => (a) => { const n = Math.floor(num(v)); if (v !== "" && !(n >= 0)) throw new Error("a number of tokens, 0 or more"); setProfileField(a.cfg.model, "thinkingBudget", v === "" ? undefined : n); a.buildAgent(); return `thinking budget for ${a.cfg.model}: ${v === "" ? "server default" : `${n.toLocaleString()} tokens`} (in ~/.amness/profile.json)`; } },
+  { group: "model", id: "keepThinking", label: "Keep thinking", help: "Send the model's earlier thinking back with the conversation (local thinking models such as Qwen). Without it the model works out the same analysis again at every step; with it the prompt grows by the thinking. Saved in this model's profile.", kind: "choice",
+    read: (a) => (a.cfg.provider === "anthropic" ? null : { value: a.profile?.profile.keepThinking ? "on" : "off", options: [{ value: "off", label: "off (each step starts fresh)" }, { value: "on", label: "on (the model sees its earlier thinking)" }] }),
+    write: (_, v) => (a) => { const on = String(v) === "on"; if (!["on", "off"].includes(String(v))) throw new Error(`on or off, not ${v}`); setProfileField(a.cfg.model, "keepThinking", on || undefined); a.buildAgent(); return `keep thinking for ${a.cfg.model}: ${on ? "on" : "off"} (in ~/.amness/profile.json)`; } },
   { group: "model", id: "request", label: "Extra request fields", help: "JSON merged into every model request, for what the server accepts: sampling ({\"temperature\": 0.6, \"top_p\": 0.95}), {\"chat_template_kwargs\": {\"enable_thinking\": false}}, … Empty: none. Saved in this model's profile.", kind: "text", placeholder: "{}",
     read: (a) => ({ value: a.profile?.profile.request ? JSON.stringify(a.profile.profile.request) : "" }),
     write: (_, v) => (a) => { let j: Record<string, unknown> | undefined; if (String(v).trim()) { try { j = JSON.parse(String(v)); } catch (e) { throw new Error(`not JSON: ${(e as Error).message}`); } if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("a JSON object, like {\"temperature\": 0.6}"); } setProfileField(a.cfg.model, "request", j); a.buildAgent(); return `extra request fields for ${a.cfg.model}: ${j ? JSON.stringify(j) : "none"} (in ~/.amness/profile.json)`; } },
@@ -151,7 +154,7 @@ const DEFS: Def[] = [
 ];
 
 /** Set (or with undefined, remove) one field of `model`'s entry in the user's profile file, keeping everything else in it. */
-function setProfileField(model: string, key: "toolChoice" | "thinkingBudget" | "request", value: unknown) {
+function setProfileField(model: string, key: "toolChoice" | "thinkingBudget" | "keepThinking" | "request", value: unknown) {
   const file = join(home(), "profile.json");
   let j: { default?: Record<string, unknown>; models?: Record<string, Record<string, unknown>> } = {};
   try { j = JSON.parse(readFileSync(file, "utf8")); } catch { /* none yet */ }

@@ -1238,11 +1238,13 @@ Use it to compare a change (for example `--off compact`) with the current behavi
                  "claude-*": { "off": ["wrapup"] } } }
    ```
 
-   The profile can also have a `default` entry for all models. The allowed settings are `off`, `stagnationTurns`, `maxSteps`, `contextBudget`, `review`, `toolChoice`, `thinkingBudget`, `request` and `note`. The guards you can switch off are `coverage toolcache nudge loop compact readdelta stuck wrapup condense schedule ledger stagnation review redact pin anchor audit`.
+   The profile can also have a `default` entry for all models. The allowed settings are `off`, `stagnationTurns`, `maxSteps`, `contextBudget`, `review`, `toolChoice`, `thinkingBudget`, `keepThinking`, `request` and `note`. The guards you can switch off are `coverage toolcache nudge loop compact readdelta stuck wrapup condense schedule ledger stagnation review redact pin anchor audit`.
 
    `"toolChoice": "required"` makes the model call a tool at every step of a task run (`amness run`; the chat ignores it, since a plain answer is fine there). The server then limits the model's output to a valid tool call. This helps local models that drift into describing what they will do, or that write broken calls. With Claude it is used only when thinking is off (Claude does not allow both). `amness run --tool-choice required` sets it for one run. Not measured yet.
 
    `"thinkingBudget": 4096` caps the model's thinking at 4,096 tokens per request, on a local server that supports it (llama.cpp reads it as `thinking_budget_tokens`; other servers ignore it, and it is never sent to api.openai.com). `0` turns thinking off. Use it when a slow local model thinks for minutes before each action: at 36 tokens a second, 15,000 tokens of thinking take 7 minutes, which uses up a timed run. Tested: llama.cpp stops the thinking at the budget and the model still answers. `amness run --thinking-budget 4096` sets it for one run.
+
+   `"keepThinking": true` sends the model's earlier thinking back with the conversation, on OpenAI-compatible servers (with `chat_template_kwargs.preserve_thinking`, which Qwen's template reads). Without it, a thinking model sees only its earlier answers and tool calls, so on each step it may work out the same analysis again. Measured once on Terminal-Bench: a local Qwen spent five requests in a row re-deriving the same plan, about ten minutes, and changed nothing. The cost: the prompt grows by the kept thinking. When the prompt must shrink, old thinking is dropped first. `amness run --keep-thinking` sets it for one run. Whether it raises the pass rate is not measured yet.
 
    `"request": { "temperature": 0.6 }` adds fields to every model request, for whatever the server accepts: sampling settings, `chat_template_kwargs` such as `{"enable_thinking": false}`, and so on. `amness run --request '{"temperature":0.6}'` adds fields for one run, over the profile's.
 

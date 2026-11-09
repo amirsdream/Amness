@@ -40,5 +40,7 @@ test("profile: a thinking budget and extra request fields are read and checked",
   writeFileSync(join(p, ".amness", "profile.json"), JSON.stringify({ models: { "qwen*": { thinkingBudget: 4096, request: { temperature: 0.6 } } } }));
   const r = loadProfile(p, "qwen-vllm", { userDir: u }).profile; assert.equal(r.thinkingBudget, 4096); assert.deepEqual(r.request, { temperature: 0.6 });
   writeFileSync(join(p, ".amness", "profile.json"), JSON.stringify({ models: { "qwen*": { thinkingBudget: -1 } } })); assert.throws(() => loadProfile(p, "qwen-vllm", { userDir: u }), /thinkingBudget/);
+  writeFileSync(join(p, ".amness", "profile.json"), JSON.stringify({ models: { "qwen*": { keepThinking: true } } })); assert.equal(loadProfile(p, "qwen-vllm", { userDir: u }).profile.keepThinking, true);
+  writeFileSync(join(p, ".amness", "profile.json"), JSON.stringify({ models: { "qwen*": { keepThinking: "yes" } } })); assert.throws(() => loadProfile(p, "qwen-vllm", { userDir: u }), /keepThinking/);
   writeFileSync(join(p, ".amness", "profile.json"), JSON.stringify({ models: { "qwen*": { request: [1] } } })); assert.throws(() => loadProfile(p, "qwen-vllm", { userDir: u }), /"request" must be an object/);
 });

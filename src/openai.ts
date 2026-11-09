@@ -127,7 +127,7 @@ export async function readResponsesStream(r: Response, h: Pick<ModelOpts, "onTex
 const thinkingTokens = (text: string): number | undefined => (text ? Math.ceil(text.length / 4) : undefined);
 
 // ------------------------------------------------------------------ Chat Completions: streaming reader
-async function readChatStream(r: Response, onText: (d: string) => void, onThinking?: (d: string) => void): Promise<Message> {
+async function readChatStream(r: Response, onText: (d: string) => void, onThinking?: (d: string) => void, keep = false): Promise<Message> {
   const calls: { id: string; type: "function"; function: { name: string; arguments: string } }[] = [];
   let content = "", thinking = "", usage: Message["usage"], buf = "";
   const dec = new TextDecoder();
@@ -153,7 +153,7 @@ async function readChatStream(r: Response, onText: (d: string) => void, onThinki
   }
   const tool_calls = calls.filter(Boolean);
   if (usage && usage.reasoning_tokens === undefined && thinking) usage = { ...usage, reasoning_tokens: thinkingTokens(thinking) };
-  return { role: "assistant", content: content || null, ...(tool_calls.length && { tool_calls }), usage };
+  return { role: "assistant", content: content || null, ...(tool_calls.length && { tool_calls }), ...(keep && thinking && { thinking }), usage };   // kept only when it will be sent back
 }
 
 // ------------------------------------------------------------------ the adapter
@@ -217,22 +217,23 @@ export function openai(opts: OpenAIOptions = {}): Model {
     const stream = !!o.onText;
     const body: any = {
       model,    // only wire fields: `raw` / `usage` belong to other adapters, and replayed tool calls need an explicit type
-      messages: messages.map(({ role, content, tool_calls, tool_call_id, images }) => ({ role, content: images?.length ? [{ type: "text", text: content || "(continue)" }, ...images.map((i) => ({ type: "image_url", image_url: { url: `data:${i.mime};base64,${i.data}` } }))] : content, ...(tool_calls && { tool_calls: tool_calls.map((c) => ({ id: c.id, type: "function", function: c.function })) }), ...(tool_call_id && { tool_call_id }) })),
+      messages: messages.map(({ role, content, tool_calls, tool_call_id, images, thinking }) => ({ ...(o.keepThinking && role === "assistant" && thinking && { reasoning_content: thinking }), role, content: images?.length ? [{ type: "text", text: content || "(continue)" }, ...images.map((i) => ({ type: "image_url", image_url: { url: `data:${i.mime};base64,${i.data}` } }))] : content, ...(tool_calls && { tool_calls: tool_calls.map((c) => ({ id: c.id, type: "function", function: c.function })) }), ...(tool_call_id && { tool_call_id }) })),
       ...(tools.length && { tools: tools.map((t) => ({ type: "function", function: t })), ...(o.toolChoice && { tool_choice: o.toolChoice }) }),
       ...(stream && { stream: true, stream_options: { include_usage: true } }),
       ...(chatNoReasoning && isReasoningModel(model) ? { reasoning_effort: "none" } : opts.effort && isReasoningModel(model) && sendEffort ? { reasoning_effort: opts.effort } : {}),
       ...(o.thinkingBudget !== undefined && !official && { thinking_budget_tokens: o.thinkingBudget }),   // llama.cpp's per-request thinking cap; other servers ignore an unknown field
       ...opts.extra, ...o.request,
+      ...(o.keepThinking && !official && { chat_template_kwargs: { preserve_thinking: true, ...(o.request?.chat_template_kwargs as object | undefined) } }),   // Qwen-style templates drop old thinking unless told to keep it
     };
     for (const k of dropped) delete body[k];
     const r = await post("/chat/completions", body, o.signal);
-    if ((r.headers.get("content-type") ?? "").includes("text/event-stream")) return readChatStream(r, o.onText ?? (() => {}), o.onThinking);
+    if ((r.headers.get("content-type") ?? "").includes("text/event-stream")) return readChatStream(r, o.onText ?? (() => {}), o.onThinking, !!o.keepThinking);
     const j = await r.json(), m = j.choices[0].message;                           // server ignored `stream`, or we did not ask
     if (stream && m.content) o.onText!(m.content);
     const u = j.usage ?? {}, think: string = m.reasoning_content ?? m.reasoning ?? "";
     if (think) o.onThinking?.(think);
     const { reasoning_content: _rc, reasoning: _r, ...msg } = m;
-    return { ...msg, usage: { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens, total_tokens: u.total_tokens, cached_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens, reasoning_tokens: u.completion_tokens_details?.reasoning_tokens ?? thinkingTokens(think) } };
+    return { ...msg, ...(o.keepThinking && think && { thinking: think }), usage: { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens, total_tokens: u.total_tokens, cached_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens, reasoning_tokens: u.completion_tokens_details?.reasoning_tokens ?? thinkingTokens(think) } };
   }
 
   const call: Model = async (messages, tools, o2) => {

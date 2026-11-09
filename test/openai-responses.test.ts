@@ -257,3 +257,18 @@ test("chat: a thinking budget goes to a local server as thinking_budget_tokens, 
     assert.equal("thinking_budget_tokens" in s.seen[1].body, false); assert.equal("temperature" in s.seen[1].body, false);
   } finally { s.close(); }
 });
+
+test("chat: with keepThinking a reply's thinking is kept and sent back as reasoning_content, with preserve_thinking; without it, it is not kept at all", async () => {
+  const reply = json(200, { choices: [{ message: { role: "assistant", content: "ok", reasoning_content: "I worked it out: use odd for curious." } }] });
+  const s = await server({ "/v1/chat/completions": [reply, reply, reply, reply] });
+  try {
+    const m = openai({ baseUrl: s.url, model: "qwen-local", api: "chat" });
+    const a = await m([user("x")], [], { keepThinking: true });
+    assert.equal(a.thinking, "I worked it out: use odd for curious.");
+    await m([user("x"), a, user("go on")], [], { keepThinking: true, request: { chat_template_kwargs: { enable_thinking: true } } });
+    const sent = s.seen[1].body;
+    assert.equal(sent.messages[1].reasoning_content, "I worked it out: use odd for curious."); assert.deepEqual(sent.chat_template_kwargs, { preserve_thinking: true, enable_thinking: true });
+    const b = await m([user("y")], []); assert.equal(b.thinking, undefined);                                       // not kept: nothing unsent sits in the history
+    await m([user("y"), a, user("go on")], []); assert.equal(s.seen[3].body.messages[1].reasoning_content, undefined); assert.equal("chat_template_kwargs" in s.seen[3].body, false);
+  } finally { s.close(); }
+});

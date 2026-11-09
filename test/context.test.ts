@@ -136,3 +136,10 @@ test("a call to an unknown tool is answered with the closest real name", async (
   await createHarness({ model, tools: [read], stagnationTurns: 0 }).run("go");
   assert.match(seen[1].find((m) => m.role === "tool")!.content!, /unknown tool "readfile"\. Did you mean "read"\?/);
 });
+
+test("fit: kept thinking of older replies goes first, and the newest reply keeps its own", () => {
+  const big = "t".repeat(40_000);
+  const msgs: Message[] = [{ role: "system", content: "s" }, { role: "user", content: "task" }, { role: "assistant", content: "a1", thinking: big }, { role: "user", content: "more" }, { role: "assistant", content: "a2", thinking: "recent thought" }];
+  const r = fit(msgs, [], 2_000, 4);
+  assert.ok(r.fits); assert.deepEqual(r.stages, ["old thinking"]); assert.equal(msgs[2].thinking, undefined); assert.equal(msgs[4].thinking, "recent thought");
+});
