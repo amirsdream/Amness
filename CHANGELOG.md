@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3 (2026-11-10)
+
+- **`amness run --json` says what is in effect.** Its first line is now `{"kind":"config", ...}`: the version, provider and model, server address, context window, step and time limits, the guards on and off, tool choice, thinking budget, extra request fields, where the model's profile came from, the sandbox, plugins and memory. An evaluation (such as [Amness Evaluation Studio](https://github.com/amirsdream/amness-eval-studio)) records it with each run, so results say which features really ran. No key is ever included.
+
 ## 0.7.2 (2026-11-09)
 
 Found by running Terminal-Bench tasks with a local Qwen model and reading every run.

@@ -74,6 +74,9 @@ test("amness run: --plugin loads a plugin file for this run (its tool is offered
     const r = await cli(["run", "--provider", "custom", "--base-url", api.url, "--model", "m", "--cwd", dir, "--json", "--plugin", plugin, "--off", "nudge,compact", "go"]);
     assert.equal(r.code, 0, r.err);
     assert.ok(api.seen[0].tools.some((t: any) => t.function.name === "probe_tool"));
+    const cfg = JSON.parse(r.out.split("\n")[0]);                                                         // the first line says what is in effect
+    assert.equal(cfg.kind, "config"); assert.match(cfg.version, /^\d+\.\d+\.\d+/); assert.deepEqual(cfg.guardsOff, ["nudge", "compact"]);
+    assert.ok(cfg.guardsOn.includes("loop") && !cfg.guardsOn.includes("nudge")); assert.deepEqual(cfg.plugins, ["bench-probe"]); assert.equal(cfg.maxSteps, 40); assert.equal(cfg.toolChoice, "auto");
     const bad = await cli(["run", "--provider", "custom", "--base-url", api.url, "--model", "m", "--cwd", dir, "--off", "nosuch", "go"]);
     assert.equal(bad.code, 2); assert.match(bad.err, /unknown guard nosuch/);
   } finally { api.close(); }

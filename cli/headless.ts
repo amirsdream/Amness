@@ -1,5 +1,6 @@
 // Non-interactive mode for CI, scripts and containers:  amness run [flags] "task"
 import { readFileSync, writeFileSync } from "node:fs";
+const VERSION: string = (() => { for (const rel of ["../package.json", "../../package.json"]) { try { return JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8")).version; } catch { /* the built copy sits one folder deeper */ } } return "0.0.0"; })();
 import { join, resolve } from "node:path";
 import { cachedModel } from "../src/respcache.ts";
 import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
@@ -24,7 +25,7 @@ export const HELP = `usage: amness run [flags] "task"
   --bundle <file>      continue from a portable session bundle (any provider/model)
   --export <file>      write a portable session bundle when done
   --yes                auto-approve risky commands (default: deny them)
-  --json               machine-readable: one JSON event per line on stdout, final {"kind":"result"} line
+  --json               machine-readable: one JSON event per line on stdout: first {"kind":"config"} (the settings in effect), last {"kind":"result"}
   --live [port]        serve the live browser view
   --best-of-all        with --best-of: run all n attempts (not one at a time until one passes), then pick among the passing ones with a tournament of short model comparisons
   --best-of <n>        attempt the task up to n times in separate git worktrees (stops at the first attempt that passes --verify, which is required); the winner is applied
@@ -126,7 +127,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   { const e = val("--sandbox-engine"); if (e) cfg.sandboxEngine = e; }
   if (!applySandboxEngine(cfg, (m) => console.error(m))) return 2;
   // The model's profile (~/.amness/profile.json, then the project's .amness/profile.json): settings tuned per model, as in the chat app; flags win.
-  let prof: Profile = {}; try { prof = loadProfile(cwd, cfg.model).profile; } catch (e) { console.error(`profile ignored: ${(e as Error).message}`); }
+  let prof: Profile = {}, profSources: string[] = []; try { const lp = loadProfile(cwd, cfg.model); prof = lp.profile; profSources = lp.sources; } catch (e) { console.error(`profile ignored: ${(e as Error).message}`); }
   const off = [...new Set([...(prof.off ?? []), ...(val("--off") ?? "").split(",").map((x) => x.trim()).filter(Boolean)])] as Guard[];
   const toolChoice = (val("--tool-choice") ?? prof.toolChoice) as "auto" | "required" | undefined;
   if (toolChoice && toolChoice !== "auto" && toolChoice !== "required") { console.error(`--tool-choice must be auto or required, not ${toolChoice}`); return 2; }
@@ -145,12 +146,19 @@ export async function runHeadless(argv: string[]): Promise<number> {
     timers.push(setTimeout(() => stop.abort(), maxTime * 1000));
   }
   const usage = { prompt: 0, completion: 0, cached: 0, requests: 0 };              // every model request, subagents included, for the result line (benchmarks read it)
+  const contextWindow = Number(val("--context-window")) || windowFor(cfg) || await detectWindow({ provider: cfg.provider, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model });
+  const maxSteps = Number(val("--max-steps")) || prof.maxSteps || undefined, sandbox = (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox;
+  // The settings in effect, as the first line of --json: an evaluation records what it really ran (version, guards, limits), not only what it asked for.
+  if (json) console.log(JSON.stringify({ kind: "config", version: VERSION, provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl ?? null, effort: cfg.effort ?? null, contextWindow: contextWindow ?? null,
+    maxSteps: maxSteps ?? 40, maxTime: maxTime || null, guardsOff: off, guardsOn: GUARD_NAMES.filter((g) => !off.includes(g)), toolChoice: toolChoice ?? "auto", thinkingBudget: thinkingBudget ?? null, request: request ?? null,
+    profile: { sources: profSources, stagnationTurns: prof.stagnationTurns ?? null, contextBudget: prof.contextBudget ?? null }, sandbox: sandbox ?? null, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
+    verify: verify ?? null, memory: !noMemory, quarantine: !!(bool("--quarantine") || cfg.quarantine) }));
   const agent = createCodeAgent({
     dirs: addDirs.length ? () => addDirs : undefined,
     plans: bool("--plans") || cfg.plans || undefined,
-    contextWindow: Number(val("--context-window")) || windowFor(cfg) || await detectWindow({ provider: cfg.provider, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model }),
-    maxSteps: Number(val("--max-steps")) || prof.maxSteps || undefined, off: off.length ? off : undefined, toolChoice, thinkingBudget, request, quarantine: bool("--quarantine") || cfg.quarantine || undefined, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
-    model, modelById: (id) => createModel({ ...cfg, model: id }), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox: (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
+    contextWindow,
+    maxSteps, off: off.length ? off : undefined, toolChoice, thinkingBudget, request, quarantine: bool("--quarantine") || cfg.quarantine || undefined, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
+    model, modelById: (id) => createModel({ ...cfg, model: id }), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e: Event) => { if (e.kind === "turn") { usage.prompt += e.prompt; usage.completion += e.completion; usage.cached += e.cached; usage.requests++; } live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
   try {

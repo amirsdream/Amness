@@ -31,11 +31,14 @@ In this page you will learn:
 
 3. Read the result. Without `--json`, the final text of the agent goes to stdout and the progress goes to stderr.
 
-**Example.** With `--json`, each event is one JSON line, and the last line is the result:
+**Example.** With `--json`, each event is one JSON line. The first line says which settings are in effect, and the last line is the result:
 
 ```json
+{"kind":"config","version":"0.7.3","provider":"custom","model":"qwen-vllm","contextWindow":131072,"maxSteps":40,"maxTime":675,"guardsOff":["pin"],"guardsOn":["coverage","toolcache","..."],"toolChoice":"auto","thinkingBudget":4096,"request":null,"sandbox":null,"plugins":[],"memory":false}
 {"kind":"result","finished":true,"text":"...","steps":8,"tokens":15200}
 ```
+
+The `config` line lets an evaluation record what really ran (the version, the guards on and off, the limits, the profile's values), not only what it asked for. It never contains a key.
 
 The values are an example. The field `stopped` is missing when the run ends normally. When the run stops early, it is `budget`, `maxSteps`, `aborted`, `stuck` or `blocked`. If a model call fails, the last line is `{"kind":"error","message":"..."}`.
 
