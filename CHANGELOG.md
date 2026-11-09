@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-11-09)
 
 - **Preferences stays open when a setting opens its own view.** In the desktop app, **Manage…** (keys and servers) and the **Show…** buttons (plugins, hooks, skills, memory, permissions…) closed Preferences and ran in the chat, so your unapplied changes were lost and you could not get back. Now a dialog they open (the provider list, a key prompt) appears above Preferences; finishing or cancelling it brings you back to the same tab with your changes kept and the values refreshed. What a button prints appears under it. One Esc closes only the dialog, not Preferences too. In the terminal, `/settings` also stays in the same group after such a button.
 - **`amness tune` v2.** `--models` tunes several models on their own (saved servers, `provider/model`, or model ids) and writes each change only into the profile of the models it held up for. More candidates: every guard except secret masking, `--steps` (step limits), `--tool-choice`. Each change states a prediction and the log says whether it came true. Every run is recorded in `.amness/tune/`. Fixed: writing the tuned profile replaced the whole `profile.json`; it now merges into the model's entry.
