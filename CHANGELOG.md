@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1 (2026-11-09)
+
+- **Docker sandbox engine on Windows.** Docker on Windows runs Linux containers, which cannot use a `C:\` path, so the project is now mounted at `/workspace` there (on macOS and Linux it stays at the same path). Everything else is as in 0.7.0.
+
 ## 0.7.0 (2026-11-09)
 
 - **Preferences stays open when a setting opens its own view.** In the desktop app, **Manage…** (keys and servers) and the **Show…** buttons (plugins, hooks, skills, memory, permissions…) closed Preferences and ran in the chat, so your unapplied changes were lost and you could not get back. Now a dialog they open (the provider list, a key prompt) appears above Preferences; finishing or cancelling it brings you back to the same tab with your changes kept and the values refreshed. What a button prints appears under it. One Esc closes only the dialog, not Preferences too. In the terminal, `/settings` also stays in the same group after such a button.
