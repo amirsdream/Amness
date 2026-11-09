@@ -27,7 +27,8 @@ test("docker engine: the project is mounted at the same path, .git read-only, no
   const before = { ...dockerSandbox };
   try {
     applySandboxEngine({ sandboxImage: "python:3.12", sandboxRuntime: "runsc" });
-    assert.deepEqual(dockerArgs("pytest -q", d, "strict"), ["run", "--rm", "-i", "--runtime", "runsc", "--network", "none", "-v", `${ws}:${ws}`, "-v", `${ws}/.git:${ws}/.git:ro`, "-w", ws, "python:3.12", "sh", "-c", "pytest -q"]);
+    assert.deepEqual(dockerArgs("pytest -q", d, "strict", "linux"), ["run", "--rm", "-i", "--runtime", "runsc", "--network", "none", "-v", `${ws}:${ws}`, "-v", `${join(ws, ".git")}:${ws}/.git:ro`, "-w", ws, "python:3.12", "sh", "-c", "pytest -q"]);
+    assert.deepEqual(dockerArgs("ls", d, "workspace", "win32").slice(-10), ["-v", `${ws}:/workspace`, "-v", `${join(ws, ".git")}:/workspace/.git:ro`, "-w", "/workspace", "python:3.12", "sh", "-c", "ls"]);   // Linux containers on Windows: a fixed path inside
     applySandboxEngine({ sandboxRuntime: "" });
     assert.ok(!dockerArgs("ls", d, "workspace").includes("--network")); assert.ok(!dockerArgs("ls", d, "workspace").includes("--runtime"));
   } finally { Object.assign(dockerSandbox, before); setSandboxBackend("auto"); }

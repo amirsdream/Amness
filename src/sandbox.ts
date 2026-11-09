@@ -82,10 +82,11 @@ registerSandbox({ name: "docker", label: "Docker container (optionally gVisor)",
   // A throwaway container per command: the project is mounted at the same path (so paths in output match), .git read-only; nothing else of the host is visible.
   wrap: (cmd, workspace, mode) => ({ file: "docker", args: dockerArgs(cmd, workspace, mode) }) });
 /** The `docker run` arguments for one sandboxed command. */
-export function dockerArgs(cmd: string, workspace: string, mode: Exclude<SandboxMode, "off">): string[] {
-  const ws = real(workspace);
+export function dockerArgs(cmd: string, workspace: string, mode: Exclude<SandboxMode, "off">, platform = process.platform): string[] {
+  // The containers are Linux: on Windows a C:\ path cannot be the same path inside, so the project is mounted at /workspace there (paths in the output then differ).
+  const ws = real(workspace), inside = platform === "win32" ? "/workspace" : ws;
   return ["run", "--rm", "-i", ...(dockerSandbox.runtime ? ["--runtime", dockerSandbox.runtime] : []), ...(mode === "strict" ? ["--network", "none"] : []),
-    "-v", `${ws}:${ws}`, ...(existsSync(join(ws, ".git")) ? ["-v", `${join(ws, ".git")}:${join(ws, ".git")}:ro`] : []), "-w", ws, dockerSandbox.image, "sh", "-c", cmd];
+    "-v", `${ws}:${inside}`, ...(existsSync(join(ws, ".git")) ? ["-v", `${join(ws, ".git")}:${inside}/.git:ro`] : []), "-w", inside, dockerSandbox.image, "sh", "-c", cmd];
 }
 
 /** `file` and `args` that run `cmd` under the sandbox, or undefined when mode is off. Throws when a sandbox was asked for and cannot be provided (never a silent downgrade). */
