@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { onRateLimitWait } from "../model.ts";
-import { type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
+import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { PROVIDERS, home, keyFor, keyIdOf, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
@@ -144,7 +144,7 @@ export class App {
     }
     this.agent = createCodeAgent({
       model: this.model, modelById: (id) => make({ ...this.cfg, model: id }), cwd: this.cwd, chat: true, plans: this.cfg.plans || undefined, contextWindow: () => windowFor(this.cfg), onWindow: (w) => { rememberWindow(this.cfg, w); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`, [dim(`  context window learned: ${w.toLocaleString()} tokens`)]); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, quarantine: this.cfg.quarantine || undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
     if (!windowFor(this.cfg)) void detectWindow({ provider: this.cfg.provider, baseUrl: this.cfg.baseUrl, apiKey: this.cfg.apiKey, model: this.cfg.model }).then((w) => { if (w && !windowFor(this.cfg)) { rememberWindow(this.cfg, w); this.notify("info", `context window detected: ${w.toLocaleString()} tokens`, [dim(`  context window detected: ${w.toLocaleString()} tokens`)]); } });   // a local server states it
@@ -158,6 +158,7 @@ export class App {
   // ------------------------------------------------------------------ lifecycle
   async start() {
     setShell(this.cfg.shell); { const fb = shellFallbackNote(); if (fb) this.note(fb); }
+    if (!this.cfg.sandboxEngine || sandboxBackends().some((b) => b.name === this.cfg.sandboxEngine)) applySandboxEngine(this.cfg, (m) => this.note(m));   // a plugin's engine is applied once plugins load
     onRateLimitWait((ms, attempt, conc) => this.note(`rate limited by the provider: waiting ${Math.ceil(ms / 1000)}s, then retrying (attempt ${attempt}); ${conc} request${conc === 1 ? "" : "s"} at a time for now`));
     const { input, output } = this.io;
     if (this.ui !== "remote") {                                                    // a remote front end owns its own window: no terminal to set up
@@ -865,6 +866,7 @@ export class App {
   async loadPluginsNow() {
     const fp = pluginFingerprint(this.cwd), trusted = !!fp && loadState().pluginTrust?.[this.cwd] === fp;
     const r = await loadPlugins(this.cwd, { trustProject: trusted }); this.plugins = r.plugins; for (const w of r.warnings) this.note(`plugin: ${w}`);
+    if (this.cfg.sandboxEngine && this.plugins.some((p) => p.sandbox?.name === this.cfg.sandboxEngine)) applySandboxEngine(this.cfg, (m) => this.note(m));   // a plugin's engine exists only from now on
     return { r, fp };
   }
   async askPluginTrust() {

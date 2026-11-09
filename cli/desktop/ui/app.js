@@ -667,7 +667,7 @@ $("starters").replaceChildren(...STARTERS.map(([t, p]) => h("button", { class: "
 
 // ------------------------------------------------------------------ dialogs: the App's own (approvals, pickers, questions, help), drawn as windows
 let dialogOpen = null;
-let modalCancel = null;                                                            // what Esc or a click outside does (Preferences asks about unapplied changes)
+let modalCancel = null, prefsCancel = null;                                      // Preferences sits on its own layer (#prefsRoot), under dialogs                                                            // what Esc or a click outside does (Preferences asks about unapplied changes)
 function modal(content, o = {}) {
   closeModal(true); modalCancel = o.onCancel ?? null;
   const ov = h("div", { class: "overlay", onmousedown: (e) => { if (e.target === ov && !o.sticky) { o.onCancel ? o.onCancel() : closeModal(); } } }, content);
@@ -850,7 +850,7 @@ function modelMenu() {
 function renameSession() {
   const inp = h("input", { type: "text", value: state?.session.title || "", autofocus: true });
   const save = () => { closeModal(); run(`/rename ${inp.value}`); };
-  inp.onkeydown = (e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") closeModal(); };
+  inp.onkeydown = (e) => { if (e.key === "Enter") save(); else if (e.key === "Escape") { e.preventDefault(); closeModal(); } };
   modal(h("div", { class: "modal narrow" }, h("header", {}, "Rename conversation"), h("div", { class: "body" }, inp), h("footer", {}, h("span", { class: "spacer" }), h("button", { class: "btn", onclick: () => closeModal() }, "Cancel"), h("button", { class: "btn primary", onclick: save }, "Rename"))));
   setTimeout(() => inp.select(), 40);
 }
@@ -1014,7 +1014,7 @@ async function showPrefs() {
   const nav = h("nav", { class: "prefs-nav" }), body = h("div", { class: "prefs-body" }), foot = h("footer", { class: "prefs-foot" });
   // Every change is a draft until Apply. The window's own look previews live (and goes back on Revert or a discarded close); agent settings run only on Apply,
   // through the same code as /settings in the terminal. Switching tabs keeps the drafts.
-  const winDraft = new Map(), winOrig = new Map(), draft = new Map(), lists = new Map();
+  const winDraft = new Map(), winOrig = new Map(), draft = new Map(), lists = new Map(), outputs = new Map();   // outputs: what an action button printed, shown under it
   const count = () => winDraft.size + draft.size + [...lists.values()].reduce((n, l) => n + l.length, 0);
   const P = (k, d) => pref(k, d);
   const stageWin = (k, live = true) => (v) => { if (!winOrig.has(k)) winOrig.set(k, prefs[k]); if (v === winOrig.get(k)) winDraft.delete(k); else winDraft.set(k, v); prefs[k] = v; if (live) { applyPrefs(); render(true); } refresh(); };
@@ -1036,13 +1036,16 @@ async function showPrefs() {
     draw();
   };
   let closing = false;
-  const close = () => { if (!count()) { closeModal(); return; } closing = true; refresh(); };
+  const shut = () => { $("prefsRoot").replaceChildren(); prefsCancel = null; };
+  const close = () => { if (!count()) { shut(); return; } closing = true; refresh(); };
+  /** After a setting's own dialog: show the fresh values on the open tab, keeping the drafts. */
+  const refreshValues = () => draw();
   const refresh = () => {
     const n = count();
     for (const r of body.querySelectorAll(".pref[data-key]")) r.classList.toggle("changed", winDraft.has(r.dataset.key) || changed(r.dataset.key));
     for (const b of nav.querySelectorAll("button[data-tab]")) b.classList.toggle("dirty", tabChanged(b.dataset.tab));
     foot.replaceChildren(...(closing && n
-      ? [h("span", { class: "msg", text: `Apply your ${n} change${n === 1 ? "" : "s"} before closing?` }), h("span", { class: "spacer" }), h("button", { class: "btn", onclick: () => { revert(); closeModal(); } }, "Discard"), h("button", { class: "btn", onclick: () => { closing = false; refresh(); } }, "Keep editing"), h("button", { class: "btn primary", onclick: async () => { await apply(); closeModal(); } }, "Apply and close")]
+      ? [h("span", { class: "msg", text: `Apply your ${n} change${n === 1 ? "" : "s"} before closing?` }), h("span", { class: "spacer" }), h("button", { class: "btn", onclick: () => { revert(); shut(); } }, "Discard"), h("button", { class: "btn", onclick: () => { closing = false; refresh(); } }, "Keep editing"), h("button", { class: "btn primary", onclick: async () => { await apply(); shut(); } }, "Apply and close")]
       : [h("span", { class: "msg", text: n ? `${n} change${n === 1 ? "" : "s"} not applied yet` : "No changes" }), h("span", { class: "spacer" }), h("button", { class: "btn", disabled: !n, onclick: revert }, "Revert"), h("button", { class: "btn primary", disabled: !n, onclick: apply }, "Apply")]));
   };
   const WIN = { appearance: ["theme", "accent", "uiScale", "chatSize", "codeFont", "density", "reduceMotion"], chat: ["defaultMode", "sendKey", "foldFinished", "autoOpen"] };
@@ -1052,7 +1055,18 @@ async function showPrefs() {
     const v = cur(it);
     if (it.kind === "toggle") return sw(!!v, stage(it.id));
     if (it.kind === "choice") return sel(it.options.map((o) => [o.value, o.label]), String(v), stage(it.id));
-    if (it.kind === "action") return h("button", { class: "btn small", onclick: () => { if (count()) { toast("warn", "apply or revert your changes first"); return; } closeModal(); run(it.command); } }, it.button ?? "Open…");
+    if (it.kind === "action") {
+      // Runs here, quietly: a dialog it opens (a picker, a key prompt) appears above Preferences, and its printed result shows under the button. Preferences stays open, on this tab, with your drafts.
+      const shown = outputs.get(it.id), out = h("div", { class: `pout${shown ? "" : " hidden"}` }, ...(shown ? [shown.err ? h("div", { class: "err small", text: shown.text }) : shown.text ? h("pre", { class: "term dialog-term", text: shown.text }) : h("div", { class: "faint small", text: "done" })] : []));
+      const btn = h("button", { class: "btn small", onclick: async () => {
+        btn.disabled = true; out.classList.remove("hidden"); out.replaceChildren(h("div", { class: "faint small", text: "running…" }));
+        try { const r = await api("/api/command", { text: it.command }); outputs.set(it.id, { text: (r.lines ?? []).join("\n") }); }
+        catch (e) { outputs.set(it.id, { text: e.message, err: true }); }
+        const n = await tryApi("/api/settings"); if (n) s = n;
+        refreshValues();                                                            // fresh values, the result under the button, the same tab, your drafts kept
+      } }, it.button ?? "Open…");
+      return h("div", { class: "pact" }, btn, out);
+    }
     if (it.kind === "secret") { const i = h("input", { type: "password", placeholder: v ? `${v} · type to replace, or clear` : it.placeholder ?? "", autocomplete: "off" }); if (draft.has(it.id)) i.value = String(draft.get(it.id)); i.onchange = () => stage(it.id)(i.value.trim()); return i; }
     if (it.kind === "list") {
       const ops = lists.get(it.id) ?? [], gone = new Set(ops.filter((o) => o.startsWith("remove:")).map((o) => o.slice(7)));
@@ -1100,7 +1114,10 @@ async function showPrefs() {
     refresh();
   };
   draw();
-  modal(h("div", { class: "modal prefs" }, h("header", {}, "Preferences", h("span", { class: "spacer" }), h("button", { class: "icon-btn", "aria-label": "Close", onclick: close }, "✕")), h("div", { class: "prefs-wrap" }, nav, body), foot), { onCancel: close });
+  // Preferences has its own layer under the dialog layer, so a dialog a setting opens appears above it and closing that dialog comes back here.
+  const box = h("div", { class: "modal prefs" }, h("header", {}, "Preferences", h("span", { class: "spacer" }), h("button", { class: "icon-btn", "aria-label": "Close", onclick: close }, "✕")), h("div", { class: "prefs-wrap" }, nav, body), foot);
+  const ov = h("div", { class: "overlay prefs-layer", onmousedown: (e) => { if (e.target === ov) close(); } }, box);
+  $("prefsRoot").replaceChildren(ov); prefsCancel = close;
 }
 
 // ------------------------------------------------------------------ chrome: buttons, tabs, shortcuts, menus
@@ -1133,7 +1150,9 @@ const menuAction = (what) => ({ prefs: () => showPrefs(), new: newChat, open: op
 window.amnessDesktop?.onMenu(menuAction);
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
+  if (e.key === "Escape" && e.defaultPrevented) return;                            // a dialog already took this Esc (and closed): it must not close Preferences or stop the run too
   if (e.key === "Escape" && $("modalRoot").children.length && !dialogOpen) { modalCancel ? modalCancel() : closeModal(); return; }
+  if (e.key === "Escape" && !$("modalRoot").children.length && prefsCancel) { prefsCancel(); return; }
   if (e.key === "Escape" && state?.running && document.activeElement !== input && !dialogOpen) { api("/api/stop", {}); return; }
   if (!mod || window.amnessDesktop) return;                                       // in the app window the menu owns these shortcuts
   if (e.key === ",") { e.preventDefault(); showPrefs(); return; }

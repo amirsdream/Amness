@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { BUILTIN_METRICS, gateCompare, importPlugins, tune, writeProfile, adversarialCases, hardCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, calibrate, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
+import { BUILTIN_METRICS, gateCompare, importPlugins, tune, tuneModels, archiveTune, writeProfile, adversarialCases, hardCases, analyze, builtinCases, evaluate, recommend, leakAudit, loadSuite, suiteToCases, formatReport, calibrate, harnessVariant, loadCases, selfTest, variantNames, VARIANT_HELP, type Case, type Model, type Row } from "../src/index.ts";
 import { bold, dim, green, red } from "./ui.ts";
 import { estimateCost, priceOf } from "./tui/pricing.ts";
 import { cachedModel } from "../src/respcache.ts";
@@ -148,6 +148,10 @@ export const TUNE_HELP = `usage: amness tune [flags]
   --cases <dir>        your own tasks (default: the 13 built-in tasks)
   --guards <a,b>       which guards to try removing (default: nudge, loop, stuck, wrapup, condense, stagnation)
   --stagnation <n,n>   also try these stagnationTurns values
+  --steps <n,n>        also try these step limits
+  --tool-choice        also try requiring a tool call at every step
+  --models <a,b>       tune each of these models on its own (saved server names, provider/model, or model ids of the current provider); a change is written
+                       only into the profile of the models it held up for. Default: the configured model
   --trials <n>         attempts per task (default 2)
   --max-steps <n>      steps per session (default 30)
   --max-tokens <n>     token cap per session
@@ -157,21 +161,28 @@ export const TUNE_HELP = `usage: amness tune [flags]
   --out <file>         where to write the profile (default .amness/profile.json)
   --yes                skip the cost confirmation`;
 
-export async function runTune(argv: string[], deps: { model: () => Model; modelName: string; maxTokens: number; confirm: (q: string) => Promise<boolean> }): Promise<number> {
+export async function runTune(argv: string[], deps: { model: () => Model; modelName: string; maxTokens: number; confirm: (q: string) => Promise<boolean>; modelFor?: (spec: string) => { model: Model; name: string } }): Promise<number> {
   const val = (f: string) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; };
   if (argv.includes("--help") || argv.includes("-h")) { console.log(TUNE_HELP); return 0; }
   try {
     const cases = val("--cases") ? loadCases(resolve(val("--cases")!)) : builtinCases, model = deps.model(), maxTokens = Number(val("--max-tokens") ?? deps.maxTokens), maxSteps = Number(val("--max-steps") ?? 30);
     const guards = val("--guards")?.split(",").map((s) => s.trim()) as any, stag = val("--stagnation")?.split(",").map(Number), trials = Math.max(1, Number(val("--trials") ?? 2));
-    const n = (guards?.length ?? 6) + (stag?.length ?? 0), runs = Math.round(cases.length * 0.66) * 2 * trials * n + Math.max(1, Math.round(cases.length * 0.34)) * 2 * trials;
+    const steps = val("--steps")?.split(",").map(Number).filter((x) => x > 0), toolChoice = argv.includes("--tool-choice");
+    const specs = val("--models")?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
+    if (specs.length && !deps.modelFor) throw new Error("--models is not available here");
+    const models = specs.length ? specs.map((s) => deps.modelFor!(s)) : [{ model, name: deps.modelName }];
+    const n = ((guards?.length ?? 13) + (stag?.length ?? 0) + (steps?.length ?? 0) + (toolChoice ? 1 : 0)) * models.length, runs = Math.round(cases.length * 0.66) * 2 * trials * n + Math.max(1, Math.round(cases.length * 0.34)) * 2 * trials * models.length;
     console.log(`${bold("plan")}  up to ${runs} agent sessions (${cases.length} tasks, ${n} candidate changes, ${trials} trial(s)), up to ${maxTokens.toLocaleString()} tokens each`);
     if (!argv.includes("--yes") && !(await deps.confirm(`This calls your model up to ${(runs * maxTokens).toLocaleString()} tokens in the worst case. Continue?`))) return 1;
-    const r = await tune({ cases, trials, guards, stagnationTurns: stag, jobs: Number(val("--jobs") ?? 1), seed: val("--seed") ? Number(val("--seed")) : undefined,
-      makeVariant: (profile, name) => ({ ...harnessVariant(model, "full", { maxTokens, maxSteps, profile }), name }),
-      onStep: (s) => console.log(`  ${s.accepted ? green("keep") : red("drop")} ${s.stage === "heldout" ? "[held-out] " : ""}${s.change}  ${dim(s.why)}`) });
-    console.log(dim(`\n${r.strength}; held-out tasks: ${r.heldOut.join(", ") || "none"}`));
-    if (!r.accepted.length) { console.log("nothing survived both checks; no profile written."); return 0; }
-    const out = resolve(val("--out") ?? join(".amness", "profile.json")); writeProfile(out, val("--profile-model") ?? deps.modelName, r.profile);
-    console.log(`kept: ${r.accepted.join(", ")}\nprofile written to ${out}`); return 0;
+    const { results, shared } = await tuneModels({ cases, trials, guards, stagnationTurns: stag, maxSteps: steps, toolChoice, jobs: Number(val("--jobs") ?? 1), seed: val("--seed") ? Number(val("--seed")) : undefined,
+      models: models.map((m) => ({ name: m.name, makeVariant: (profile, name) => ({ ...harnessVariant(m.model, "full", { maxTokens, maxSteps, profile }), name }) })),
+      onStep: (s) => console.log(`  ${s.model && models.length > 1 ? dim(`[${s.model}] `) : ""}${s.accepted ? green("keep") : red("drop")} ${s.stage === "heldout" ? "[held-out] " : ""}${s.change}  ${dim(s.why)}${s.predicted ? dim(` · expected ${s.predicted}: ${s.held ? "yes" : "no"}`) : ""}`) });
+    const first = Object.values(results)[0];
+    console.log(dim(`\n${first?.strength ?? ""}; held-out tasks: ${first?.heldOut.join(", ") || "none"}`));
+    const record = archiveTune(resolve(join(".amness", "tune")), { at: new Date().toISOString(), cases: cases.map((c) => c.name), trials, results, shared });
+    const out = resolve(val("--out") ?? join(".amness", "profile.json")); let wrote = 0;
+    for (const [name, r] of Object.entries(results)) { if (!r.accepted.length) { console.log(`${name}: nothing survived both checks`); continue; } writeProfile(out, models.length > 1 ? name : val("--profile-model") ?? name, r.profile); wrote++; console.log(`${name}: kept ${r.accepted.join(", ")}`); }
+    if (models.length > 1) console.log(shared.length ? `kept by every model: ${shared.join(", ")} (each model's profile has it; a shared default is your call)` : "no change held up for every model");
+    console.log(dim(`record: ${record}`) + (wrote ? `\nprofile written to ${out}` : "\nno profile written")); return 0;
   } catch (e) { console.error(red("✗ " + (e as Error).message)); return 2; }
 }

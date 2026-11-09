@@ -72,6 +72,7 @@ The values are an example. The field `stopped` is missing when the run ends norm
 | `--approval-reviewer` | A second model approves clearly safe risky calls. Without `--yes`, calls that it does not clear are still denied. |
 | `--image <file>` | Shows the model a picture. You can repeat it, up to 4 times. Allowed: png, jpg, gif, webp, up to 5 MB each. It needs a vision model. |
 | `--best-of <n>` | Tries the task up to n times in separate git worktrees. See below. |
+| `--best-of-all` | With `--best-of`: run all n attempts, then pick among the passing ones with a tournament. |
 | `--parts <file.json>` | Runs independent parts at the same time. See below. |
 | `--trace <file>` | Writes a JSONL trace of every loop event. Set `AMNESS_OTLP=<collector url>` to export with OpenTelemetry. |
 | `--max-tokens <n>` | A hard token cap. The default is 300,000 (or the value in your config). |
@@ -113,6 +114,12 @@ amness run --best-of 3 --verify "npm test" "make the flaky test deterministic"
 ```
 
 You see one line on stderr for each attempt, for example `attempt 1: failed verify (41200 tokens)`. At the end Amness says which attempt won, or that no attempt passed.
+
+**Each retry learns from the failed attempts.** An attempt after a failure gets, below the task, a short summary of each earlier attempt: the files it changed, what it said, and the end of the verify output. It is told not to repeat what did not work. The summary is built from the attempt's own record, without an extra model call.
+
+**Run all attempts and pick the best.** Add `--best-of-all` to run all n attempts at the same time instead of stopping at the first pass. If several pass, Amness compares them in groups of three: one short model call per group reads each attempt's summary and diff and picks the one that does the task most completely, in the real code. Group winners then meet again until one is left (a tournament). This costs n attempts every time. A plugin can replace the comparison with its own `select` function.
+
+Why: in "Scaling Test-Time Compute for Agentic Coding" (arXiv 2604.16529), summaries of earlier attempts, tournament selection and retries conditioned on distilled summaries raised SWE-bench Verified from 70.9% to 77.6%. Not measured in Amness yet.
 
 **Limits and common problems.**
 

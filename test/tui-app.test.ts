@@ -470,6 +470,8 @@ test("settings: tool choice is saved in this model's profile (keeping the rest o
     await t.submit("/settings"); assert.ok(await t.until(() => t.has("Extend")));
     await t.type("extend"); await t.key(KEY.enter);
     assert.ok(await t.until(() => ["Plugins", "Hooks", "Skills", "Subagents", "MCP servers", "Model profile", "Tools"].every((x) => t.has(x))));
+    await t.type("tools"); await t.key(KEY.enter);                                     // an action runs, then the same group comes back (it used to leave /settings)
+    assert.ok(await t.until(() => t.has("Model profile") && t.has("Subagents") && t.has("Show…")));
   } finally { await t.key(KEY.esc); await t.key(KEY.esc); await t.key(KEY.ctrlD); }
 });
 

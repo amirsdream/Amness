@@ -43,6 +43,14 @@ const statusLine = () => `working… ${Math.round((Date.now() - status.t0) / 100
 /** Wrap a model so a live spinner shows while it thinks (and the abort signal still reaches the adapter). */
 const withSpinner = (m: Model): Model => async (msgs, tools, o) => { const stop = spin(statusLine); try { return await m(msgs, tools, o); } finally { stop(); } };
 const rawModel = (retries?: number): Model => createModel(cfg, retries);
+/** A model for `amness tune --models`: a saved server's name, `provider/model`, or a model id of the current provider. Each uses its own key. */
+function tuneModelFor(spec: string): { model: Model; name: string } {
+  const server = cfg.servers?.find((x) => x.name === spec || `server:${x.name}` === spec);
+  if (server) { const c: Config = { ...cfg }; useServer(c, server); return { model: createModel(c), name: server.model }; }
+  const [p, ...rest] = spec.split("/"), m = rest.join("/");
+  if (m && p in PROVIDERS) { const id = p as ProviderId; return { model: createModel({ ...cfg, provider: id, baseUrl: PROVIDERS[id].baseUrl, model: m, server: undefined, apiKey: keyFor(id).key }), name: m }; }
+  return { model: createModel({ ...cfg, model: spec }), name: spec };
+}
 // keep appendOnly (Claude) visible through the spinner wrapper
 const makeModel = (): Model => { const m = rawModel(), w = withSpinner(m); w.appendOnly = m.appendOnly; return w; };
 
@@ -464,7 +472,7 @@ async function main() {
   if (quick === "plugin") { process.exitCode = await runPlugin(argv.slice(1)); return; }
   if (quick === "schedule") { process.exitCode = runSchedule(argv.slice(1)); return; }
   if (quick === "acp") { if (argv.includes("--help")) return void console.log(ACP_HELP); process.exitCode = await runAcp({ model: rawModel, version: VERSION, maxTokens: cfg.maxTokens }); return; }
-  if (quick === "tune") { process.exitCode = await runTune(argv.slice(1), { model: makeModel, modelName: cfg.model, maxTokens: cfg.maxTokens, confirm }); return; }
+  if (quick === "tune") { process.exitCode = await runTune(argv.slice(1), { model: makeModel, modelName: cfg.model, maxTokens: cfg.maxTokens, confirm, modelFor: tuneModelFor }); return; }
   if (quick === "traces") { process.exitCode = traces(argv.slice(1)); return; }
   if (quick === "replay") { process.exitCode = await runReplay(argv.slice(1)); return; }
   if (quick === "desktop") { const { runDesktop } = await import("./desktop.ts"); process.exitCode = await runDesktop(argv.slice(1)); return; }

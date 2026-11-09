@@ -100,7 +100,7 @@ async function settingsPage(a: App) {
       const id = await a.pick<string>(group.label, group.items.map((s) => ({ label: s.label, value: s.id, hint: s.kind === "action" ? `${s.button ?? "Open…"} ${dim(s.help)}` : `${shown(s)}  ${dim(s.help)}` })));
       if (!id) break;
       const s = group.items.find((x) => x.id === id)!;
-      if (s.kind === "action") { await a.runCommand(s.command!); return; }                     // a dialog of its own (keys, memory): leave the page
+      if (s.kind === "action") { await a.runCommand(s.command!); continue; }                   // its own dialog (keys, servers) or output, then back to this group with the drafts kept
       const cur = drafts.has(id) ? drafts.get(id)! : s.value;
       let v: SettingValue | undefined;
       if (s.kind === "toggle") v = !cur;

@@ -150,7 +150,7 @@ export function formatReport(a: Analysis): string {
 }
 
 // ------------------------------------------------------------------------------------------------------------------ variants
-const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation"];
+const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "pin", "anchor", "audit"];
 /** Features that are not loop guards but can be switched off the same way for ablations. */
 const FEATURES = ["index", "taint"] as const;
 export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · full+plugins (every loaded plugin active, needs --plugin) · prompt:<id> (a system prompt from .amness/prompts) · model:<id> (the full harness on another model) · chaos:tools|429|args|slow-tools (the full harness while things break on purpose) · strategy:<name> (the full harness with a loop strategy: plan-first, explore-then-act) · any variant a plugin defines · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
@@ -201,7 +201,7 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
       const off = name === "baseline" ? ALL_GUARDS : [...(dropped ? [dropped] : []), ...(o.profile?.off ?? [])];
       if (name === "full+route" && !o.cheap) throw new Error("the full+route variant needs a cheap model: pass --cheap-model <id>");
       const r = await createCodeAgent({
-        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, cwd: dir, budget, maxSteps: o.profile?.maxSteps ?? o.maxSteps ?? 30, stagnationTurns: o.profile?.stagnationTurns, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
+        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, cwd: dir, budget, maxSteps: o.profile?.maxSteps ?? o.maxSteps ?? 30, toolChoice: o.profile?.toolChoice, stagnationTurns: o.profile?.stagnationTurns, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
         plugins: name === "full+plugins" ? o.plugins : undefined, wrapTools: o.wrapTools, contextWindow: o.contextWindow, compactSchemas: o.compactSchemas, verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined, review: name === "full+review" || undefined,
         onEvent: (e: Event) => { if (e.kind !== "text" && e.kind !== "thinking" && e.kind !== "assistant" && e.kind !== "toolstart" && e.kind !== "phase") events[e.kind] = (events[e.kind] ?? 0) + 1; },
       }).run(c.task);

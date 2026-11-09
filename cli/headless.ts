@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { cachedModel } from "../src/respcache.ts";
-import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
+import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, keyFor, loadConfig, ready, useServer, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
 import { formatEvent } from "./format.ts";
@@ -13,6 +13,8 @@ export const HELP = `usage: amness run [flags] "task"
   --cwd <dir>          workspace (default .)
   --verify <cmd>       command that must exit 0 before the agent may finish
   --trust-project      run this project's .amness/hooks.json and plugins and honour its allow rules (they execute code; off by default in headless runs)
+  --quarantine         dual LLM: untrusted tool output (web pages, MCP servers) is read by a separate model call with no tools; the agent sees only its digest
+  --sandbox-engine <name>  which engine runs sandboxed commands: auto (Seatbelt/Bubblewrap), docker (AMNESS_SANDBOX_IMAGE, AMNESS_SANDBOX_RUNTIME=runsc for gVisor), or a plugin's
   --sandbox <mode>     run shell commands under an OS sandbox: workspace (write only in the project and temp folders) or strict (also no network)
   --review             an independent reviewer writes acceptance criteria first and checks the work before it is accepted (extra model calls)
   --trace <file>       write a JSONL trace of every loop event (also AMNESS_OTLP=<collector url> for OpenTelemetry export)
@@ -24,6 +26,7 @@ export const HELP = `usage: amness run [flags] "task"
   --yes                auto-approve risky commands (default: deny them)
   --json               machine-readable: one JSON event per line on stdout, final {"kind":"result"} line
   --live [port]        serve the live browser view
+  --best-of-all        with --best-of: run all n attempts (not one at a time until one passes), then pick among the passing ones with a tournament of short model comparisons
   --best-of <n>        attempt the task up to n times in separate git worktrees (stops at the first attempt that passes --verify, which is required); the winner is applied
   --parts <file.json>  run independent parts ([{"name","task"}]) concurrently in worktrees, merged one at a time through --verify; conflicts are reported, not applied
   --image <file>       show the model a picture (png, jpg, gif, webp; up to 5 MB, repeat the flag for more, max 4); needs a vision-capable model
@@ -79,13 +82,19 @@ export async function runHeadless(argv: string[]): Promise<number> {
   const approve: Approve = yes ? () => true : () => "non-interactive run: risky commands are denied unless --yes is passed";
   const budget = new Budget({ maxTokens });
   const model = argv.includes("--cache") ? cachedModel(createModel(cfg), { dir: join(cwd, ".amness", "cache", "responses"), salt: `${cfg.provider}|${cfg.baseUrl}|${cfg.model}|${cfg.effort ?? ""}` }) : createModel(cfg);
+  const loadedPlugins = await loadPlugins(cwd, { trustProject: trustHooks });
+  for (const f of (val("--plugin") ?? "").split(",").filter(Boolean)) { const r = await importPlugins(resolve(f)); for (const w of r.warnings) console.error("plugin: " + w); loadedPlugins.plugins.push(...r.plugins); }   // named on the command line: you chose them, so no trust prompt
   const bestOf = Number(val("--best-of") ?? 0), partsFile = val("--parts");
   if (bestOf || partsFile) {
     if (!verify) { console.error("--best-of and --parts need --verify <cmd>: that command is what decides which result is kept"); return 2; }
     if (!(await isRepo(cwd))) { console.error("--best-of and --parts need a git repository with at least one commit"); return 2; }
     try {
       if (bestOf) {
-        const r = await bestOfN({ repo: cwd, n: bestOf, verify, apply: true, maxTokens, attempt: async (dir) => { const b = new Budget({ maxTokens: Math.max(1, Math.floor(maxTokens / bestOf)) }); const a = createCodeAgent({ model, cwd: dir, verify, approve, sandbox: cfg.sandbox, memory: false, budget: b }); const x = await a.run(task); await a.procs?.dispose(); return { tokens: b.tokens, summary: x.text }; }, onCandidate: (c) => console.error(`attempt ${c.index + 1}: ${c.passed ? "passed verify" : c.error ? "error: " + c.error : "failed verify"} (${c.tokens} tokens)`) });
+        // Each attempt after a failure starts from what the failed ones did; with several passing attempts (--best-of-all), a tournament of short comparisons picks one.
+        const select = loadedPlugins.plugins.find((p) => p.select)?.select;
+        const r = await bestOfN({ repo: cwd, n: bestOf, verify, apply: true, maxTokens, parallel: argv.includes("--best-of-all"),
+          judge: select ? (g) => select(g.map((c) => ({ summary: rolloutSummary(c), diff: c.diff }))) : modelJudge(model, task),
+          attempt: async (dir, _i, earlier) => { const b = new Budget({ maxTokens: Math.max(1, Math.floor(maxTokens / bestOf)) }); const a = createCodeAgent({ model, cwd: dir, verify, approve, sandbox: cfg.sandbox, memory: false, budget: b }); const x = await a.run(withEarlier(task, earlier)); await a.procs?.dispose(); return { tokens: b.tokens, summary: x.text }; }, onCandidate: (c) => console.error(`attempt ${c.index + 1}: ${c.passed ? "passed verify" : c.error ? "error: " + c.error : "failed verify"} (${c.tokens} tokens)`) });
         if (json) console.log(JSON.stringify({ kind: "result", finished: !!r.winner, applied: r.applied, tokens: r.tokens, attempts: r.candidates.length })); else console.log(r.winner ? `attempt ${r.winner.index + 1} won and was ${r.applied ? "applied" : "NOT applied: " + r.applyError}\n${r.winner.summary ?? ""}` : `no attempt passed ${verify} (${r.candidates.length} tried, ${r.tokens} tokens)`);
         return r.winner && r.applied ? 0 : 1;
       }
@@ -97,8 +106,8 @@ export async function runHeadless(argv: string[]): Promise<number> {
   }
   const tracer = val("--trace") || process.env.AMNESS_OTLP ? new Tracer({ file: val("--trace") ? resolve(val("--trace")!) : undefined, otlp: process.env.AMNESS_OTLP, sessionId: `run-${Date.now()}`, model: cfg.model }) : undefined;
   setShell(cfg.shell);
-  const loadedPlugins = await loadPlugins(cwd, { trustProject: trustHooks });
-  for (const f of (val("--plugin") ?? "").split(",").filter(Boolean)) { const r = await importPlugins(resolve(f)); for (const w of r.warnings) console.error("plugin: " + w); loadedPlugins.plugins.push(...r.plugins); }   // named on the command line: you chose them, so no trust prompt
+  { const e = val("--sandbox-engine"); if (e) cfg.sandboxEngine = e; }
+  if (!applySandboxEngine(cfg, (m) => console.error(m))) return 2;
   // The model's profile (~/.amness/profile.json, then the project's .amness/profile.json): settings tuned per model, as in the chat app; flags win.
   let prof: Profile = {}; try { prof = loadProfile(cwd, cfg.model).profile; } catch (e) { console.error(`profile ignored: ${(e as Error).message}`); }
   const off = [...new Set([...(prof.off ?? []), ...(val("--off") ?? "").split(",").map((x) => x.trim()).filter(Boolean)])] as Guard[];
@@ -119,7 +128,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
     dirs: addDirs.length ? () => addDirs : undefined,
     plans: argv.includes("--plans") || cfg.plans || undefined,
     contextWindow: Number(val("--context-window")) || windowFor(cfg) || await detectWindow({ provider: cfg.provider, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model }),
-    maxSteps: Number(val("--max-steps")) || prof.maxSteps || undefined, off: off.length ? off : undefined, toolChoice, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
+    maxSteps: Number(val("--max-steps")) || prof.maxSteps || undefined, off: off.length ? off : undefined, toolChoice, quarantine: argv.includes("--quarantine") || cfg.quarantine || undefined, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
     model, modelById: (id) => createModel({ ...cfg, model: id }), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox: (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e: Event) => { if (e.kind === "turn") { usage.prompt += e.prompt; usage.completion += e.completion; usage.cached += e.cached; usage.requests++; } live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });

@@ -3,7 +3,7 @@
 import { join, resolve, sep } from "node:path";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { SHELL_CHOICES, STRATEGIES, effortsFor, loadPrompts } from "../../src/index.ts";
+import { SHELL_CHOICES, STRATEGIES, applySandboxEngine, effortsFor, loadPrompts, sandboxBackends, sandboxKind, setSandboxBackend } from "../../src/index.ts";
 import { connections, home, keyIdOf, mask, windowFor } from "../config.ts";
 import { loadState, saveState } from "../state.ts";
 import { GUARDS, harnessView } from "./harnessinfo.ts";
@@ -88,11 +88,20 @@ const DEFS: Def[] = [
   { group: "harness", id: "harnessReset", label: "Defaults", help: "Switch every guard back on and reset the limits.", kind: "action", command: "/harness reset", button: "Reset" },
   // safety
   { group: "safety", id: "sandbox", label: "Sandbox", help: "Shell commands run in an OS sandbox: workspace (no writes outside the project) or strict (no network either).", kind: "choice", read: (a) => ({ value: a.cfg.sandbox ?? "off", options: [["off", "Off"], ["workspace", "Workspace"], ["strict", "Strict"]].map(([value, label]) => ({ value, label })) }), write: (_, v) => `/sandbox ${v}` },
+  { group: "safety", id: "sandboxEngine", label: "Sandbox engine", help: "What runs sandboxed commands: auto (Seatbelt on macOS, Bubblewrap on Linux), a Docker container, or an engine a plugin adds.", kind: "choice",
+    read: (a) => ({ value: a.cfg.sandboxEngine ?? "auto", options: [{ value: "auto", label: "auto (the OS sandbox)" }, ...sandboxBackends().map((b) => ({ value: b.name, label: b.unavailable ? `${b.label} (unavailable: ${b.unavailable})` : b.label }))] }),
+    write: (_, v) => (a) => { setSandboxBackend(String(v)); a.cfg.sandboxEngine = v === "auto" ? undefined : String(v); a.saveConfig(); a.buildAgent(); const k = sandboxKind(); return `sandbox engine: ${v}${k ? "" : " (not available on this machine: sandboxed commands will be refused)"}`; } },
+  { group: "safety", id: "sandboxImage", label: "Sandbox image", help: "Docker engine: the image commands run in (it needs the tools your project uses).", kind: "text", placeholder: "node:22-bookworm",
+    read: (a) => ({ value: a.cfg.sandboxImage ?? "" }), write: (_, v) => (a) => { a.cfg.sandboxImage = String(v) || undefined; applySandboxEngine(a.cfg); a.saveConfig(); return `sandbox image: ${a.cfg.sandboxImage ?? "node:22-bookworm"}`; } },
+  { group: "safety", id: "sandboxRuntime", label: "Sandbox runtime", help: "Docker engine: runsc runs each command under gVisor, a user-space kernel, for stronger isolation (needs gVisor installed in Docker).", kind: "choice",
+    read: (a) => ({ value: a.cfg.sandboxRuntime ?? "", options: [{ value: "", label: "default (runc)" }, { value: "runsc", label: "runsc (gVisor)" }] }), write: (_, v) => (a) => { a.cfg.sandboxRuntime = String(v) || undefined; applySandboxEngine({ ...a.cfg, sandboxRuntime: String(v) }); a.saveConfig(); return `sandbox runtime: ${v || "default"}`; } },
   { group: "safety", id: "verify", label: "Verify command", help: "Must pass before Amness may say it is done (for example npm test). Empty for none.", kind: "text", placeholder: "none", read: (a) => ({ value: a.verify ?? "" }), write: (_, v) => `/verify ${v || "off"}` },
   { group: "safety", id: "check", label: "Check after each edit", help: "A fast command (typecheck, lint) whose failures go straight back to the model. Empty for none.", kind: "text", placeholder: "none", read: (a) => ({ value: a.check ?? "" }), write: (_, v) => `/check ${v || "off"}` },
   { group: "safety", id: "lsp", label: "Language-server errors", help: "Add errors from an installed language server to edit results.", kind: "toggle", read: (a) => ({ value: !!a.cfg.lsp }), write: (_, v) => `/lsp ${onoff(v)}` },
   { group: "safety", id: "review", label: "Independent reviewer", help: "A skeptical second pass before work is accepted (extra model calls).", kind: "toggle", read: (a) => ({ value: !!a.cfg.review }), write: (_, v) => `/reviewer ${onoff(v)}` },
   { group: "safety", id: "approvalReviewer", label: "Approval reviewer", help: "A second model pre-approves clearly safe risky calls (never the safety floor).", kind: "toggle", read: (a) => ({ value: !!a.cfg.approvalReviewer }), write: (_, v) => `/approver ${onoff(v)}` },
+  { group: "safety", id: "quarantine", label: "Read untrusted content separately", help: "Dual LLM: web pages and MCP results are read by a separate model call that has no tools; the agent sees only its digest, so instructions hidden in the content cannot reach it. One extra (cheap-model) call per untrusted result.", kind: "toggle",
+    read: (a) => ({ value: !!a.cfg.quarantine }), write: (_, v) => (a) => { a.cfg.quarantine = !!v || undefined; a.saveConfig(); a.buildAgent(); return `untrusted content ${v ? "is read by a separate, tool-less reader first" : "goes to the agent directly (marked untrusted)"}`; } },
   { group: "safety", id: "permissions", label: "Permission rules", help: "Allow, ask and deny rules for tools and commands.", kind: "action", command: "/permissions", button: "Show…" },
   // folders and trust
   { group: "folders", id: "dirs", label: "Folders outside this project", help: "The file tools may use these too. Saved ones stay for this project; the others end with the session.", kind: "list", placeholder: "/path/to/folder",

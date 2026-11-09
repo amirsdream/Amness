@@ -9,6 +9,7 @@ import { createToolTool, loadSavedTools } from "./dynamic.ts";
 import { ToolCache } from "./cache.ts";
 import { coverageCheck } from "./coverage.ts";
 import { auditCheck } from "./audit.ts";
+import { quarantineReader, type Quarantine } from "./quarantine.ts";
 import { PlanCache, planBlock, planFrom } from "./plancache.ts";
 import { createHarness, defineTool, clip, handoffSeed, isSmallTalk, makeHandoff, pinRules, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, isMemoryBackend, memoryTools, type MemoryBackend } from "./memory.ts";
@@ -307,6 +308,8 @@ export type CodeAgentOptions = {
   stagnationTurns?: number;
   /** "required": a tool call at every step, for task runs (ignored in chat, where a plain answer is fine). Usually set by the model's profile. */
   toolChoice?: "auto" | "required";
+  /** Read untrusted tool output (web, MCP) with a separate tool-less model call first (dual LLM); true uses the cheap-role model (or the main one), a function replaces the reader. A plugin's \`quarantine\` wins. */
+  quarantine?: boolean | Quarantine;
   /** Background process tools (sh_start / sh_read / sh_stop / sh_list). Default on. Call `agent.procs?.dispose()` when you are done. */
   background?: boolean;
   /** Lifecycle hooks, e.g. `Hooks.load(cwd, { trustProject: true })`. Nothing runs unless you pass this. */
@@ -473,7 +476,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, toolCache, finishChecks: [coverageCheck, auditCheck(o.cwd, () => codeIndex, () => [...created])], compactSpecs: () => o.compactSchemas ?? small(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? undefined : o.toolChoice, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? undefined : o.toolChoice, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 

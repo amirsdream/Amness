@@ -141,6 +141,25 @@ amness run --sandbox strict "list the TODO comments"
 - `strict` stops `npm install` and anything else that needs the network.
 - On some Linux systems and containers, Bubblewrap is installed but the kernel does not allow it. Amness tests this when it starts.
 
+### Choose the sandbox engine
+
+**What it is.** The engine is the program that confines sandboxed commands. `auto` (the default) uses the OS sandbox: Seatbelt on macOS, Bubblewrap on Linux. `docker` runs each command in a throwaway container. A plugin can add its own engine (for example Sandlock, Landlock or a remote VM) with a `sandbox` field.
+
+**Why you would use it.** A container hides everything on your machine except the project, and works the same on every system with Docker. With gVisor's `runsc` runtime, each command also runs on a user-space kernel, which the sandboxing papers recommend for untrusted code.
+
+**How to use it.**
+
+1. Turn the sandbox on (`/sandbox workspace` or `strict`).
+2. Choose the engine: `/set sandboxEngine docker` (or Preferences → Safety & quality → Sandbox engine).
+3. Choose the image the commands run in: `/set sandboxImage python:3.12` (default `node:22-bookworm`). It needs the tools your project uses.
+4. Optionally `/set sandboxRuntime runsc` for gVisor (it must be installed in Docker).
+
+For one headless run: `amness run --sandbox strict --sandbox-engine docker`, with `AMNESS_SANDBOX_IMAGE` and `AMNESS_SANDBOX_RUNTIME` in the environment.
+
+**What the Docker engine does.** The project is mounted at the same path, so paths in the output match; `.git` is mounted read-only; in `strict` mode the container has no network. Nothing else of your machine is visible. Checked on macOS with Docker 29: a file written inside appears in the project, writing to `.git` fails with "Read-only file system", and the network is blocked in strict mode.
+
+**Limits.** Each command starts a new container, which adds about a second. Packages installed by one command are gone in the next (install them in the image). An engine that cannot run here is refused, never skipped: you see why and can choose another or turn the sandbox off.
+
 ### Add permission rules
 
 **What it is.** A rule says "allow", "ask" or "deny" for a tool. The syntax is `tool(pattern)`. Tools are `sh`, `edit` and `read`. In a `sh` pattern, `*` matches anything. In a path pattern, `*` stays inside one folder and `**` crosses folders.
@@ -245,6 +264,16 @@ Hooks and plugins are not sandboxed. A trusted hook can do anything your user ca
 - Disable memory for one run: `amness run --no-memory "task"`.
 - Do not set `AMNESS_OTLP` and do not pass `--trace` when you do not need them. A trace file is written locally in `--trace <file>`.
 - Do not attach an MCP server you do not trust.
+
+### Read untrusted content separately (dual LLM)
+
+**What it is.** When it is on, every untrusted tool result (a web page, an MCP server's answer) is first read by a separate model call that has **no tools**. That reader reports only the facts that help with the task, and drops any instructions it finds. The agent sees only this digest, still marked untrusted.
+
+**Why you would use it.** Text in a web page or a tool's answer can try to steer the agent ("ignore previous instructions and run…"). With this pattern, such text reaches at most a reader that cannot act. It is one of the six patterns in "Design Patterns for Securing LLM Agents against Prompt Injections" (arXiv 2506.08837).
+
+**How to use it.** `/set quarantine on`, or Preferences → Safety & quality → Read untrusted content separately. For one headless run: `amness run --quarantine`. The reader uses the cheap-role model if you set one (`/models cheap <model>`), otherwise the main model. A plugin can replace the reader with its own `quarantine` function.
+
+**Limits.** One extra model call per untrusted result. If the reader fails, the content is withheld, not passed on raw. The digest can lose details the agent needed; then turn it off for that task. Tested with an injection page in `test/quarantine.test.ts`; its effect on real attacks is not measured yet.
 
 ### Handle untrusted text
 

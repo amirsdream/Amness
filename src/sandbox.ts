@@ -7,17 +7,31 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 export type SandboxMode = "off" | "workspace" | "strict";
-export type SandboxKind = "seatbelt" | "bwrap";
+/** A sandbox engine's name: "seatbelt", "bwrap", "docker", or one a plugin registered. */
+export type SandboxKind = string;
+/** A way to run shell commands confined: built in (Seatbelt, Bubblewrap, Docker) or added by a plugin (for example Sandlock, Landlock, a remote VM). */
+export type SandboxBackend = {
+  name: string; label?: string;
+  /** Why it cannot run on this machine, or undefined when it can. */
+  unavailable(): string | undefined;
+  /** The program and arguments that run `cmd` in `workspace` under `mode` (never "off"). */
+  wrap(cmd: string, workspace: string, mode: Exclude<SandboxMode, "off">): { file: string; args: string[] };
+};
 export const SANDBOX_MODES: SandboxMode[] = ["off", "workspace", "strict"];
 
 let cached: SandboxKind | undefined | null = null;
 const has = (bin: string) => { try { execFileSync("sh", ["-c", `command -v ${bin}`], { stdio: "ignore" }); return true; } catch { return false; } };
 /** bwrap is often installed but unable to create namespaces (containers, locked-down kernels): probe with a no-op instead of trusting `command -v`. */
 function bwrapWorks(): boolean { try { execFileSync("bwrap", ["--ro-bind", "/", "/", "--dev", "/dev", "true"], { stdio: "ignore", timeout: 5000 }); return true; } catch { return false; } }
-/** Which sandbox this machine can provide. */
-export function sandboxKind(): SandboxKind | undefined {
+/** The OS sandbox this machine provides (Seatbelt on macOS, Bubblewrap on Linux), whatever engine is chosen. */
+function osKind(): "seatbelt" | "bwrap" | undefined {
   if (cached === null) cached = process.platform === "darwin" && has("sandbox-exec") ? "seatbelt" : process.platform === "linux" && has("bwrap") && bwrapWorks() ? "bwrap" : undefined;
-  return cached;
+  return cached as "seatbelt" | "bwrap" | undefined;
+}
+/** The engine that will run sandboxed commands now (the chosen one, or the OS sandbox for "auto"), or undefined when it cannot run here. */
+export function sandboxKind(): SandboxKind | undefined {
+  if (chosen === "auto") return osKind();
+  const b = backends.get(chosen); return b && !b.unavailable() ? b.name : undefined;
 }
 export const sandboxHelp = () => process.platform === "linux" ? "install bubblewrap (apt install bubblewrap); if it is installed, this kernel or container does not allow it to create namespaces" : process.platform === "darwin" ? "sandbox-exec was not found" : "OS sandboxing is only available on macOS and Linux";
 
@@ -42,13 +56,50 @@ export function seatbeltProfile(workspace: string, mode: SandboxMode): string {
   ].join("\n");
 }
 
-/** `file` and `args` that run `cmd` under the sandbox, or undefined when mode is off. Throws when a sandbox was asked for and cannot be provided. */
+// ------------------------------------------------------------------ engines
+const backends = new Map<string, SandboxBackend>();
+let chosen = "auto";
+/** Add an engine (plugins do this); a later one with the same name replaces the earlier. */
+export function registerSandbox(b: SandboxBackend) { backends.set(b.name, b); }
+/** Every engine, built in and registered, with whether it can run here. */
+export function sandboxBackends(): { name: string; label: string; unavailable?: string }[] { return [...backends.values()].map((b) => ({ name: b.name, label: b.label ?? b.name, unavailable: b.unavailable() })); }
+/** Choose the engine for every sandboxed command in this process: "auto" (the OS sandbox) or an engine's name. Unknown names are an error. */
+export function setSandboxBackend(name = "auto") { if (name !== "auto" && !backends.has(name)) throw new Error(`no sandbox engine "${name}" (engines: auto, ${[...backends.keys()].join(", ")})`); chosen = name; }
+export const sandboxBackendName = () => chosen;
+
+registerSandbox({ name: "seatbelt", label: "Seatbelt (macOS)", unavailable: () => (osKind() === "seatbelt" ? undefined : "macOS only (sandbox-exec)"),
+  wrap: (cmd, ws, mode) => ({ file: "sandbox-exec", args: ["-p", seatbeltProfile(ws, mode), "sh", "-c", cmd] }) });
+registerSandbox({ name: "bwrap", label: "Bubblewrap (Linux)", unavailable: () => (osKind() === "bwrap" ? undefined : process.platform === "linux" ? sandboxHelp() : "Linux only (bubblewrap)"),
+  wrap: (cmd, workspace, mode) => { const ws = real(workspace), dirs = writable(ws, mode);
+    return { file: "bwrap", args: ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", ...dirs.flatMap((d) => ["--bind", d, d]), ...(existsSync(join(ws, ".git")) ? ["--ro-bind", join(ws, ".git"), join(ws, ".git")] : []),
+      ...(mode === "strict" ? ["--unshare-net"] : []), "--die-with-parent", "--chdir", ws, "sh", "-c", cmd] }; } });
+
+/** Settings of the Docker engine: the image the commands run in, and an optional runtime (`runsc` = gVisor, a user-space kernel, for stronger isolation). */
+export const dockerSandbox = { image: process.env.AMNESS_SANDBOX_IMAGE || "node:22-bookworm", runtime: process.env.AMNESS_SANDBOX_RUNTIME || "" };
+let dockerOk: boolean | undefined;
+registerSandbox({ name: "docker", label: "Docker container (optionally gVisor)",
+  unavailable: () => { if (dockerOk === undefined) { try { execFileSync("docker", ["info", "--format", "{{.ServerVersion}}"], { stdio: "ignore", timeout: 8000 }); dockerOk = true; } catch { dockerOk = false; } } return dockerOk ? undefined : "Docker is not running (or not installed)"; },
+  // A throwaway container per command: the project is mounted at the same path (so paths in output match), .git read-only; nothing else of the host is visible.
+  wrap: (cmd, workspace, mode) => ({ file: "docker", args: dockerArgs(cmd, workspace, mode) }) });
+/** The `docker run` arguments for one sandboxed command. */
+export function dockerArgs(cmd: string, workspace: string, mode: Exclude<SandboxMode, "off">): string[] {
+  const ws = real(workspace);
+  return ["run", "--rm", "-i", ...(dockerSandbox.runtime ? ["--runtime", dockerSandbox.runtime] : []), ...(mode === "strict" ? ["--network", "none"] : []),
+    "-v", `${ws}:${ws}`, ...(existsSync(join(ws, ".git")) ? ["-v", `${join(ws, ".git")}:${join(ws, ".git")}:ro`] : []), "-w", ws, dockerSandbox.image, "sh", "-c", cmd];
+}
+
+/** `file` and `args` that run `cmd` under the sandbox, or undefined when mode is off. Throws when a sandbox was asked for and cannot be provided (never a silent downgrade). */
 export function wrapCommand(cmd: string, workspace: string, mode: SandboxMode): { file: string; args: string[] } | undefined {
   if (mode === "off") return undefined;
-  const kind = sandboxKind();
-  if (!kind) throw new Error(`the sandbox is on (${mode}) but unavailable here: ${sandboxHelp()}. Turn it off with /sandbox off to run commands unsandboxed.`);
-  if (kind === "seatbelt") return { file: "sandbox-exec", args: ["-p", seatbeltProfile(workspace, mode), "sh", "-c", cmd] };
-  const ws = real(workspace), dirs = writable(ws, mode);
-  return { file: "bwrap", args: ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", ...dirs.flatMap((d) => ["--bind", d, d]), ...(existsSync(join(ws, ".git")) ? ["--ro-bind", join(ws, ".git"), join(ws, ".git")] : []),
-    ...(mode === "strict" ? ["--unshare-net"] : []), "--die-with-parent", "--chdir", ws, "sh", "-c", cmd] };
+  const b = chosen === "auto" ? (osKind() ? backends.get(osKind()!) : undefined) : backends.get(chosen);
+  const why = b ? b.unavailable() : sandboxHelp();
+  if (!b || why) throw new Error(`the sandbox is on (${mode}${chosen === "auto" ? "" : `, engine ${chosen}`}) but unavailable here: ${why}. Choose another engine, or turn it off with /sandbox off to run commands unsandboxed.`);
+  return b.wrap(cmd, workspace, mode);
+}
+
+/** Apply a config's engine settings (sandboxEngine, sandboxImage, sandboxRuntime). Returns false, and says why, when the engine is unknown. */
+export function applySandboxEngine(c: { sandboxEngine?: string; sandboxImage?: string; sandboxRuntime?: string }, say: (m: string) => void = () => {}): boolean {
+  if (c.sandboxImage) dockerSandbox.image = c.sandboxImage;
+  if (c.sandboxRuntime !== undefined) dockerSandbox.runtime = c.sandboxRuntime;
+  try { setSandboxBackend(c.sandboxEngine || "auto"); return true; } catch (e) { say(`sandbox engine: ${(e as Error).message}; using auto`); setSandboxBackend("auto"); return false; }
 }

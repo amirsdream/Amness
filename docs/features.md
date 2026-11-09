@@ -1296,7 +1296,21 @@ guard verdicts:
    amness tune --cases ./my-tasks --trials 2 --stagnation 4,8
    ```
 
-3. If a change survives both checks, Amness writes `.amness/profile.json` (or the file from `--out`).
+3. If a change survives both checks, Amness writes `.amness/profile.json` (or the file from `--out`). It merges the change into the model's entry and keeps everything else in the file.
+
+**Tune several models at once.** `--models` takes a list: saved server names (from `/provider`), `provider/model`, or model ids of the current provider. Each model is tuned on its own, on the same tasks. A change goes into the profile of each model it held up for, and never into a shared default it did not earn. At the end Amness lists the changes every model kept.
+
+```bash
+amness tune --cases ./my-tasks --models 192.168.1.20:8000,openai/gpt-6-luna --tool-choice --steps 40,80
+```
+
+**What it may change.** Switching off guards (all except secret masking), the no-progress limit (`--stagnation`), the step limit (`--steps`) and requiring a tool call at every step (`--tool-choice`). Permissions, the sandbox, secret masking and the checks that judge the tasks are never in reach. That way it cannot win by weakening safety or the tests.
+
+**Predictions.** Each change states what it should do: removing a guard should keep the pass rate with fewer tokens per solved task; requiring tool calls should raise the pass rate. Each step's line says whether that came true (`expected …: yes` or `no`).
+
+**A record of every run.** Each run is saved in `.amness/tune/<time>.json`: the tasks, every step with its numbers, the predictions and the outcome, per model.
+
+Why: self-improving harnesses (Self-Harness, arXiv 2606.09498; AHE, arXiv 2604.25850) keep a change only when it does not regress on held-out tasks, state a prediction for each edit, and keep the judges outside what is tuned. Their numbers are theirs; this command is not measured on real tasks yet.
 
 **Example.** Each step prints a line like this:
 

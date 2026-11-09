@@ -14,6 +14,7 @@ import type { MemoryBackend } from "./memory.ts";
 import type { RouteInfo } from "./router.ts";
 import type { HookEvent, HookResult, HookRunner } from "./hooks.ts";
 import { execFile } from "node:child_process";
+import { registerSandbox, type SandboxBackend } from "./sandbox.ts";
 import { shellInvocation } from "./shell.ts";
 
 export type HookReturn = { block?: string; context?: string; args?: Record<string, unknown>; /** PreModel only: the tools that may be called in this turn */ tools?: string[]; then?: string } | string | void;
@@ -73,6 +74,12 @@ export type Plugin = {
   /** a short line shown in the sidebar (and updated as you work): branch policy, build state, ticket id, anything. Keep it fast: it runs on every redraw (the result is cached for one second). */ status?: (ctx: { cwd: string; running: boolean }) => string | undefined | void;
   /** policy as code: decide allow, ask or deny for each tool call before it runs. It can tighten anything, and it can skip an ordinary approval prompt, but it can never loosen the safety floor or the untrusted-text check. */ policy?: (call: PolicyCall) => PolicyResult | Promise<PolicyResult>;
   /** finish gates: your own checks that must pass before the agent may finish (see GateCtx) */ gates?: FinishGate[];
+  /** best-of-n: pick among passing attempts (`amness run --best-of`). Gets a small group, each with a summary and its diff; returns the position of the best. Replaces the built-in model judge. */
+  select?: (group: { summary: string; diff: string }[]) => Promise<number>;
+  /** a sandbox engine for shell commands (for example Sandlock, Landlock, a remote VM); choose it with /set sandboxEngine <name> */
+  sandbox?: SandboxBackend;
+  /** reads untrusted tool output when quarantine (dual LLM) is on, instead of the built-in reader; returns what the agent may see */
+  quarantine?: (r: { tool: string; args: unknown; text: string; task: string }) => Promise<string>;
   /** slash commands for the chat (a name that a built-in command already uses is skipped) */ commands?: PluginCommand[];
   /** rewrite the system prompt (runs once per conversation start) */ system?: (base: string, ctx: { cwd: string }) => string;
   /** evaluation: tasks with graders written as functions, and harness variants */ cases?: Case[]; /** graders for real sessions (`amness plugin grade`): functions of a recorded session that return a score */ graders?: Record<string, Grader>; /** custom numbers to record for every eval run (see MetricFn) */ metrics?: Record<string, MetricFn>; variants?: Record<string, VariantSpec>;
@@ -103,7 +110,7 @@ export async function importPlugins(file: string): Promise<{ plugins: Plugin[]; 
   const warnings: string[] = [], plugins: Plugin[] = [];
   try {
     const mod = await import(pathToFileURL(resolve(file)).href + `?v=${Date.now()}`), exp = mod.default ?? mod.plugin ?? mod.plugins;
-    for (const p of Array.isArray(exp) ? exp : [exp]) { const bad = valid(p, file); if (bad) warnings.push(bad); else plugins.push(p as Plugin); }
+    for (const p of Array.isArray(exp) ? exp : [exp]) { const bad = valid(p, file); if (bad) warnings.push(bad); else { plugins.push(p as Plugin); if ((p as Plugin).sandbox) registerSandbox((p as Plugin).sandbox!); } }
   } catch (e) { warnings.push(`${file}: could not load: ${(e as Error).message.split("\n")[0]}`); }
   return { plugins, warnings };
 }
