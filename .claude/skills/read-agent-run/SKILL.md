@@ -52,6 +52,6 @@ Separate four kinds of cause: **harness** (a guard or tool did the wrong thing),
 
 Write a short report: the failure, the evidence (step numbers and lines), the cause and its kind, and the next check (usually one run with the suspected part switched off: `--ak off=<guard>` in a campaign, or `amness replay <trace> --off <guard>`). Say what one run can and cannot show.
 
-Example (2026-11-12): cobol-modernization on a local Qwen failed twice. First `stopped: time` at 10 minutes (a setup cause: a 10-minute cap), then `stopped: stuck` after 12 turns of `od`, `xxd` and `cobc` with no edit (a possible harness cause in `src/progress.ts`). Next check: one run with `off=stagnation`.
+Example (2026-11-12): cobol-modernization on a local Qwen failed twice. First `stopped: time` at 10 minutes (a setup cause: a 10-minute cap), then `stopped: stuck` after 12 turns of `od`, `xxd` and `cobc` with no edit (a possible harness cause in `src/progress.ts`). The check, one run with `off=stagnation`, also failed: stopped by time at step 13 with no edit. So the guard did not cost a pass here; the cause was the model and the task (re-dumping the same files, long thinking on each step).
 
 The structure (capture, diagnose, contained next step, report) follows the agent-introspection-debugging skill of ECC (MIT, https://github.com/affaan-m/ECC), adapted to Amness's own logs.
