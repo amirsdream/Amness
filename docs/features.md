@@ -541,6 +541,8 @@ Models
 
 Anthropic measured that a plain nudge to call the advisor raised pass rates for Haiku executors and slightly lowered them for Opus. Not measured in Amness yet.
 
+**A recovery ladder: start cheap, move up when trouble adds up.** `"ladder": ["server:lab", "anthropic:claude-haiku-5-5", "anthropic:claude-opus-5-5"]` in the config (cheapest first; `"ladderStart": 0`), or `amness run --ladder server:lab,anthropic:claude-opus-5-5`, runs the main loop on a ladder of models. Amness keeps a risk score from what happens in the loop: broken tool calls, failed tools and edits, loops, nudges, the stuck and no-progress checks, and refused finishes add to it; a passing test run, a successful edit and a clean turn take some off. When the score rises it tries, in this order and once each: a reflection on the same model, a fresh start from a handoff note on the same model, and then the next model up, which starts from the note, not from the whole conversation. After four clean turns of mostly reading on a higher model, it steps back down. Every run (each chat turn, each task) starts on the start model, and a new instruction from you always runs there or higher. Each move is shown (`⇅ ladder`) and counted. Why: after a cheap model fails, choosing between reflecting, replanning and escalating beat a plain escalate-on-failure rule (arXiv 2607.19338), and a permanent one-way handoff can be worse than brief help from the strong model (arXiv 2608.27911). The weights are first guesses, not tuned. Compare with `amness eval --variants full,ladder:server:lab+anthropic:claude-opus-5-5`.
+
 **Budget for free local models.** `"budgetLocalWeight": 0.1` in the config (or `amness run --local-weight 0.1`) counts a token of a local-tier model as a tenth of a token against the token cap, so a local explorer can read a lot without using up the budget of your paid model. `/tokens` shows the last turn's tokens and waiting time per model when more than one model worked on it.
 - Status: default (nothing is set until you set it). Covered by automated tests.
 
@@ -595,6 +597,7 @@ the cheap model proposed a change or an answer: redone by the strong model
 - If the cheap model asks for an edit, a command, `finish` or a plain-text answer, Amness throws that step away and the main model does it again. Cheap steps are not streamed, so nothing half-shown stays on the screen.
 - Reasoning data from one model is never sent to the other.
 - `/router on` needs `/models cheap` first.
+- The cheap model may only read; a step where it wants to edit, run a command, start a subagent or answer is redone by the strong model, which sees the cheap model's suggestion as a short note. The cheap model's tokens for that step are still counted.
 - `amness run` has no router. Only the eval variant `full+route` uses it there.
 - Status: opt-in. Covered by automated tests. **Not measured on a real model.**
 

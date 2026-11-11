@@ -68,7 +68,7 @@ test("generic advisor: consulted before the first change and before finishing, o
   const r = await createCodeAgent({ model: main, advisor: adv, cwd: d, memory: false, guidance: false, index: false, permissions: { mode: () => "yolo" } }).run("change one to two in a.txt");
   assert.equal(r.finished, true);
   assert.equal(packets.length, 2, "start and finish, once each");
-  assert.match(packets[0], /WHY YOU ARE ASKED: the engineer is about to make the first change/); assert.match(packets[0], /TASK:\nchange one to two/);
+  assert.match(packets[0], /WHY YOU ARE GIVEN THIS: the engineer is about to make the first change/); assert.match(packets[0], /TASK:\nchange one to two/);
   assert.ok(packets.every((p) => p.length <= 20_000));
   const tools = seen.at(-1)!.filter((m) => m.role === "tool").map((m) => m.content!);
   assert.match(tools[1], /^PAUSED before your first change[\s\S]*Edit a\.txt line 1/);

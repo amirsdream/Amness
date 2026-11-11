@@ -5,7 +5,7 @@
 //   server:lab   server:lab/qwen3-8b   lab   (a saved server and its saved model, or another model on it)
 //   gpt-6-luna   (a bare id: the main provider and server)
 import type { Model, ModelCard, Roles, ModelTier } from "../src/index.ts";
-import { loadProfile, routedModel, withCard, withFallback } from "../src/index.ts";
+import { ladderModel, loadProfile, routedModel, withCard, withFallback, type LadderModel } from "../src/index.ts";
 import { PROVIDERS, keyFor, serverKey, windowFor, type Config, type ProviderId } from "./config.ts";
 import { priceOf } from "./tui/pricing.ts";
 
@@ -79,11 +79,13 @@ export type Wired = {
   model: Model;
   roles: Roles;
   /** Role name → reference label, for /status, the sidebar and the --json config line. Only roles that differ from the main model. */
-  labels: Partial<Record<RoleName | "fallback", string>>;
+  labels: Partial<Record<RoleName | "fallback" | "ladder", string>>;
   /** Models for other uses by reference (plugin `route`, custom agents' `model:` key, eval `model:` variants). */
   byRef: (ref: string) => Model;
   /** The approval reviewer's and the quarantine reader's own models, when set. */
   approve?: Model; quarantine?: Model; advisor?: Model;
+  /** The recovery ladder, when `ladder` is set: then it is also `model`. */
+  ladder?: LadderModel;
 };
 
 /**
@@ -107,6 +109,13 @@ export function wireModels(cfg: Config, mainRaw: Model, makeRaw: (c: Config) => 
     labels[name] = r.label; return byRef(ref);
   };
   const m = cfg.models ?? {};
+  if (cfg.ladder?.length) {
+    // The ladder replaces the main model, the fallback and the router: it decides which tier answers.
+    const tiers = cfg.ladder.map((ref) => ({ model: byRef(ref), label: resolveConfig(ref, cfg).label }));
+    const lad = ladderModel(tiers, cfg.ladderStart ?? 0);
+    const m = cfg.models ?? {};
+    return { model: lad, ladder: lad, roles: { explore: role("explore", m.explore), compact: role("compact", m.compact), review: role("review", m.review) }, labels: { ...labels, ladder: tiers.map((t) => t.label).join(" → ") } as Wired["labels"], byRef, approve: role("approve", m.approve), quarantine: role("quarantine", m.quarantine), advisor: role("advisor", m.advisor) };
+  }
   const fb = role("fallback", cfg.fallback);
   let model = fb ? withFallback(main, fb, () => hooks.onFallback?.()) : main;
   const roles: Roles = { explore: role("explore", m.explore), compact: role("compact", m.compact), review: role("review", m.review), cheap: role("cheap", m.cheap) };

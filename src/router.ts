@@ -5,7 +5,8 @@ import { windowOf } from "./card.ts";
 import type { Message, Model, ModelOpts, ToolSpec } from "./harness.ts";
 
 export type Tier = "strong" | "cheap";
-export type Prices = { /** dollars (or any unit) per million input tokens */ input: number; output: number; /** fraction of the input price charged for cached input (default 0.1) */ cachedRate?: number };
+export type Prices = { /** dollars (or any unit) per million input tokens */ input: number; output: number; /** fraction of the input price charged for cached input (default 0.1) */ cachedRate?: number;
+  /** a fixed cost per call in the same unit, for a tier without token prices (a local server: its time, converted with whatever weight you choose) */ perCall?: number };
 export type Decision = { tier: Tier; reason: string };
 export type RouterOptions = {
   strong: Model; cheap: Model; prices?: { strong: Prices; cheap: Prices };
@@ -14,6 +15,8 @@ export type RouterOptions = {
 };
 
 const READ_ONLY = new Set(["read_file", "list_files", "grep", "repo_map", "find_refs", "impact", "skill", "sh_read", "sh_list", "memory_search", "web_search", "fetch_url", "task", "todo_write"]);
+/** What the cheap tier may do on its own: reading, not delegating (a subagent started by the cheap tier would spend at an unknown tier). */
+const CHEAP_MAY = new Set([...READ_ONLY].filter((n) => n !== "task"));
 const failed = (s: string) => /^(ERROR|DENIED|REJECTED|BLOCKED)/.test(s) || /^exit=(?!0\b)/.test(s);
 const tokensOf = (ms: Message[]) => Math.ceil(ms.reduce((n, m) => n + (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0), 0) / 4);
 
@@ -47,7 +50,7 @@ export function decide(o: { tail: ReturnType<typeof tailShape>; promptTokens: nu
   // currently strong, tempted to go cheap: price the cold read on the cheap model against the per-step saving
   const cr = (p: Prices) => p.cachedRate ?? 0.1, N = o.promptTokens;
   const coldRead = o.cheapWarm ? 0 : N * o.prices.cheap.input * (1 - cr(o.prices.cheap));                         // extra cost of the first call (uncached input)
-  const savingPerStep = N * (o.prices.strong.input * cr(o.prices.strong) - o.prices.cheap.input * cr(o.prices.cheap));  // cached-read price difference on every cheap step
+  const savingPerStep = N * (o.prices.strong.input * cr(o.prices.strong) - o.prices.cheap.input * cr(o.prices.cheap)) + ((o.prices.strong.perCall ?? 0) - (o.prices.cheap.perCall ?? 0)) * 1e6;  // cached-read price difference on every cheap step, plus any fixed cost per call (prices are per million tokens)
   if (savingPerStep <= 0) return { tier: "strong", reason: "the cheap model is not cheaper per cached read" };
   const needed = coldRead / savingPerStep;
   return t.streak + 1 >= needed ? { tier: "cheap", reason: `exploration streak ${t.streak}: the cold read (${Math.round(coldRead)} units) is repaid in ~${needed.toFixed(1)} steps` } : { tier: "strong", reason: `streak ${t.streak} is too short to repay a cold read on the cheap model (needs ~${needed.toFixed(1)} steps)` };
@@ -69,11 +72,15 @@ export function routedModel(o: RouterOptions): Model {
     if (d.tier === "cheap") {
       r = await o.cheap(clean, tools, opts ? { signal: opts.signal } : undefined);        // not streamed: if the answer has to be redone, nothing half-shown must be left behind
       cheapWarmUntil = now() + ttl;
-      const needsJudgement = !r.tool_calls?.length || r.tool_calls.some((c) => !READ_ONLY.has(c.function.name));
-      if (needsJudgement) {                                                                // the cheap model reached for an edit, a command, or the final answer: that is the strong model's job
+      const needsJudgement = !r.tool_calls?.length || r.tool_calls.some((c) => !CHEAP_MAY.has(c.function.name));
+      if (needsJudgement) {                                                                // the cheap model reached for an edit, a command, a subagent or the final answer: that is the strong model's job
         o.onRoute?.({ tier: "strong", reason: "the cheap model proposed a change or an answer: redone by the strong model", switched: true, promptTokens });
-        current = "strong"; r = await o.strong(messages.map((x) => (x.role === "assistant" && x.raw !== undefined && owner.get(x.raw as object) === "cheap" ? { ...x, raw: undefined } : x)), tools, opts);
+        // Its proposal is not thrown away silently: the strong model sees it as a short note (at the end, so the cached prefix is untouched), and its tokens are still counted.
+        const proposal = r.tool_calls?.length ? r.tool_calls.map((c) => `${c.function.name}(${c.function.arguments.slice(0, 300)})`).join("; ") : (r.content ?? "").slice(0, 600);
+        const cheapUsage = r.usage, cheapId = o.cheap.card?.id ?? "cheap";
+        current = "strong"; r = await o.strong([...messages.map((x) => (x.role === "assistant" && x.raw !== undefined && owner.get(x.raw as object) === "cheap" ? { ...x, raw: undefined } : x)), ...(proposal ? [{ role: "user" as const, content: `(a cheaper model suggested this next step; check it, and use it only if it is right: ${proposal})` }] : [])], tools, opts);
         if (r.raw !== undefined && typeof r.raw === "object" && r.raw) owner.set(r.raw as object, "strong");
+        if (cheapUsage) r = { ...r, usage: { ...r.usage, side: [...(r.usage?.side ?? []), { model: cheapId, tier: o.cheap.card?.tier ?? "mid", prompt: cheapUsage.prompt_tokens ?? 0, completion: cheapUsage.completion_tokens ?? 0, cached: cheapUsage.cached_tokens ?? 0 }] } };
         return r;
       }
     } else r = await o.strong(clean, tools, opts);

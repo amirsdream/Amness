@@ -11,7 +11,7 @@ import { coverageCheck } from "./coverage.ts";
 import { auditCheck } from "./audit.ts";
 import { quarantineReader, type Quarantine } from "./quarantine.ts";
 import { PlanCache, planBlock, planFrom } from "./plancache.ts";
-import { mechanicalNote } from "./context.ts";
+import { buildPacket } from "./packet.ts";
 import { createHarness, defineTool, clip, handoffSeed, isSmallTalk, makeHandoff, pinRules, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, isMemoryBackend, memoryTools, type MemoryBackend } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
@@ -25,6 +25,7 @@ import { relatedFiles, CodeIndex, indexTools } from "./codeindex.ts";
 import { AGENT_TOOLS, WRITE_TOOLS, isWriter, loadAgents, type AgentDef } from "./agents.ts";
 import type { Roles } from "./route.ts";
 import { windowOf, type ModelTier } from "./card.ts";
+import type { LadderModel } from "./ladder.ts";
 import { applyDiff, createWorktree, isRepo, removeWorktree, worktreeDiff, type Worktree } from "./worktree.ts";
 import { loadSkills, skillsBlock, skillTool, type Skill } from "./skills.ts";
 import { SkillState, draftSkill, rankSkills } from "./skillmgr.ts";
@@ -303,6 +304,8 @@ export type CodeAgentOptions = {
    * It gets a packet (task, rules, a note of the work so far, files changed, the diff, the last failure), never the transcript, and has no tools.
    */
   advisor?: Model | "native";
+  /** The recovery ladder (see the harness option); its model is usually also `model`. */
+  ladder?: LadderModel;
   /** Most consultations of the generic advisor per request (default 4). */
   advisorCap?: number;
   /** Keep the tool list fixed for the session (tool_search plus call_tool); see the harness option. */
@@ -565,12 +568,9 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const consult = async (why: string, msgs: Message[], question?: string): Promise<string | undefined> => {
     if (!advisorModel || advisorUsed >= (o.advisorCap ?? 4)) return undefined;
     advisorUsed++;
-    const userTexts = msgs.filter((m) => m.role === "user").map((m) => m.content ?? ""), task = userTexts[0] ?? "";
-    const audit = ledger.audit(task), lastFail = [...msgs].reverse().find((m) => m.role === "tool" && /^(ERROR|exit=[1-9])|\bFAIL|Error:/m.test(m.content ?? ""))?.content;
+    const task = msgs.find((m) => m.role === "user")?.content ?? "", audit = ledger.audit(task);
     let diff = ""; try { diff = (await runShell("git diff --stat && git diff", o.cwd, 15_000)).replace(/^exit=0\n?/, ""); } catch { /* not a repository */ }
-    const packet = [`WHY YOU ARE ASKED: ${why}`, question && `QUESTION FROM THE ENGINEER: ${clip(question, 1500)}`, `TASK:\n${clip(task, 4000)}`,
-      pinRules(userTexts.slice(1)).length ? `RULES FROM THE USER:\n${pinRules(userTexts.slice(1)).join("\n")}` : "", `WORK SO FAR:\n${clip(mechanicalNote(msgs), 3000)}`,
-      `FILES CHANGED: ${audit.changed.join(", ") || "none"}${audit.notes.length ? `\n${audit.notes.join("\n")}` : ""}`, diff.trim() && `DIFF:\n${clip(diff, 6000)}`, lastFail && `LAST FAILURE:\n${clip(lastFail, 2000)}`].filter(Boolean).join("\n\n");
+    const packet = buildPacket({ messages: msgs, why, question, changed: audit.changed, auditNotes: audit.notes, diff });
     try {
       const t0 = Date.now(), m = await advisorModel([{ role: "system", content: ADVISOR_SYSTEM }, { role: "user", content: clip(packet, 20_000) }], []);
       o.budget?.add(m, advisorModel.card, Date.now() - t0);
@@ -595,7 +595,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, toolCache, finishChecks: [coverageCheck, auditCheck(o.cwd, () => codeIndex, () => [...created])], compactSpecs: () => o.compactSchemas ?? lean(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, stableTools: o.stableTools, advise: advisorModel ? (why, msgs) => consult(why === "start" ? "the engineer is about to make the first change" : why === "stuck" ? "the engineer seems stuck: recent steps failed or changed nothing measurable" : "the engineer is about to declare the task done", msgs) : undefined, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? "auto" : o.toolChoice, thinkingBudget: o.thinkingBudget, request: o.request, keepThinking: o.keepThinking, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, stableTools: o.stableTools, ladder: o.ladder, advise: advisorModel ? (why, msgs) => consult(why === "start" ? "the engineer is about to make the first change" : why === "stuck" ? "the engineer seems stuck: recent steps failed or changed nothing measurable" : "the engineer is about to declare the task done", msgs) : undefined, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? "auto" : o.toolChoice, thinkingBudget: o.thinkingBudget, request: o.request, keepThinking: o.keepThinking, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 

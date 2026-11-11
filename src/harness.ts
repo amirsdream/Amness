@@ -1,6 +1,7 @@
 import type { ModelCard } from "./card.ts";
 import { windowOf } from "./card.ts";
 import { findTextCalls, withoutCalls, type TextCall } from "./rescue.ts";
+import { RiskMeter, ladderDecide, type LadderModel } from "./ladder.ts";
 import { type Schema, validate, parseLooseJson, parseArgs, coerce } from "./schema.ts";
 
 import { ProgressTracker, type TurnFacts } from "./progress.ts";
@@ -9,7 +10,7 @@ import { MARKER_REF, ReadLedger, ToolCache, isPointer, pointerText, repairMarker
 import { planRewrite, requestsLeft } from "./rewrite.ts";
 import { calibration, closestName, exactName, compactSpec, estimateTokens, fit, isOverflow, mechanicalNote, requestedFromError, windowFromError } from "./context.ts";
 export type ToolCall = { id: string; type?: "function"; function: { name: string; arguments: string } };
-export type Usage = { /** tokens another model spent inside this request (Claude's advisor), charged to that model */ side?: { model: string; prompt: number; completion: number; cached: number }[]; prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** set when the provider reported nothing and the harness estimated (about 4 characters per token) */ estimated?: boolean; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
+export type Usage = { /** tokens another model spent inside this request (Claude's advisor), charged to that model */ side?: { model: string; tier?: string; prompt: number; completion: number; cached: number }[]; prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** set when the provider reported nothing and the harness estimated (about 4 characters per token) */ estimated?: boolean; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
 export type Message = { role: "system" | "user" | "assistant" | "tool"; content: string | null; /** pictures attached to a user message (base64) */ images?: { mime: string; data: string }[]; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: Usage;
   /** Provider-native content blocks (e.g. Claude thinking blocks). Kept verbatim in history and handed back to the adapter. */
   raw?: unknown;
@@ -95,6 +96,8 @@ export type Event =
   | { kind: "nudge" | "loop" | "rejected" | "denied" | "budget" | "tools" | "aborted"; detail: string }
   /** A malformed tool call: returned to the model as an error, or (`fixed`) corrected in place and run. */
   | { kind: "repair"; detail: string; fixed?: boolean }
+  /** The recovery ladder acted: reflect, replan on the same model, escalate a tier, or step back down. */
+  | { kind: "ladder"; action: "reflect" | "replan" | "escalate" | "down"; from: string; to: string; reason: string; risk: number }
   /** A worker on another model failed and its work went back to the parent (`count`: failures of this role so far). */
   | { kind: "takeover"; role: string; model: string; reason: string; count: number }
   | { kind: "edit"; path: string; created: boolean; added: number; removed: number; diff: string; /** File content before the edit (null = it did not exist); lets a UI offer undo. */ before?: string | null }
@@ -143,7 +146,7 @@ export class Budget {
   /** Spending per model (by card id; "main" when the model has no card), with its tier and model time, so mixed-tier runs can report each tier. */
   byModel: Record<string, { tier?: string; calls: number; tokens: number; prompt: number; completion: number; cached: number; ms: number }> = {};
   add(m: Message, card?: ModelCard, ms = 0) {
-    for (const x of m.usage?.side ?? []) this.add({ role: "assistant", content: null, usage: { prompt_tokens: x.prompt, completion_tokens: x.completion, total_tokens: x.prompt + x.completion, cached_tokens: x.cached } }, { id: x.model, tier: "frontier" });   // the advisor's own tokens, as a call of its own
+    for (const x of m.usage?.side ?? []) this.add({ role: "assistant", content: null, usage: { prompt_tokens: x.prompt, completion_tokens: x.completion, total_tokens: x.prompt + x.completion, cached_tokens: x.cached } }, { id: x.model, tier: (x.tier ?? "frontier") as ModelCard["tier"] });   // another model's tokens inside this call (an advisor, a discarded cheap reply), as a call of its own
     this.parent?.add({ ...m, usage: m.usage && { ...m.usage, side: undefined } }, card, ms); this.tally(m, card, ms); this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.cachedTokens += m.usage?.cached_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
   private tally(m: Message, card: ModelCard | undefined, ms: number) {
     const k = card?.id ?? "main", e = (this.byModel[k] ??= { tier: card?.tier, calls: 0, tokens: 0, prompt: 0, completion: 0, cached: 0, ms: 0 }), u = m.usage;
@@ -239,6 +242,8 @@ export type Options = {
    * A failure must never fail the run (return undefined). See CodeAgentOptions.advisor for the packet the code agent sends.
    */
   advise?: (why: "start" | "stuck" | "finish", messages: Message[]) => Promise<string | undefined>;
+  /** The recovery ladder (src/ladder.ts): the model object that switches tiers; usually `model` itself. With it, risk is scored from the loop's events and the loop reflects, replans, escalates or steps down. */
+  ladder?: LadderModel;
   /** Keep the tool list the same for the whole session: tools found with tool_search are run through \`call_tool\` (or by name) instead of being added to the list, so the provider's prompt cache (or a local server's prefix cache) survives. Off by default (eval variant \`tools:stable\`). */
   stableTools?: boolean;
   /** Rescue tool calls the model wrote as text (`<tool_call>…`, `<function=…>`, a JSON object) when it sent no structured call. Default: the model card's `caps.textToolCalls`. Each rescue is a `repair` event. */
@@ -458,7 +463,8 @@ export function createHarness(o: Options) {
   };
   /** The tool list of a request. In stable mode (`stableTools`) the list never changes in a session: tool_search only describes what it finds and `call_tool` runs it, so loading a tool does not break the prompt cache. */
   const specsFor = (visible: Tool[], menu: Tool[]): ToolSpec[] => [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: reg.lean?.when() ? "Load more tools by keyword before using them. Not yet loaded: " + menu.map((t) => t.name).join(", ") : "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), ...(menu.length && o.stableTools ? [CALL_TOOL] : []), FINISH];
-  const emit = (e: Event) => o.onEvent?.(e);
+  let meter: RiskMeter | undefined;
+  const emit = (e: Event) => { meter?.observe(e); o.onEvent?.(e); };
   /** Run lifecycle hooks, report what they did, and fail open (a broken hook only warns). */
   const hook = async (event: Parameters<NonNullable<Options["hooks"]>["run"]>[0], payload: Record<string, unknown>) => {
     if (!o.hooks) return undefined;
@@ -504,7 +510,8 @@ export function createHarness(o: Options) {
     const seen = new Map<string, number>(), history: string[] = [];
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     world++;            // files may have changed since the last run
-    const advised = new Set<string>();
+    const advised = new Set<string>(), tried = new Set<string>(), lad = o.ladder;
+    meter = lad ? new RiskMeter() : undefined; lad?.moveTo(lad.start);   // every run (a task, a chat turn, an eval case) starts on the start tier
     const adviceFor = async (why: "start" | "stuck" | "finish") => { if (!o.advise || advised.has(why)) return undefined; advised.add(why); try { const a = (await o.advise(why, msgs))?.trim(); if (a) emit({ kind: "hook", event: "Advisor", detail: `${why}: ${a.slice(0, 160)}`, blocked: false }); return a || undefined; } catch { return undefined; } };
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, coverageRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? card.maxSteps ?? 30;
@@ -549,7 +556,7 @@ export function createHarness(o: Options) {
     for (let step = 0; step < max; step++) {
       lastStep = step;
       if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
-      for (const text of o.inbox?.() ?? []) { msgs.push({ role: "user", content: text }); emit({ kind: "steer", text }); }
+      for (const text of o.inbox?.() ?? []) { msgs.push({ role: "user", content: text }); emit({ kind: "steer", text }); if (lad && lad.index < lad.start) { const from = lad.label(); lad.moveTo(lad.start); emit({ kind: "ladder", action: "escalate", from, to: lad.label(), reason: "a new instruction from the user runs on the start tier or above", risk: meter?.score ?? 0 }); } }
       // Budget awareness (after BATS, arXiv 2511.17006: agents that can see their remaining budget spend it better). A few notes at fixed fractions, appended at the end so the cached prefix stays intact;
       // and when the cap is about to be hit, one last call without tools so the user gets what was found instead of a bare "budget exhausted".
       const frac = o.budget?.fraction ?? 0, over = o.budget?.exceeded();
@@ -831,6 +838,18 @@ export function createHarness(o: Options) {
             msgs.push({ role: "user", content: (adv ? `A stronger model looked at your work and advises:\n${clip(adv, 3000)}\n\n` : "") + `For ${progress.stale} turns nothing measurable has improved (${progress.summary()}). Stop and reflect before acting again: what do the latest results actually say, which assumption have you not checked, and what is a different approach? If you cannot make progress, call \`finish\` and explain what blocks you.` });
           } else if (stagnationWarned && progress.stale >= K + Math.ceil(K / 2)) { emit({ kind: "loop", detail: `stagnation: no measurable progress for ${progress.stale} turns` }); o.checkpoint?.(msgs); return end(`stopped: no measurable progress for ${progress.stale} turns (${progress.summary()})`, false, step + 1, "stuck"); }
         } }
+      // The recovery ladder: the cheapest useful next step, chosen from the risk accumulated over the run.
+      if (lad && meter) {
+        meter.endTurn();
+        const d = ladderDecide({ score: meter.score, cleanTurns: meter.cleanTurns, index: lad.index, start: lad.start, top: lad.top, step, tried, readOnlyStreak: readStreak });
+        if (d.action !== "none") {
+          const from = lad.label(), risk = meter.score;
+          if (d.action === "reflect") { tried.add("reflect"); msgs.push({ role: "user", content: `Several things went wrong in a row (${d.reason}). Stop and reflect before the next step: what do the last results actually say, which assumption have you not checked, and what is a different way to make progress?` }); }
+          else if (d.action === "replan") { tried.add("replan"); await roll(specs); }
+          else { await roll(specs); lad.moveTo(lad.index + (d.action === "escalate" ? 1 : -1)); tried.clear(); meter.reset(); }   // the outgoing tier writes the note (its cache is warm); the new tier starts from it, never from the transcript
+          emit({ kind: "ladder", action: d.action, from, to: lad.label(), reason: d.reason, risk });
+        }
+      }
       // No-progress detection: every call this turn failed. Reflect once, then stop instead of burning the budget.
       if (!off.has("stuck")) {
         failStreak = results.every(isErr) ? failStreak + 1 : 0;
