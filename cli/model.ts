@@ -15,9 +15,20 @@ export function createModel(cfg: Config, retries?: number, o: { cacheKey?: strin
 }
 function rawModel(cfg: Config, retries: number | undefined, o: { cacheKey?: string }): Model {
   return cfg.provider === "anthropic"
-    ? anthropic({ model: cfg.model, apiKey: cfg.apiKey, taskBudget: cfg.taskBudget, effort: cfg.effort && !["none", "minimal"].includes(cfg.effort) ? (cfg.effort as "low" | "medium" | "high" | "xhigh" | "max") : undefined, baseUrl: cfg.baseUrl === PROVIDERS.anthropic.baseUrl ? undefined : cfg.baseUrl })
+    ? anthropic({ model: cfg.model, apiKey: cfg.apiKey, taskBudget: cfg.taskBudget, advisor: nativeAdvisor(cfg), effort: cfg.effort && !["none", "minimal"].includes(cfg.effort) ? (cfg.effort as "low" | "medium" | "high" | "xhigh" | "max") : undefined, baseUrl: cfg.baseUrl === PROVIDERS.anthropic.baseUrl ? undefined : cfg.baseUrl })
     : openai({
       model: cfg.model, apiKey: cfg.apiKey, baseUrl: cfg.baseUrl, retries, api: cfg.api, promptCacheKey: o.cacheKey, compactAt: cfg.compactAt, externalRetry: true,
       effort: cfg.effort && effortsFor(cfg.model).includes(cfg.effort) ? cfg.effort : undefined,        // a value this model does not accept is never sent
     });
+}
+
+/**
+ * The native Claude advisor for this config: only for a Claude main model whose `models.advisor` is also a Claude model on the same key.
+ * (Any other pairing, such as a local executor with a Claude advisor, uses the generic advisor of the harness instead.)
+ */
+export function nativeAdvisor(cfg: Config): { model: string; maxUses?: number; maxTokens?: number; cap?: number; caching?: "5m" | "1h" } | undefined {
+  const ref = cfg.models?.advisor; if (!ref || cfg.provider !== "anthropic") return undefined;
+  const m = /^(?:anthropic[:/])?(claude-[\w.-]+)$/.exec(ref.trim()); if (!m) return undefined;
+  const a = cfg.advisor ?? {};
+  return { model: m[1], maxUses: a.maxUses ?? 3, maxTokens: a.maxTokens ?? 2048, cap: a.cap ?? 8, caching: a.caching };
 }

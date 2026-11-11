@@ -549,7 +549,7 @@ export function buildCommands(): Cmd[] {
       a.commit(["", ...formatMining(join(a.cwd, ".amness", "traces")).split("\n").map((l) => "  " + l)]);
     } },
     { name: "models", help: "use other models for some jobs: /models <role> <model|off>; a model is an id, provider:model or server:<name>[/model]", args: "[role model]", run: (a, arg) => {
-      const [role, id] = arg.split(/\s+/), roles: readonly string[] = ROLE_NAMES.filter((r) => r !== "advisor");
+      const [role, id] = arg.split(/\s+/), roles: readonly string[] = ROLE_NAMES;
       if (!role) { const m = a.cfg.models ?? {}, lab = a.wired?.labels ?? {}; return void a.commit(["", bold("  Models"), `  ${dim("main".padEnd(11))} ${a.cfg.server ? `server:${a.cfg.server}/` : `${a.cfg.provider}:`}${a.cfg.model}`, ...roles.map((r) => `  ${dim(r.padEnd(11))} ${(lab as Record<string, string | undefined>)[r] ?? ((m as Record<string, string | undefined>)[r] ? `${(m as Record<string, string>)[r]} ${dim("(same as main)")}` : dim("(main model)"))}`), `  ${dim("fallback".padEnd(11))} ${lab.fallback ?? a.cfg.fallback ?? dim("(none)")}`, dim("  e.g. /models explore server:lab   /models compact anthropic:claude-haiku-5-5   /models review off")]); }
       if (role !== "fallback" && !roles.includes(role)) return void a.say(`usage: /models ${roles.join("|")}|fallback <model | off>`, red);
       if (!id) return void a.say(`usage: /models ${role} <model | off>`, red);
@@ -558,7 +558,7 @@ export function buildCommands(): Cmd[] {
       a.saveConfig(); a.buildAgent(); a.say(`${role} → ${id === "off" ? "main model" : label}`, dim);
       if (id !== "off" && role !== "fallback") {
         // A model that `amness doctor` checked carries its verdict in its profile: say so when it did not qualify for this job.
-        const need = role === "cheap" ? "explore" : role, rid = resolveConfig(id, a.cfg).name;
+        const need = role === "cheap" ? "explore" : role === "advisor" ? "compact" : role, rid = resolveConfig(id, a.cfg).name;
         let q: { roles: string[] } | undefined; try { q = loadProfile(a.cwd, rid).profile.qualified; } catch { /* a broken profile is reported elsewhere */ }
         if (q && !q.roles.includes(need)) a.say(`  note: amness doctor did not qualify ${label} for ${need} (it qualified for: ${q.roles.join(", ") || "nothing"})`, yellow);
         else if (!q) a.say(`  tip: /doctor ${id} checks how this model uses tools`, dim);

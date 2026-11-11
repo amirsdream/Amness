@@ -9,7 +9,7 @@ import { MARKER_REF, ReadLedger, ToolCache, isPointer, pointerText, repairMarker
 import { planRewrite, requestsLeft } from "./rewrite.ts";
 import { calibration, closestName, exactName, compactSpec, estimateTokens, fit, isOverflow, mechanicalNote, requestedFromError, windowFromError } from "./context.ts";
 export type ToolCall = { id: string; type?: "function"; function: { name: string; arguments: string } };
-export type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** set when the provider reported nothing and the harness estimated (about 4 characters per token) */ estimated?: boolean; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
+export type Usage = { /** tokens another model spent inside this request (Claude's advisor), charged to that model */ side?: { model: string; prompt: number; completion: number; cached: number }[]; prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; /** part of the prompt served from the provider's cache */ cached_tokens?: number; /** set when the provider reported nothing and the harness estimated (about 4 characters per token) */ estimated?: boolean; /** part of the output spent on hidden reasoning */ reasoning_tokens?: number };
 export type Message = { role: "system" | "user" | "assistant" | "tool"; content: string | null; /** pictures attached to a user message (base64) */ images?: { mime: string; data: string }[]; tool_calls?: ToolCall[]; tool_call_id?: string; usage?: Usage;
   /** Provider-native content blocks (e.g. Claude thinking blocks). Kept verbatim in history and handed back to the adapter. */
   raw?: unknown;
@@ -27,7 +27,7 @@ export type Model = ((messages: Message[], tools: ToolSpec[], opts?: ModelOpts) 
   card?: ModelCard;
 };
 
-export type ToolCtx = { registry: Registry; step: number; /** id of this tool call (subagent events carry it as `parent` so a UI can nest them under their card) */ callId?: string; /** Aborted when the run is interrupted; long-running tools should honour it. */ signal?: AbortSignal; /** Publish a custom event (e.g. a live file diff) to `onEvent`. */ emit?: (e: Event) => void };
+export type ToolCtx = { registry: Registry; step: number; /** the conversation so far (read-only: tools must not change it) */ messages?: readonly Message[]; /** id of this tool call (subagent events carry it as `parent` so a UI can nest them under their card) */ callId?: string; /** Aborted when the run is interrupted; long-running tools should honour it. */ signal?: AbortSignal; /** Publish a custom event (e.g. a live file diff) to `onEvent`. */ emit?: (e: Event) => void };
 export type Tool<A = any> = {
   name: string; description: string; schema: Schema; run: (args: A, ctx: ToolCtx) => unknown | Promise<unknown>;
   /** Safe to reuse a stored result while nothing has changed (a pure read: file contents, search, listing). Not for tools whose answer moves on its own (process output, the web). */
@@ -142,7 +142,9 @@ export class Budget {
   }
   /** Spending per model (by card id; "main" when the model has no card), with its tier and model time, so mixed-tier runs can report each tier. */
   byModel: Record<string, { tier?: string; calls: number; tokens: number; prompt: number; completion: number; cached: number; ms: number }> = {};
-  add(m: Message, card?: ModelCard, ms = 0) { this.parent?.add(m, card, ms); this.tally(m, card, ms); this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.cachedTokens += m.usage?.cached_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
+  add(m: Message, card?: ModelCard, ms = 0) {
+    for (const x of m.usage?.side ?? []) this.add({ role: "assistant", content: null, usage: { prompt_tokens: x.prompt, completion_tokens: x.completion, total_tokens: x.prompt + x.completion, cached_tokens: x.cached } }, { id: x.model, tier: "frontier" });   // the advisor's own tokens, as a call of its own
+    this.parent?.add({ ...m, usage: m.usage && { ...m.usage, side: undefined } }, card, ms); this.tally(m, card, ms); this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.cachedTokens += m.usage?.cached_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
   private tally(m: Message, card: ModelCard | undefined, ms: number) {
     const k = card?.id ?? "main", e = (this.byModel[k] ??= { tier: card?.tier, calls: 0, tokens: 0, prompt: 0, completion: 0, cached: 0, ms: 0 }), u = m.usage;
     e.calls++; e.tokens += u?.total_tokens ?? (u?.prompt_tokens ?? 0) + (u?.completion_tokens ?? 0); e.prompt += u?.prompt_tokens ?? 0; e.completion += u?.completion_tokens ?? 0; e.cached += u?.cached_tokens ?? 0; e.ms += ms;
@@ -231,6 +233,12 @@ export type Options = {
   request?: Record<string, unknown>;
   /** Send the model's earlier thinking back with the history (OpenAI-compatible servers). Without it a thinking model works out the same analysis again at every step. */
   keepThinking?: boolean;
+  /**
+   * Ask a stronger model for advice at three moments, once each per run: before the first state-changing call ("start"), when the stuck or
+   * stagnation guard fires ("stuck"), and before a finish is accepted when no reviewer is on ("finish"). Return undefined to say nothing.
+   * A failure must never fail the run (return undefined). See CodeAgentOptions.advisor for the packet the code agent sends.
+   */
+  advise?: (why: "start" | "stuck" | "finish", messages: Message[]) => Promise<string | undefined>;
   /** Keep the tool list the same for the whole session: tools found with tool_search are run through \`call_tool\` (or by name) instead of being added to the list, so the provider's prompt cache (or a local server's prefix cache) survives. Off by default (eval variant \`tools:stable\`). */
   stableTools?: boolean;
   /** Rescue tool calls the model wrote as text (`<tool_call>…`, `<function=…>`, a JSON object) when it sent no structured call. Default: the model card's `caps.textToolCalls`. Each rescue is a `repair` event. */
@@ -496,6 +504,8 @@ export function createHarness(o: Options) {
     const seen = new Map<string, number>(), history: string[] = [];
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     world++;            // files may have changed since the last run
+    const advised = new Set<string>();
+    const adviceFor = async (why: "start" | "stuck" | "finish") => { if (!o.advise || advised.has(why)) return undefined; advised.add(why); try { const a = (await o.advise(why, msgs))?.trim(); if (a) emit({ kind: "hook", event: "Advisor", detail: `${why}: ${a.slice(0, 160)}`, blocked: false }); return a || undefined; } catch { return undefined; } };
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, coverageRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
     const max = o.maxSteps ?? card.maxSteps ?? 30;
     /** Rewrite old messages with `run` only where that pays (src/rewrite.ts). `force` is for when the window needs the room whatever it costs. Returns the characters saved. */
@@ -703,6 +713,7 @@ export function createHarness(o: Options) {
             const why = chk({ task, summary: String(args.summary ?? ""), messages: msgs });
             if (why && coverageRejects < 2) { coverageRejects++; emit({ kind: "rejected", detail: why }); return `REJECTED: ${clip(why, 3000)}`; }
           }
+          if (!o.reviewer && o.advise && !advised.has("finish")) { const a = await adviceFor("finish"); if (a && !/^\W*(ok|okay|lgtm|looks good|no (issues|concerns|problems))\b/i.test(a)) { emit({ kind: "rejected", detail: `advisor: ${a.slice(0, 200)}` }); return `NOT YET: before you finish, a stronger model reviewed your work and says:\n${clip(a, 3000)}\nFix what it found (or explain why it is wrong), then finish again.`; } }
           if (o.verify) emit({ kind: "phase", phase: "verify", step, max });
           const fb = feedback(await o.verify?.(args.summary));
           if (!fb && o.reviewer && !off.has("review")) {
@@ -721,6 +732,7 @@ export function createHarness(o: Options) {
         if (n > 2 && !off.has("loop")) { emit({ kind: "loop", detail: key.slice(0, 100) }); return `ERROR: you've made this exact call ${n} times. Do something different.`; }
         const cycle = off.has("loop") ? undefined : findCycle(history);
         if (cycle) { emit({ kind: "loop", detail: `cycle of ${cycle.length} calls: ${cycle.map((c) => c.slice(0, 40)).join(" → ")}` }); return `ERROR: you are going in circles (${cycle.map((c) => c.split("{")[0]).join(" → ")} → repeating, with the same arguments). Stop and think about why it is not working: read the last results again, check an assumption with a different tool, or change approach.`; }
+        if (t && !t.readOnly && o.advise && !advised.has("start")) { const a = await adviceFor("start"); if (a) return `PAUSED before your first change. A stronger model looked at the task and your work so far and advises:\n${clip(a, 3000)}\nTake this into account, then make your call again (or a better one).`; }
         const pre = await hook("PreToolUse", { tool: name, args });
         if (pre?.block) { emit({ kind: "denied", detail: `${name}: blocked by a hook` }); return `BLOCKED BY A HOOK: ${clip(pre.block, 2000)}\nDo not retry the same call; choose another approach or explain what you could not do.`; }
         if (pre?.args) { const e2 = validate(pre.args, t!.schema); if (e2.length) return `ERROR: a hook rewrote the arguments into something invalid (${e2.join("; ")})`; args = pre.args; }
@@ -758,7 +770,7 @@ export function createHarness(o: Options) {
         const ckey = tcache && t!.cacheable && !t!.untrusted ? canonicalCall(name, args) : undefined, stamp = ckey ? (() => { try { return t!.stamp?.(args) ?? ""; } catch { return "?"; } })() : "", hit = ckey ? tcache!.get(ckey, world, stamp) : undefined;
         if (ckey) { if (hit) { tcache!.hits++; if (stillAbove(msgs, hit.callId)) { tcache!.pointers++; tcache!.saved += hit.result.length; } } else tcache!.misses++; }
         const reuse = hit ? (stillAbove(msgs, hit.callId) ? pointerText(hit.callId) : hit.result) : undefined;
-        try { const r = reuse ?? await t!.run(args, { registry: reg, step, callId: c.id, emit: (ev) => { if (ev.kind === "edit") { epoch++; turnEdits.push({ path: ev.path, diff: ev.diff }); if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); let raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok";
+        try { const r = reuse ?? await t!.run(args, { registry: reg, step, messages: msgs, callId: c.id, emit: (ev) => { if (ev.kind === "edit") { epoch++; turnEdits.push({ path: ev.path, diff: ev.diff }); if (!off.has("ledger")) o.ledger?.onEdit(ev); } emit(ev); }, signal: sig() }); let raw = typeof r === "string" ? r : JSON.stringify(r) ?? "ok";
           // Lines of this file already above become markers first, then the rest is condensed: condensing first would cut the same middle out of every re-read, so lines the model never saw could never reach it.
           if (rledger && !reuse && !t!.untrusted && t!.overlap && t!.stamp && typeof args.path === "string" && !/^(ERROR|DENIED|\(lines|\[)/.test(raw)) {   // no stamp, no way to tell an edited file: never dedupe
             try { stampNow = t!.stamp(args); } catch { /* unreadable: send in full */ }
@@ -815,7 +827,8 @@ export function createHarness(o: Options) {
           const why = progress.observe(facts); if (why.length) stagnationWarned = false;
           if (progress.stale >= K && !stagnationWarned) {
             stagnationWarned = true; emit({ kind: "nudge", detail: "stagnation: nothing has measurably improved" });
-            msgs.push({ role: "user", content: `For ${progress.stale} turns nothing measurable has improved (${progress.summary()}). Stop and reflect before acting again: what do the latest results actually say, which assumption have you not checked, and what is a different approach? If you cannot make progress, call \`finish\` and explain what blocks you.` });
+            const adv = await adviceFor("stuck");
+            msgs.push({ role: "user", content: (adv ? `A stronger model looked at your work and advises:\n${clip(adv, 3000)}\n\n` : "") + `For ${progress.stale} turns nothing measurable has improved (${progress.summary()}). Stop and reflect before acting again: what do the latest results actually say, which assumption have you not checked, and what is a different approach? If you cannot make progress, call \`finish\` and explain what blocks you.` });
           } else if (stagnationWarned && progress.stale >= K + Math.ceil(K / 2)) { emit({ kind: "loop", detail: `stagnation: no measurable progress for ${progress.stale} turns` }); o.checkpoint?.(msgs); return end(`stopped: no measurable progress for ${progress.stale} turns (${progress.summary()})`, false, step + 1, "stuck"); }
         } }
       // No-progress detection: every call this turn failed. Reflect once, then stop instead of burning the budget.
@@ -823,7 +836,8 @@ export function createHarness(o: Options) {
         failStreak = results.every(isErr) ? failStreak + 1 : 0;
         if (failStreak >= 3 && !reflected) {
           reflected = true; emit({ kind: "nudge", detail: "stuck: reflecting" });
-          msgs.push({ role: "user", content: "Your last 3 turns all failed. Stop and reflect: what is the actual cause? Re-read the errors, check your assumptions with a read-only tool, and take a different approach, or call `finish` and explain what blocks you." });
+          const adv = await adviceFor("stuck");
+          msgs.push({ role: "user", content: (adv ? `A stronger model looked at your work and advises:\n${clip(adv, 3000)}\n\n` : "") + "Your last 3 turns all failed. Stop and reflect: what is the actual cause? Re-read the errors, check your assumptions with a read-only tool, and take a different approach, or call `finish` and explain what blocks you." });
         } else if (failStreak >= 6) { emit({ kind: "loop", detail: "no progress: 6 failing turns in a row" }); o.checkpoint?.(msgs); return end("stopped: no progress (6 failing turns in a row)", false, step + 1, "stuck"); }
       }
     }

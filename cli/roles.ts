@@ -14,6 +14,11 @@ export type RoleName = (typeof ROLE_NAMES)[number];
 
 /** The config a reference stands for, without creating a model. Throws a clear error, listing what is connected, when it names nothing. */
 export function resolveConfig(ref: string, cfg: Config): { config: Config; name: string; label: string } {
+  const out = resolveRaw(ref, cfg);
+  // A role model never carries roles of its own (no advisor tool, no fallback, no router on it); the main config itself is returned as is.
+  return out.config === cfg ? out : { ...out, config: { ...out.config, models: undefined, fallback: undefined, router: undefined } };
+}
+function resolveRaw(ref: string, cfg: Config): { config: Config; name: string; label: string } {
   const r = ref.trim();
   if (!r) throw new Error("empty model reference");
   const servers = cfg.servers ?? [];

@@ -6,7 +6,7 @@ import { CLAUDE_MODELS, OPENAI_MODELS } from "../config.ts";
 import { fetchModels } from "../models.ts";
 import { referenceOptions } from "../roles.ts";
 
-const ROLE_DETAIL: [string, string][] = [["explore", "read-only exploration subagent"], ["compact", "handoff notes when the context fills"], ["review", "independent reviewer"], ["cheap", "cheap tier for the router"], ["approve", "approval reviewer for risky calls"], ["quarantine", "reader of untrusted web and MCP content"]];
+const ROLE_DETAIL: [string, string][] = [["explore", "read-only exploration subagent"], ["compact", "handoff notes when the context fills"], ["review", "independent reviewer"], ["cheap", "cheap tier for the router"], ["approve", "approval reviewer for risky calls"], ["quarantine", "reader of untrusted web and MCP content"], ["advisor", "a stronger model to consult"]];
 import { listDrafts } from "../../src/index.ts";
 import { themeNames, THEMES } from "./themes.ts";
 import { settingsView, showValue } from "./settings.ts";

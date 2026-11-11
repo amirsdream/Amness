@@ -11,6 +11,7 @@ import { coverageCheck } from "./coverage.ts";
 import { auditCheck } from "./audit.ts";
 import { quarantineReader, type Quarantine } from "./quarantine.ts";
 import { PlanCache, planBlock, planFrom } from "./plancache.ts";
+import { mechanicalNote } from "./context.ts";
 import { createHarness, defineTool, clip, handoffSeed, isSmallTalk, makeHandoff, pinRules, Registry, type ToolCtx, type Approve, type Budget, type Event, type Guard, type Message, type Model, type Tool } from "./harness.ts";
 import { MemoryStore, isMemoryBackend, memoryTools, type MemoryBackend } from "./memory.ts";
 import type { Embedder } from "./embed.ts";
@@ -274,6 +275,12 @@ export function checkRanges(cwd: string, text: string): { ok: true; text: string
   return { ok: true, text: `ANSWER (from the explorer, unchecked): ${clip(answer, 1500)}\nFILES (checked: these ranges exist; read them yourself before you rely on the answer):\n${good.join("\n")}${bad.length ? `\n(dropped ${bad.length} range(s) that do not exist: ${bad.slice(0, 4).join(", ")})` : ""}` };
 }
 
+/** The generic advisor's instructions: a short plan or correction, no tools, no chatter. */
+const ADVISOR_SYSTEM = `You advise an engineer (another AI model) who is working on a coding task. You see a summary of the task and the work, not the full conversation, and you cannot run anything.
+Give the most useful advice in at most 250 words: the plan or the correction that matters most, the risk they are missing, and what to check. Be concrete (files, commands). If the work looks right and nothing important is missing, answer exactly: OK.`;
+/** Lines for an executor that carries Anthropic's native advisor tool (when to call it, following Anthropic's guidance). */
+const ADVISOR_NATIVE = `\nYou can consult a stronger model with the \`advisor\` tool. Call it: after you have looked around and before your first substantive change; when you are stuck or about to change approach; and once before you declare the task done. Do not call it for routine steps.`;
+const ADVISOR_GENERIC = `\nYou can ask a stronger model for advice with \`advise({question})\` (a few times per request): before a risky or large change, or when you are stuck. It sees a summary of your work, not your files.`;
 /** The explorer's prompt for a local-tier model: the same job in short, plain steps. */
 const EXPLORE_LOCAL = `You are a read-only code explorer. Answer the question in the brief.
 - Use grep first, then read_file on the lines that matter. About 10 tool calls at most.
@@ -290,6 +297,14 @@ export type CodeAgentOptions = {
   tier?: ModelTier;
   /** Only these tools (and finish) are offered. Default: the model card's profile `tools`. */
   toolAllow?: string[];
+  /**
+   * A stronger model to consult. "native": the main model carries Anthropic's advisor tool itself (only the prompt lines are added here).
+   * A Model: the generic advisor: an `advise` tool, plus a consultation before the first change, when stuck, and before finishing (once each).
+   * It gets a packet (task, rules, a note of the work so far, files changed, the diff, the last failure), never the transcript, and has no tools.
+   */
+  advisor?: Model | "native";
+  /** Most consultations of the generic advisor per request (default 4). */
+  advisorCap?: number;
   /** Keep the tool list fixed for the session (tool_search plus call_tool); see the harness option. */
   stableTools?: boolean;
   /** The explorer answers with exact file ranges (ANSWER / FILES lines) that are checked against the files; the parent reads them itself. Off by default (not measured). */
@@ -409,7 +424,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   // The model's tier, separate from its window: only a tier that was set (the option, or the model's profile) changes the prompt and tools; a guessed one does not, until measured.
   const localTier = () => (o.tier ?? (o.model.card?.tierFrom === "profile" ? o.model.card.tier : undefined)) === "local";
   const lean = () => small() || localTier();
-  const SYS = (chat: boolean | undefined) => applySystem(plugins, (small() ? COMPACT_SYSTEM : localTier() ? LOCAL_SYSTEM : chat ? CHAT_SYSTEM : CODE_SYSTEM) + "\n" + shellNote() + ` Working directory: ${slash(resolve(o.cwd))} (commands and relative paths start there).`, o.cwd);   // without it a model guesses (\`cd /home/user\`) and loses steps
+  const SYS = (chat: boolean | undefined) => applySystem(plugins, (small() ? COMPACT_SYSTEM : localTier() ? LOCAL_SYSTEM : chat ? CHAT_SYSTEM : CODE_SYSTEM) + (o.advisor === "native" ? ADVISOR_NATIVE : advisorModel ? ADVISOR_GENERIC : "") + "\n" + shellNote() + ` Working directory: ${slash(resolve(o.cwd))} (commands and relative paths start there).`, o.cwd);   // without it a model guesses (\`cd /home/user\`) and loses steps
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>(), created = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
@@ -544,6 +559,28 @@ export function createCodeAgent(o: CodeAgentOptions) {
     return { context: parts.length ? `[hook context]\n${parts.join("\n")}` : undefined };
   };
   const ledger = new Ledger({ testCommand: o.verify ?? o.check });
+  // The generic advisor: a packet, not the transcript; a few hundred words back; capped per request; a failure is silence, never an error.
+  let advisorUsed = 0;
+  const advisorModel = o.advisor && o.advisor !== "native" ? o.advisor : undefined;
+  const consult = async (why: string, msgs: Message[], question?: string): Promise<string | undefined> => {
+    if (!advisorModel || advisorUsed >= (o.advisorCap ?? 4)) return undefined;
+    advisorUsed++;
+    const userTexts = msgs.filter((m) => m.role === "user").map((m) => m.content ?? ""), task = userTexts[0] ?? "";
+    const audit = ledger.audit(task), lastFail = [...msgs].reverse().find((m) => m.role === "tool" && /^(ERROR|exit=[1-9])|\bFAIL|Error:/m.test(m.content ?? ""))?.content;
+    let diff = ""; try { diff = (await runShell("git diff --stat && git diff", o.cwd, 15_000)).replace(/^exit=0\n?/, ""); } catch { /* not a repository */ }
+    const packet = [`WHY YOU ARE ASKED: ${why}`, question && `QUESTION FROM THE ENGINEER: ${clip(question, 1500)}`, `TASK:\n${clip(task, 4000)}`,
+      pinRules(userTexts.slice(1)).length ? `RULES FROM THE USER:\n${pinRules(userTexts.slice(1)).join("\n")}` : "", `WORK SO FAR:\n${clip(mechanicalNote(msgs), 3000)}`,
+      `FILES CHANGED: ${audit.changed.join(", ") || "none"}${audit.notes.length ? `\n${audit.notes.join("\n")}` : ""}`, diff.trim() && `DIFF:\n${clip(diff, 6000)}`, lastFail && `LAST FAILURE:\n${clip(lastFail, 2000)}`].filter(Boolean).join("\n\n");
+    try {
+      const t0 = Date.now(), m = await advisorModel([{ role: "system", content: ADVISOR_SYSTEM }, { role: "user", content: clip(packet, 20_000) }], []);
+      o.budget?.add(m, advisorModel.card, Date.now() - t0);
+      return clip((m.content ?? "").trim(), 2500) || undefined;
+    } catch { return undefined; }
+  };
+  if (advisorModel) registry.add(defineTool<{ question: string }>({ name: "advise", readOnly: true,
+    description: "Ask a stronger model for advice (a plan, a correction, a risk you are missing). It sees a summary of the task and your work so far, not your files. A few times per request.",
+    schema: { type: "object", required: ["question"], properties: { question: { type: "string", description: "what you want advice on" } } },
+    run: async ({ question }, ctx) => (await consult("the engineer asked a question", [...(ctx.messages ?? [])], question)) ?? `(no advice: the advisor was not reachable, or it was already asked ${o.advisorCap ?? 4} times for this request)` }));
   const reviewModel: Model = (typeof o.review === "object" && o.review.model) || o.models?.review || o.model;
   let contract: string[] = [];
   /** Acceptance criteria for a task-like message (reviewer on): written first, shown to the builder, checked at the end. */
@@ -558,7 +595,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, toolCache, finishChecks: [coverageCheck, auditCheck(o.cwd, () => codeIndex, () => [...created])], compactSpecs: () => o.compactSchemas ?? lean(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, stableTools: o.stableTools, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? "auto" : o.toolChoice, thinkingBudget: o.thinkingBudget, request: o.request, keepThinking: o.keepThinking, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, stableTools: o.stableTools, advise: advisorModel ? (why, msgs) => consult(why === "start" ? "the engineer is about to make the first change" : why === "stuck" ? "the engineer seems stuck: recent steps failed or changed nothing measurable" : "the engineer is about to declare the task done", msgs) : undefined, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? "auto" : o.toolChoice, thinkingBudget: o.thinkingBudget, request: o.request, keepThinking: o.keepThinking, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 
@@ -580,7 +617,7 @@ ${note}
     get todos() { return todos; },
     /** One conversational turn: `history` is everything so far (empty to start); returns the updated transcript in `messages`. */
     async chat(history: Message[], userText: string, extra: { images?: { mime: string; data: string }[] } = {}) {
-      tasksThisRequest = 0;
+      tasksThisRequest = 0; advisorUsed = 0;
       task ||= userText;
       let text = userText;
       // Small talk ("hi", "thanks") goes as it is: the project guidance, skills and memory notes would only send the model looking for work.
@@ -604,7 +641,7 @@ ${note}
       return res;
     },
     async run(t: string, opts: RunOptions = {}) {
-      tasksThisRequest = 0;
+      tasksThisRequest = 0; advisorUsed = 0;
       task = t;
       let resume = opts.resume && o.checkpointFile && existsSync(o.checkpointFile) ? (JSON.parse(readFileSync(o.checkpointFile, "utf8")) as Message[]) : undefined;
       // resuming with a NEW instruction: add it as a follow-up rather than silently ignoring it
