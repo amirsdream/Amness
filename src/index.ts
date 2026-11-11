@@ -37,6 +37,7 @@ export * from "./worktree.ts";
 export * from "./agents.ts";
 export * from "./route.ts";
 export * from "./card.ts";
+export * from "./harnesscard.ts";
 export * from "./codeindex.ts";
 export * from "./replay.ts";
 export * from "./mining.ts";

@@ -80,9 +80,9 @@ export function routedModel(o: RouterOptions): Model {
     if (r.raw !== undefined && typeof r.raw === "object" && r.raw) owner.set(r.raw as object, d.tier);
     return r;
   };
-  // History may be rewritten only while the tier in use allows it (a local cheap tier does, Claude does not); the card is the strong model's (its window governs the session).
+  // History may be rewritten only while the tier in use allows it (a local cheap tier does, Claude does not); the card is the tier's in use, so spending is charged to the model that answered.
   Object.defineProperty(m, "appendOnly", { get: () => (current === "cheap" ? o.cheap.appendOnly : o.strong.appendOnly), enumerable: true, configurable: true });
-  Object.defineProperty(m, "card", { get: () => o.strong.card, enumerable: true, configurable: true });
+  Object.defineProperty(m, "card", { get: () => (current === "cheap" ? o.cheap.card : o.strong.card), enumerable: true, configurable: true });
   if (o.strong.api) m.api = o.strong.api;
   return m;
 }

@@ -13,7 +13,7 @@ const CONTRACT_SYSTEM = "You write acceptance criteria for a coding task before 
 export async function proposeContract(model: Model, task: string, budget?: Budget): Promise<string[]> {
   try {
     const m = await model([{ role: "system", content: CONTRACT_SYSTEM }, { role: "user", content: `Task:\n${clip(task, 6000)}` }], []);
-    budget?.add(m);
+    budget?.add(m, model.card);
     const j = parseLooseJson(m.content ?? "");
     return Array.isArray(j) ? j.filter((x): x is string => typeof x === "string" && x.trim().length > 3).map((x) => x.trim().slice(0, 300)).slice(0, 7) : [];
   } catch { return []; }

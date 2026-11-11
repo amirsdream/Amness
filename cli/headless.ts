@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const VERSION: string = (() => { for (const rel of ["../package.json", "../../package.json"]) { try { return JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8")).version; } catch { /* the built copy sits one folder deeper */ } } return "0.0.0"; })();
 import { join, resolve } from "node:path";
 import { cachedModel } from "../src/respcache.ts";
-import { quarantineReader, Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
+import { harnessCard, quarantineReader, Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, keyFor, loadConfig, ready, useServer, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
 import { wireModels, type Wired } from "./roles.ts";
@@ -167,7 +167,10 @@ export async function runHeadless(argv: string[]): Promise<number> {
   if (json) console.log(JSON.stringify({ kind: "config", version: VERSION, provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl ?? null, effort: cfg.effort ?? null, contextWindow: contextWindow ?? null,
     maxSteps: maxSteps ?? 40, maxTime: maxTime || null, guardsOff: off, guardsOn: GUARD_NAMES.filter((g) => !off.includes(g)), toolChoice: toolChoice ?? "auto", thinkingBudget: thinkingBudget ?? null, keepThinking: !!keepThinking, request: request ?? null,
     profile: { sources: profSources, stagnationTurns: prof.stagnationTurns ?? null, contextBudget: prof.contextBudget ?? null }, sandbox: sandbox ?? null, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
-    roles: wired.labels, tier: wired.model.card?.tier ?? null, router: !!cfg.router, subagents, verify: verify ?? null, memory: !noMemory, quarantine: !!(bool("--quarantine") || cfg.quarantine) }));
+    roles: wired.labels, tier: wired.model.card?.tier ?? null, router: !!cfg.router, subagents, verify: verify ?? null, memory: !noMemory, quarantine: !!(bool("--quarantine") || cfg.quarantine),
+    harnessCard: harnessCard({ version: VERSION, model: { provider: cfg.server ? `server:${cfg.server}` : cfg.provider, id: cfg.model, tier: wired.model.card?.tier, window: contextWindow ?? null, profileSources: profSources }, roles: wired.labels, router: !!cfg.router, fallback: wired.labels.fallback,
+      maxSteps: maxSteps ?? 40, maxTime: maxTime || null, maxTokens, off, toolChoice: toolChoice ?? "auto", thinkingBudget: thinkingBudget ?? null, keepThinking: !!keepThinking, subagents, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
+      sandbox: sandbox ?? null, sandboxEngine: cfg.sandboxEngine ?? null, quarantine: !!(bool("--quarantine") || cfg.quarantine), verify: verify ?? null, review: bool("--review"), approvalReviewer: bool("--approval-reviewer"), trace: !!tracer, memory: !noMemory }) }));
   const agent = createCodeAgent({
     subagents,
     dirs: addDirs.length ? () => addDirs : undefined,
@@ -180,7 +183,8 @@ export async function runHeadless(argv: string[]): Promise<number> {
   try {
     const r = await agent.run(task, { bundle, images });
     if (exportTo) { await agent.exportBundle(r, exportTo); console.error(`session bundle: ${exportTo}`); }
-    const out = { kind: "result", finished: r.finished, text: r.text, steps: r.steps, tokens: budget.tokens, stopped: stop.signal.aborted && r.stopped === "aborted" ? "time" : r.stopped, model: cfg.model, usage, cost: estimateCost(cfg.model, usage.prompt, usage.completion, usage.cached) };
+    const out = { kind: "result", finished: r.finished, text: r.text, steps: r.steps, tokens: budget.tokens, stopped: stop.signal.aborted && r.stopped === "aborted" ? "time" : r.stopped, model: cfg.model, usage, cost: estimateCost(cfg.model, usage.prompt, usage.completion, usage.cached),
+      ...(Object.keys(budget.byModel).length > 1 && { byModel: budget.byModel, byTier: budget.byTier }) };
     if (json) console.log(JSON.stringify(out)); else console.log(r.text);
     return r.finished ? 0 : 1;
   } catch (e) {

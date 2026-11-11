@@ -76,6 +76,7 @@ test("amness run --explore-model server:<name>: exploration runs on the saved se
     assert.equal(r.code, 0, r.err + r.out);
     const lines = r.out.trim().split("\n").map((l) => JSON.parse(l));
     assert.deepEqual(lines[0].roles, { explore: "server:lab/small" });
+    assert.deepEqual(lines[0].harnessCard.execution.roles, { explore: "server:lab/small" }); assert.equal(lines[0].harnessCard.tools.subagents, true); assert.equal(lines[0].tier, "local");
     assert.equal(lab.seen.length, 1, r.out.slice(0, 3000)); assert.equal(lab.seen[0].model, "small");
     assert.ok(main.seen.every((b) => b.model === "big"));
     const bad = await new Promise<number | null>((ok) => { const p = spawn("node", ["--no-warnings", "cli/amness.ts", "run", "--cwd", dir, "--explore-model", "server:nope", "x"], { env: { ...process.env, AMNESS_HOME: home } }); p.on("close", ok); });

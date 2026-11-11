@@ -38,7 +38,12 @@ In this page you will learn:
 {"kind":"result","finished":true,"text":"...","steps":8,"tokens":15200}
 ```
 
-The `config` line lets an evaluation record what really ran (the version, the guards on and off, the limits, the profile's values), not only what it asked for. It never contains a key.
+The `config` line lets an evaluation record what really ran (the version, the guards on and off, the limits, the profile's values), not only what it asked for. It never contains a key. It also has:
+
+- `roles`: the jobs that run on another model, for example `{"explore":"server:lab/qwen-35b"}`, and `tier` (`local`, `mid` or `frontier`) for the main model.
+- `harnessCard`: the same settings sorted into seven layers (`execution`, `tools`, `context`, `scheduling`, `observability`, `verification`, `governance`), with each guard shown as on or off. Report it next to a score: a study found that changing the harness moved results more than changing the model (arXiv 2605.23950).
+
+When a run used more than one model, the `result` line also has `byModel` and `byTier`: calls, tokens and seconds spent waiting, for each model and for each tier.
 
 The values are an example. The field `stopped` is missing when the run ends normally. When the run stops early, it is `budget`, `maxSteps`, `aborted`, `stuck` or `blocked`. If a model call fails, the last line is `{"kind":"error","message":"..."}`.
 

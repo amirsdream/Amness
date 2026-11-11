@@ -1,4 +1,5 @@
 // `amness eval`: compare harness variants on a task suite, with statistics you can act on.
+import { parseRoleSpec } from "../src/evals.ts";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -117,7 +118,7 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelN
     const out = resolve(val("--out") ?? join(".amness", "evals", new Date().toISOString().replace(/[:.]/g, "-") + ".json"));
     mkdirSync(join(out, ".."), { recursive: true });
     const spent = rowsCost(mname, rows);
-    writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), model: mname || undefined, ...provenance(cases), cliArgs: argv.filter((a, i) => !/key|token/i.test(a) && !/key|token/i.test(argv[i - 1] ?? "")), baseline: analysis.baseline, k: Math.min(3, trials), variants: names, trials, estimatedCost: spent ?? undefined, stopped, rows }, null, 1));
+    writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), model: mname || undefined, ...provenance(cases), cliArgs: argv.filter((a, i) => !/key|token/i.test(a) && !/key|token/i.test(argv[i - 1] ?? "")), baseline: analysis.baseline, k: Math.min(3, trials), variants: names, harness: names.map((n) => ({ variant: n, base: n.split("@")[0], roles: n.includes("@") ? parseRoleSpec(n.slice(n.indexOf("@") + 1)) : {} })), trials, estimatedCost: spent ?? undefined, stopped, rows }, null, 1));
     if (stopped) console.log(`\n${red("stopped early")}: ${stopped}. ${skipped} planned session${skipped === 1 ? "" : "s"} did not run, so the results below cover only the runs that finished.`);
     if (spent !== null) console.log(dim(`estimated spend: about $${spent.toFixed(3)} for ${rows.length} session${rows.length === 1 ? "" : "s"}${rows.length ? ` ($${(spent / rows.length).toFixed(4)} each)` : ""}  (an estimate from token counts, not an invoice)`));
     if (calib) {

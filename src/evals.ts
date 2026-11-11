@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createCodeAgent, runShell } from "./code.ts";
 import { routedModel } from "./router.ts";
+import type { Roles } from "./route.ts";
 import { Budget, type Event, type Guard, type Model, type Tool } from "./harness.ts";
 import type { Profile } from "./profiles.ts";
 import type { Plugin, VariantSpec } from "./plugins.ts";
@@ -30,11 +31,12 @@ export type Case = {
   /** Prepare the workspace beyond writing `files` (clone a repository, check out a commit, apply a patch). A failure excludes the case from the statistics instead of counting as a fail. */
   setup?: (dir: string) => Promise<void>;
 };
-export type Outcome = { text: string; steps: number; tokens: number; /** prompt tokens sent, and how many of them the provider served from its cache */ prompt?: number; cached?: number; /** how often each harness event fired during the run (nudge, loop, repair, rejected, trim, ...) */ events?: Record<string, number> };
+export type Outcome = { text: string; steps: number; tokens: number; /** prompt tokens sent, and how many of them the provider served from its cache */ prompt?: number; cached?: number; /** how often each harness event fired during the run (nudge, loop, repair, rejected, trim, ...) */ events?: Record<string, number>;
+  /** spending per model and per tier (local, mid, frontier), for runs that mix models; ms is time spent waiting for that model */ byModel?: Budget["byModel"]; byTier?: Budget["byTier"] };
 /** A number computed for every run, beyond pass/fail (cost, diff size, tool calls, anything): the report shows its mean per variant and the paired difference against the baseline. */
 export type MetricFn = (ctx: { case: Case; row: Row; outcome: Outcome; dir: string }) => number | Promise<number>;
 export type Variant = { name: string; run: (c: Case, dir: string) => Promise<Outcome> };
-export type Row = { /** set when the workspace could not be prepared: the run is listed in the exclusion ledger and left out of every statistic */ excluded?: string; case: string; variant: string; trial: number; pass: boolean; steps: number; tokens: number; ms: number; note?: string; /** values of the custom metrics for this run */ metrics?: Record<string, number>; events?: Record<string, number>; prompt?: number; cached?: number };
+export type Row = { /** set when the workspace could not be prepared: the run is listed in the exclusion ledger and left out of every statistic */ excluded?: string; case: string; variant: string; trial: number; pass: boolean; steps: number; tokens: number; ms: number; note?: string; /** values of the custom metrics for this run */ metrics?: Record<string, number>; events?: Record<string, number>; prompt?: number; cached?: number; byModel?: Outcome["byModel"]; byTier?: Outcome["byTier"] };
 
 /** Run every case x variant x trial in a fresh temp workspace and judge each result with the case's held-out check. `jobs` runs that many sessions at once. */
 export async function evaluate(cases: Case[], variants: Variant[], o: { metrics?: Record<string, MetricFn>; trials?: number; jobs?: number; onRow?: (r: Row) => void; baseline?: string; k?: number; seed?: number; /** Called before each run starts with the rows so far; a returned reason stops the rest (runs already started finish). Used for cost caps. */ stop?: (rows: Row[]) => string | undefined } = {}) {
@@ -47,7 +49,7 @@ export async function evaluate(cases: Case[], variants: Variant[], o: { metrics?
     if (c.setup) { try { await c.setup(dir); } catch (e) { row.excluded = (e as Error).message.slice(0, 300); row.ms = Date.now() - t0; rows.push(row); o.onRow?.(row); rmSync(dir, { recursive: true, force: true }); return; } }
     try {
       const out = await v.run(c, dir);
-      Object.assign(row, { steps: out.steps, tokens: out.tokens, events: out.events, prompt: out.prompt, cached: out.cached });
+      Object.assign(row, { steps: out.steps, tokens: out.tokens, events: out.events, prompt: out.prompt, cached: out.cached, ...(out.byModel && Object.keys(out.byModel).length > 1 && { byModel: out.byModel, byTier: out.byTier }) });
       const j = typeof c.check === "string" ? ((await runShell(c.check, dir, 120_000)).startsWith("exit=0") || "check command failed") : await c.check(dir, { text: out.text, steps: out.steps, tokens: out.tokens });
       row.pass = j === true; if (j !== true) row.note = String(j || "failed");
       if (o.metrics) { row.metrics = {}; for (const [name, fn] of Object.entries(o.metrics)) { try { const v = await fn({ case: c, row, outcome: out, dir }); if (Number.isFinite(v)) row.metrics[name] = v; } catch { /* a broken metric must not fail the run */ } } }
@@ -72,10 +74,18 @@ export function formatTable(s: { variant: string; runs: number; passRate: number
 }
 
 // ------------------------------------------------------------------------------------------------------------------ analysis
+/** Per tier, over a variant's runs: tokens per solved task (all runs' tokens on that tier over the passes, so failed runs count) and mean seconds waiting for that tier per run. */
+function tierStats(rows: Row[]): Record<string, { tokensPerSolved: number; secs: number; calls: number }> {
+  const passes = rows.filter((r) => r.pass).length, out: Record<string, { tokensPerSolved: number; secs: number; calls: number }> = {}, sum: Record<string, { tokens: number; ms: number; calls: number }> = {};
+  for (const r of rows) for (const [t, e] of Object.entries(r.byTier ?? {})) { const x = (sum[t] ??= { tokens: 0, ms: 0, calls: 0 }); x.tokens += e.tokens; x.ms += e.ms; x.calls += e.calls; }
+  for (const [t, x] of Object.entries(sum)) out[t] = { tokensPerSolved: passes ? x.tokens / passes : Infinity, secs: x.ms / 1000 / rows.length, calls: x.calls / rows.length };
+  return out;
+}
 export type VariantStats = {
   variant: string; tasks: number; runs: number; trials: number;
   passRate: number; ci: Interval; /** reliability: chance that k independent attempts at a task all pass */ passPowK: number; k: number;
   /** mean of each custom metric (per-task means, then the mean over tasks) */ metrics: Record<string, number>;
+  /** only for runs that mixed models: per tier (local, mid, frontier), tokens per solved task, seconds waiting for that tier and calls per run */ tiers?: Record<string, { tokensPerSolved: number; secs: number; calls: number }>;
   tokensPerSolved: number; /** share of prompt tokens served from the provider cache (NaN when the provider reports none) */ cacheHit: number; steps: number; secs: number; events: Record<string, number>; /** not beaten on both pass rate and cost by another variant */ pareto: boolean;
 };
 export type Comparison = {
@@ -106,7 +116,8 @@ export function analyze(allRows: Row[], o: { baseline?: string; k?: number; seed
     const r = rows.filter((x) => x.variant === v), per = of(v), ev: Record<string, number> = {};
     for (const x of r) for (const [e, n] of Object.entries(x.events ?? {})) ev[e] = (ev[e] ?? 0) + n / r.length;
     return { variant: v, tasks: tasks.length, runs: r.length, trials, passRate: frac(per), ci: bootstrap(per, frac, { seed: o.seed }), passPowK: mean(per.filter((x) => x.n >= k).map((x) => passPowK(x.pass, x.n, k))), k, metrics: Object.fromEntries(metricNames.map((m) => [m, mean(perTask(v, m).filter((x) => !Number.isNaN(x)))])),
-      tokensPerSolved: tps(per), cacheHit: (() => { const p = r.reduce((n, x) => n + (x.prompt ?? 0), 0); return p ? r.reduce((n, x) => n + (x.cached ?? 0), 0) / p : NaN; })(), steps: mean(r.map((x) => x.steps)), secs: mean(r.map((x) => x.ms)) / 1000, events: ev, pareto: true };
+      tokensPerSolved: tps(per), cacheHit: (() => { const p = r.reduce((n, x) => n + (x.prompt ?? 0), 0); return p ? r.reduce((n, x) => n + (x.cached ?? 0), 0) / p : NaN; })(), steps: mean(r.map((x) => x.steps)), secs: mean(r.map((x) => x.ms)) / 1000, events: ev, pareto: true,
+      ...(r.some((x) => x.byTier) && { tiers: tierStats(r) }) };
   });
   for (const a of stats) a.pareto = !stats.some((b) => b !== a && b.passRate >= a.passRate && b.tokensPerSolved <= a.tokensPerSolved && (b.passRate > a.passRate || b.tokensPerSolved < a.tokensPerSolved));
   const base = of(baseline), raw = variants.filter((v) => v !== baseline).map((v) => {
@@ -132,6 +143,10 @@ export function formatReport(a: Analysis): string {
   out.push(`${a.tasks} tasks × ${a.trials} trial${a.trials === 1 ? "" : "s"}; intervals are 95% bootstrap over tasks; baseline = ${a.baseline}`, "");
   out.push([pad("variant", 22), pad("pass [95% CI]", 20), pad(`pass^${a.stats[0]?.k ?? 1}`, 7), pad("tok/solved", 11), pad("cache", 6), pad("steps", 6), pad("secs", 6), "pareto"].join(" "));
   for (const s of a.stats) out.push([pad(s.variant, 22), pad(`${pct(s.passRate)} [${pct(s.ci.lo)}-${pct(s.ci.hi)}]`, 20), pad(pct(s.passPowK), 7), pad(kfmt(s.tokensPerSolved), 11), pad(pct(s.cacheHit), 6), pad(s.steps.toFixed(1), 6), pad(s.secs.toFixed(1), 6), s.pareto ? "●" : ""].join(" "));
+  if (a.stats.some((s) => s.tiers)) {
+    out.push("", "per tier (runs that mix models; failed runs' tokens count toward tok/solved)", [pad("variant", 22), pad("tier", 9), pad("tok/solved", 11), pad("secs/run", 9), "calls/run"].join(" "));
+    for (const s of a.stats) for (const [t, x] of Object.entries(s.tiers ?? {})) out.push([pad(s.variant, 22), pad(t, 9), pad(kfmt(x.tokensPerSolved), 11), pad(x.secs.toFixed(1), 9), x.calls.toFixed(1)].join(" "));
+  }
   if (a.comparisons.length) {
     out.push("", `vs ${a.baseline} (paired by task)`, [pad("variant", 22), pad("Δ pass [95% CI]", 26), pad("W/L/T", 9), pad("p (Holm)", 9), pad("Δ tok/solved", 13), "verdict"].join(" "));
     for (const c of a.comparisons) out.push([pad(c.variant, 22), pad(`${sgn(c.dPass)} [${sgn(c.ci.lo)}, ${sgn(c.ci.hi)}]`, 26), pad(`${c.wins}/${c.losses}/${c.ties}`, 9), pad(c.pAdj.toFixed(3), 9), pad((c.dTokensPerSolved >= 0 ? "+" : "") + kfmt(c.dTokensPerSolved), 13), c.verdict].join(" "));
@@ -153,7 +168,7 @@ export function formatReport(a: Analysis): string {
 const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "pin", "anchor", "audit", "argfix"];
 /** Features that are not loop guards but can be switched off the same way for ablations. */
 const FEATURES = ["index", "taint"] as const;
-export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · full+plugins (every loaded plugin active, needs --plugin) · prompt:<id> (a system prompt from .amness/prompts) · model:<id> (the full harness on another model) · chaos:tools|429|args|argshape|slow-tools (the full harness while things break on purpose) · strategy:<name> (the full harness with a loop strategy: plan-first, explore-then-act) · any variant a plugin defines · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
+export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · <variant>@role=model+role=model (the variant with jobs on other models: explore, compact, review, cheap; a model is an id, provider:model or server:<name>) · full+plugins (every loaded plugin active, needs --plugin) · prompt:<id> (a system prompt from .amness/prompts) · model:<id> (the full harness on another model) · chaos:tools|429|args|argshape|slow-tools (the full harness while things break on purpose) · strategy:<name> (the full harness with a loop strategy: plan-first, explore-then-act) · any variant a plugin defines · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
 
 /** Build a named variant of the code agent. Names: see VARIANT_HELP. */
 /** A plugin-defined variant: the plugin's variants are looked up by `name` or `plugin:name`. */
@@ -161,7 +176,7 @@ export function findPluginVariant(plugins: Plugin[] | undefined, name: string): 
   for (const p of plugins ?? []) for (const [k, spec] of Object.entries(p.variants ?? {})) if (name === k || name === `${p.name}:${k}`) return { spec, owner: p };
   return undefined;
 }
-function pluginVariant(model: Model, name: string, found: { spec: VariantSpec; owner: Plugin }, o: { maxSteps?: number; maxTokens?: number; plugins?: Plugin[] }): Variant {
+function pluginVariant(model: Model, name: string, found: { spec: VariantSpec; owner: Plugin }, o: { maxSteps?: number; maxTokens?: number; plugins?: Plugin[]; roles?: Roles }): Variant {
   const { spec, owner } = found;
   if (spec.build) return { name, run: (c, dir) => spec.build!(model, { maxSteps: o.maxSteps, maxTokens: o.maxTokens }).run(c, dir) };
   const active = [owner, ...(spec.plugins ?? []).map((n) => (o.plugins ?? []).find((p) => p.name === n)).filter((p): p is Plugin => !!p && p !== owner)];
@@ -171,16 +186,53 @@ function pluginVariant(model: Model, name: string, found: { spec: VariantSpec; o
     async run(c, dir) {
       const budget = new Budget({ maxTokens: o.maxTokens ?? 400_000 }), events: Record<string, number> = {};
       const r = await createCodeAgent({
-        model, cwd: dir, budget, maxSteps: spec.maxSteps ?? o.maxSteps ?? 30, off: spec.off ?? [], memory: false, plugins: active, tools: c.tools?.(dir),
+        model, models: o.roles, subagents: o.roles?.explore ? true : undefined, cwd: dir, budget, maxSteps: spec.maxSteps ?? o.maxSteps ?? 30, off: spec.off ?? [], memory: false, plugins: active, tools: c.tools?.(dir),
         verify: spec.verify === false ? undefined : c.verify, review: spec.review || undefined,
-        onEvent: (e: Event) => { if (e.kind !== "text" && e.kind !== "thinking" && e.kind !== "assistant" && e.kind !== "toolstart" && e.kind !== "phase") events[e.kind] = (events[e.kind] ?? 0) + 1; },
+        onEvent: countEvents(events),
       }).run(c.task);
-      return { text: r.text, steps: r.steps, tokens: budget.tokens, events, prompt: budget.promptTokens, cached: budget.cachedTokens };
+      return { text: r.text, steps: r.steps, tokens: budget.tokens, events, prompt: budget.promptTokens, cached: budget.cachedTokens, byModel: budget.byModel, byTier: budget.byTier };
     },
   };
 }
 
-export function harnessVariant(model: Model, name: string, o: { maxSteps?: number; maxTokens?: number; /** the cheaper model for the `full+route` variant */ cheap?: Model; /** models by id, for `model:<id>` variants */ modelFor?: (id: string) => Model; wrapTools?: (tools: Tool[]) => Tool[]; /** harness settings to run under (used by `amness tune`) */ profile?: Profile; /** loaded plugins: a variant name may refer to one of their `variants` (as `name` or `plugin:name`) */ plugins?: Plugin[]; /** the model's context window, and whether tool definitions are compacted (see CodeAgentOptions) */ contextWindow?: number; compactSchemas?: boolean; prices?: { strong: { input: number; output: number }; cheap: { input: number; output: number } } } = {}): Variant {
+/**
+ * Count harness events for a run, plus `reread`: a read of a file that was already read before the context was trimmed or reset.
+ * Compression can raise interaction cost before it lowers the pass rate (arXiv 2608.16370, read), so a context setting is judged on both.
+ */
+export function countEvents(events: Record<string, number>): (e: Event) => void {
+  const read = new Set<string>(); let squeezed = false;
+  return (e: Event) => {
+    if (e.kind === "text" || e.kind === "thinking" || e.kind === "assistant" || e.kind === "toolstart" || e.kind === "phase") return;
+    events[e.kind] = (events[e.kind] ?? 0) + 1;
+    if (e.kind === "rollover" || (e.kind === "trim" && !/condensed|already above/.test(e.what ?? ""))) squeezed = true;
+    if (e.kind === "tool" && /^(read_file|read)$/.test(e.name)) {
+      let p: unknown; try { p = JSON.parse(e.args).path; } catch { /* unreadable */ }
+      if (typeof p === "string") { if (squeezed && read.has(p)) events.reread = (events.reread ?? 0) + 1; read.add(p); }
+    }
+  };
+}
+
+/** Parse a role suffix: `explore=server:lab+review=anthropic:claude-haiku-5-5` → { explore: "server:lab", review: "anthropic:claude-haiku-5-5" }. */
+export function parseRoleSpec(spec: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of spec.split("+").map((x) => x.trim()).filter(Boolean)) {
+    const i = part.indexOf("="); if (i <= 0 || i === part.length - 1) throw new Error(`bad role "${part}": write role=model, for example explore=server:lab`);
+    const role = part.slice(0, i); if (!ROLE_KEYS.includes(role as (typeof ROLE_KEYS)[number])) throw new Error(`unknown role "${role}". Roles: ${ROLE_KEYS.join(", ")}`);
+    out[role] = part.slice(i + 1);
+  }
+  return out;
+}
+const ROLE_KEYS = ["explore", "compact", "review", "cheap"] as const;
+
+export function harnessVariant(model: Model, name: string, o: { maxSteps?: number; maxTokens?: number; /** the cheaper model for the `full+route` variant */ cheap?: Model; /** models by id, for `model:<id>` variants */ modelFor?: (id: string) => Model; wrapTools?: (tools: Tool[]) => Tool[]; /** harness settings to run under (used by `amness tune`) */ profile?: Profile; /** loaded plugins: a variant name may refer to one of their `variants` (as `name` or `plugin:name`) */ plugins?: Plugin[]; /** the model's context window, and whether tool definitions are compacted (see CodeAgentOptions) */ contextWindow?: number; compactSchemas?: boolean; prices?: { strong: { input: number; output: number }; cheap: { input: number; output: number } }; /** jobs on other models (from a `@role=model` suffix) */ roles?: Roles } = {}): Variant {
+  // `<variant>@role=model+role=model`: the same variant with some jobs on other models (any provider or saved server).
+  const at = name.indexOf("@");
+  if (at > 0) {
+    if (!o.modelFor) throw new Error(`variant ${name} needs models by reference (use amness eval, or pass modelFor)`);
+    const spec = parseRoleSpec(name.slice(at + 1)), roles: Roles = {};
+    for (const [r, ref] of Object.entries(spec)) roles[r as keyof Roles] = o.modelFor(ref);
+    return { ...harnessVariant(model, name.slice(0, at), { ...o, roles, cheap: roles.cheap ?? o.cheap }), name };
+  }
   const fromPlugin = findPluginVariant(o.plugins, name); if (fromPlugin) return pluginVariant(model, name, fromPlugin, o);
   const mid = /^model:(.+)$/.exec(name)?.[1]; if (mid) { if (!o.modelFor) throw new Error(`variant ${name} needs models by id (use amness eval, or pass modelFor)`); return { ...harnessVariant(o.modelFor(mid), "full", { ...o, modelFor: undefined }), name }; }
   const pid = /^prompt:(.+)$/.exec(name)?.[1]; if (pid) return pluginVariant(model, name, { spec: { verify: true }, owner: promptPlugin(process.cwd(), pid) }, o);
@@ -201,11 +253,11 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
       const off = name === "baseline" ? ALL_GUARDS : [...(dropped ? [dropped] : []), ...(o.profile?.off ?? [])];
       if (name === "full+route" && !o.cheap) throw new Error("the full+route variant needs a cheap model: pass --cheap-model <id>");
       const r = await createCodeAgent({
-        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, cwd: dir, budget, maxSteps: o.profile?.maxSteps ?? o.maxSteps ?? 30, toolChoice: o.profile?.toolChoice, stagnationTurns: o.profile?.stagnationTurns, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
+        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, models: o.roles, subagents: o.roles?.explore ? true : undefined, cwd: dir, budget, maxSteps: o.profile?.maxSteps ?? o.maxSteps ?? 30, toolChoice: o.profile?.toolChoice, stagnationTurns: o.profile?.stagnationTurns, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
         plugins: name === "full+plugins" ? o.plugins : undefined, wrapTools: o.wrapTools, contextWindow: o.contextWindow, compactSchemas: o.compactSchemas, verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined, review: name === "full+review" || undefined,
-        onEvent: (e: Event) => { if (e.kind !== "text" && e.kind !== "thinking" && e.kind !== "assistant" && e.kind !== "toolstart" && e.kind !== "phase") events[e.kind] = (events[e.kind] ?? 0) + 1; },
+        onEvent: countEvents(events),
       }).run(c.task);
-      return { text: r.text, steps: r.steps, tokens: budget.tokens, events, prompt: budget.promptTokens, cached: budget.cachedTokens };
+      return { text: r.text, steps: r.steps, tokens: budget.tokens, events, prompt: budget.promptTokens, cached: budget.cachedTokens, byModel: budget.byModel, byTier: budget.byTier };
     },
   };
 }

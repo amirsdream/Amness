@@ -133,7 +133,19 @@ export class Budget {
     const left = Number.isFinite(this.maxTokens) ? Math.max(0, this.maxTokens - this.effective) : Infinity;
     const b = new Budget({ maxTokens: Math.min(left * share, max), maxMs: Number.isFinite(this.maxMs) ? Math.max(1000, (this.maxMs - this.ms) * share) : undefined }); b.parent = this; return b;
   }
-  add(m: Message) { this.parent?.add(m); this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.cachedTokens += m.usage?.cached_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
+  /** Spending per model (by card id; "main" when the model has no card), with its tier and model time, so mixed-tier runs can report each tier. */
+  byModel: Record<string, { tier?: string; calls: number; tokens: number; prompt: number; completion: number; cached: number; ms: number }> = {};
+  add(m: Message, card?: ModelCard, ms = 0) { this.parent?.add(m, card, ms); this.tally(m, card, ms); this.calls++; this.promptTokens += m.usage?.prompt_tokens ?? 0; this.completionTokens += m.usage?.completion_tokens ?? 0; this.cachedTokens += m.usage?.cached_tokens ?? 0; this.tokens += m.usage?.total_tokens ?? (m.usage ? (m.usage.prompt_tokens ?? 0) + (m.usage.completion_tokens ?? 0) : 0); }
+  private tally(m: Message, card: ModelCard | undefined, ms: number) {
+    const k = card?.id ?? "main", e = (this.byModel[k] ??= { tier: card?.tier, calls: 0, tokens: 0, prompt: 0, completion: 0, cached: 0, ms: 0 }), u = m.usage;
+    e.calls++; e.tokens += u?.total_tokens ?? (u?.prompt_tokens ?? 0) + (u?.completion_tokens ?? 0); e.prompt += u?.prompt_tokens ?? 0; e.completion += u?.completion_tokens ?? 0; e.cached += u?.cached_tokens ?? 0; e.ms += ms;
+  }
+  /** The same numbers summed per tier (local, mid, frontier; "unknown" for models without a card). */
+  get byTier(): Record<string, { calls: number; tokens: number; prompt: number; completion: number; cached: number; ms: number }> {
+    const out: Record<string, { calls: number; tokens: number; prompt: number; completion: number; cached: number; ms: number }> = {};
+    for (const e of Object.values(this.byModel)) { const t = (out[e.tier ?? "unknown"] ??= { calls: 0, tokens: 0, prompt: 0, completion: 0, cached: 0, ms: 0 }); t.calls += e.calls; t.tokens += e.tokens; t.prompt += e.prompt; t.completion += e.completion; t.cached += e.cached; t.ms += e.ms; }
+    return out;
+  }
   /** What the cap is measured in: tokens, with cached input counted at a tenth (it costs about that much, and a long session re-reads its history every turn). */
   get effective() { return Math.max(0, this.tokens - 0.9 * this.cachedTokens); }
   get ms() { return Date.now() - this.t0; }
@@ -266,8 +278,8 @@ export function handoffSeed(msgs: Message[], note: string, pin: ((userTexts: str
 
 /** Ask the model to summarise the transcript so far. Tool specs are passed because some APIs require them when history contains tool calls. */
 export async function makeHandoff(model: Model, specs: ToolSpec[], msgs: Message[], budget?: Budget): Promise<string> {
-  const m = await model([...msgs, { role: "user", content: HANDOFF_PROMPT }], specs);
-  budget?.add(m);
+  const t0 = Date.now(), m = await model([...msgs, { role: "user", content: HANDOFF_PROMPT }], specs);
+  budget?.add(m, model.card, Date.now() - t0);
   return (m.content ?? "").trim() || "(no handoff was produced; inspect the workspace to see what has been done)";
 }
 const HANDOFF_MARK = "\n\n## Handoff from your earlier context";
@@ -442,7 +454,7 @@ export function createHarness(o: Options) {
   async function finalReport(msgs: Message[], why: string): Promise<string> {
     try {
       const m = await o.model([...msgs, { role: "user", content: `Stop: ${why}. You cannot use any more tools. In plain text, give the user: what you found or did, the current state of the work, and what is left to do. Be brief.` }], [], { signal: sig() });
-      const sent = [...msgs]; o.budget?.add(ensureUsage(m, sent)); return (m.content ?? "").trim();
+      const sent = [...msgs]; o.budget?.add(ensureUsage(m, sent), o.model.card); return (m.content ?? "").trim();
     } catch { return ""; }
   }
   /**
@@ -453,7 +465,7 @@ export function createHarness(o: Options) {
     const visible = reg.visible({ step: lastStep, messages: msgs }), menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)) : [];
     const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: reg.lean?.when() ? "Load more tools by keyword before using them. Not yet loaded: " + menu.map((t) => t.name).join(", ") : "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), FINISH];
     const m = await o.model(msgs, specs, { signal: opts.signal, maxTokens: 16 });
-    o.budget?.add(m);
+    o.budget?.add(m, o.model.card);
     return { prompt: m.usage?.prompt_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0 };
   }
 
@@ -568,9 +580,9 @@ export function createHarness(o: Options) {
         allowNow = pre?.tools ? new Set(pre.tools) : undefined; thenNext = pre?.then; }
       emit({ kind: "phase", phase: "model", step, max });
       let m!: Message;
-      let streamed = false;
+      let streamed = false, callStart = Date.now();
       for (;;) {
-        try { m = await o.model(msgs, specs, { signal: sig(), ...(o.toolChoice && specs.length && { toolChoice: o.toolChoice }), ...(o.thinkingBudget !== undefined && { thinkingBudget: o.thinkingBudget }), ...(o.keepThinking && { keepThinking: true }), ...(o.request && { request: o.request }), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); recoveries = 0; lastModelAt = Date.now(); sinceRewrite++; break; }
+        try { callStart = Date.now(); m = await o.model(msgs, specs, { signal: sig(), ...(o.toolChoice && specs.length && { toolChoice: o.toolChoice }), ...(o.thinkingBudget !== undefined && { thinkingBudget: o.thinkingBudget }), ...(o.keepThinking && { keepThinking: true }), ...(o.request && { request: o.request }), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); recoveries = 0; lastModelAt = Date.now(); sinceRewrite++; break; }
         catch (e) {
           if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
           // The provider says the request does not fit. Learn the window from the message (or guess it from our own estimate), shrink harder, and ask again.
@@ -585,7 +597,7 @@ export function createHarness(o: Options) {
         }
       }
       ensureUsage(m, msgs); void hook("PostModel", { step, text: (m.content ?? "").slice(0, 4000), tools: (m.tool_calls ?? []).map((c) => c.function.name), usage: m.usage });
-      o.budget?.add(m); tokens += m.usage?.total_tokens ?? 0; lastCost = Math.max(0, (m.usage?.total_tokens ?? 0) - 0.9 * (m.usage?.cached_tokens ?? 0)); lastPrompt = m.usage?.prompt_tokens ?? 0;
+      o.budget?.add(m, o.model.card, Date.now() - callStart); tokens += m.usage?.total_tokens ?? 0; lastCost = Math.max(0, (m.usage?.total_tokens ?? 0) - 0.9 * (m.usage?.cached_tokens ?? 0)); lastPrompt = m.usage?.prompt_tokens ?? 0;
       if (win && !m.usage?.estimated && lastPrompt > 0) calib = calibration(lastPrompt, estimateTokens(msgs, specs));      // `msgs` is exactly what was sent: learn how far our estimate is from the provider's count
       if (o.record) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
       emit({ kind: "turn", step, tokens, prompt: m.usage?.prompt_tokens ?? 0, completion: m.usage?.completion_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0, reasoning: m.usage?.reasoning_tokens ?? 0 });
@@ -771,7 +783,7 @@ export function createHarness(o: Options) {
     let last = "";
     for (let i = 0; i < attempts; i++) {
       const m = await o.model(msgs, []);
-      o.budget?.add(m);
+      o.budget?.add(m, o.model.card);
       const text = m.content ?? "";
       msgs.push({ role: "assistant", content: text });
       try {

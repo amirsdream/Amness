@@ -122,7 +122,13 @@ Single variants:
 - `full+route`: exploration on a cheaper model. It needs `--cheap-model <id>`.
 - `full+plugins`: every plugin from `--plugin` is active. See [Plugins](plugins.md).
 - `no-gate`: guards, but no verify gate.
-- `full-<guard>`: `full` with one guard or feature off. The names are `nudge`, `loop`, `compact`, `stuck`, `wrapup`, `condense`, `schedule`, `ledger`, `stagnation`, `index` and `taint`.
+- `full-<guard>`: `full` with one guard or feature off. The names are `nudge`, `loop`, `compact`, `readdelta`, `stuck`, `wrapup`, `condense`, `schedule`, `ledger`, `stagnation`, `pin`, `anchor`, `audit`, `argfix`, `index` and `taint`.
+- `<variant>@<job>=<model>+<job>=<model>`: the variant with some jobs on other models. The jobs are `explore`, `compact`, `review` and `cheap`. A model is an id on the main provider, `provider:model` or `server:<name>`. For example `full@explore=server:lab` and `full+review@review=anthropic:claude-haiku-5-5`. The explorer is offered to the agent when `explore` is set.
+- `chaos:argshape`: the full harness while the model's tool calls arrive in shapes weak models send (wrapped, as a string, a trailing comma, numbers as strings). Compare it with `full` and with `full-argfix`.
+
+**Runs that mix models.** For a variant with jobs on other models, the report adds a table per tier: tokens per solved task (the tokens of failed runs count too), seconds per run spent waiting for that tier, and calls per run. Each row in the result file has `byModel` and `byTier`. The result file also lists each variant's jobs (`harness`). Count the main model's tokens too: in one report, delegating to local workers cost more of the frontier model per verified success than doing the work directly (arXiv 2610.34241, abstract only).
+
+**Re-reads.** The `events` of each run count `reread`: a read of a file that was already read before the context was trimmed or reset. A context setting can keep the pass rate and still make the agent read files again (arXiv 2608.16370), so compare both.
 
 ### Ablations
 
