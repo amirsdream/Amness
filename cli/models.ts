@@ -43,6 +43,10 @@ export async function detectWindow(p: ModelProbe & { model: string }, fetchImpl:
   const props = await get(`${root}/props`);                                                // llama.cpp
   const fromProps = num(props?.default_generation_settings?.n_ctx) ?? num(props?.n_ctx); if (fromProps) return fromProps;
   if (p.provider !== "ollama" && !/:11434$/.test(root)) return undefined;                  // the last probe is a POST: only send it to Ollama
+  // Ollama: the context the server LOADED the model with (the running-models list) is what it really uses; it cuts a longer prompt without an error.
+  // The model's maximum from /api/show is used only when the model is not loaded yet. The loaded context depends on VRAM unless OLLAMA_CONTEXT_LENGTH is set.
+  const ps = await get(`${root}/api/ps`), running = (ps?.models ?? []).find((m: any) => m?.name === p.model || m?.model === p.model || String(m?.name ?? "").replace(/:latest$/, "") === p.model);
+  const loaded = num(running?.context_length) ?? num(running?.num_ctx); if (loaded) return loaded;
   const show = await get(`${root}/api/show`, { method: "POST", body: JSON.stringify({ model: p.model }), headers: { ...headers, "content-type": "application/json" } });   // Ollama
   const info = show?.model_info ?? {}, key = Object.keys(info).find((k) => k.endsWith(".context_length")); return num(key && info[key]);
 }

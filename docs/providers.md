@@ -114,8 +114,16 @@ The flags `--provider`, `--model`, `--base-url`, `--effort` and `--api` are read
    ollama pull qwen2.5-coder:7b
    ```
 
-2. Choose Ollama in Amness. Use `amness settings`, or `/provider` in the chat, and pick "Ollama (local)". The base URL defaults to `http://localhost:11434/v1`.
-3. Check the model with `/status`.
+2. Give the model a large enough context. Ollama picks the context length from your graphics memory when you do not set it: 4k tokens under 24 GiB, 32k from 24 to 48 GiB, and 256k above. For agents and coding tools Ollama recommends at least 64,000 ([Ollama docs](https://docs.ollama.com/context-length)). Set it on the server before it starts:
+
+   ```bash
+   OLLAMA_CONTEXT_LENGTH=65536 ollama serve
+   ```
+
+3. Choose Ollama in Amness. Use `amness settings`, or `/provider` in the chat, and pick "Ollama (local)". The base URL defaults to `http://localhost:11434/v1`.
+4. Check the model with `/status`.
+
+**When Ollama cuts the prompt.** Ollama may cut a prompt that is longer than the context it loaded, without an error, so the model answers from part of the conversation. Amness reads the loaded context from Ollama's running-models list when the model is loaded (and the model's maximum only when it is not). During a run it also watches for the sign of a cut: the server reports the same prompt size twice while the conversation keeps growing. Then it works inside that size from now on, and tells you once how to fix it (raise the server's context length). Tested with a simulated server; not seen yet on a real Ollama.
 
 For a one-shot run you can use flags. In the chat, the flags `--provider` and `--model` are not read (see above), so use `/provider` there.
 

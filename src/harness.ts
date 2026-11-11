@@ -495,6 +495,7 @@ export function createHarness(o: Options) {
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     /** Tokens a request may use: the window minus room for the reply. */
+    let ceiling: { reported: number; est: number } | undefined, truncWarned = false;
     const usableOf = (n: number) => { const w = Math.min(n, 150_000); return w - Math.min(Math.round(w * 0.15), 2048); };
     const usable = () => usableOf(win ?? 0);   // a 1M window is not a reason to carry 800k tokens: long contexts cost money and blur the model
     /** Size cap for one tool result entering the transcript: a small window cannot afford 6000 characters per call. */
@@ -598,7 +599,17 @@ export function createHarness(o: Options) {
       }
       ensureUsage(m, msgs); void hook("PostModel", { step, text: (m.content ?? "").slice(0, 4000), tools: (m.tool_calls ?? []).map((c) => c.function.name), usage: m.usage });
       o.budget?.add(m, o.model.card, Date.now() - callStart); tokens += m.usage?.total_tokens ?? 0; lastCost = Math.max(0, (m.usage?.total_tokens ?? 0) - 0.9 * (m.usage?.cached_tokens ?? 0)); lastPrompt = m.usage?.prompt_tokens ?? 0;
-      if (win && !m.usage?.estimated && lastPrompt > 0) calib = calibration(lastPrompt, estimateTokens(msgs, specs));      // `msgs` is exactly what was sent: learn how far our estimate is from the provider's count
+      // Silent truncation (Ollama cuts a long prompt to the context it loaded, without an error): the reported prompt stops growing while what we send keeps growing.
+      // One low count is not enough (a server may report only the uncached part), so it takes the same count twice while our estimate grew by more than 10%.
+      const sentEst = estimateTokens(msgs, specs), low = !m.usage?.estimated && lastPrompt >= 1500 && sentEst > 3000 && lastPrompt < 0.6 * sentEst && !/^(anthropic|openai|openrouter)$/.test(o.model.card?.provider ?? "");
+      if (low && ceiling && Math.abs(lastPrompt - ceiling.reported) <= 0.03 * ceiling.reported && sentEst > ceiling.est * 1.1 && !off.has("compact") && !truncWarned) {
+        truncWarned = true; const was = win; win = Math.round(lastPrompt * 1.05); calib = 1;
+        if (win !== was) o.onWindow?.(win, o.model.card?.id);
+        const detail = `the server answered from only ~${lastPrompt} tokens of a ~${Math.round(sentEst)}-token prompt twice: it is cutting the prompt without an error. Working inside ${win} tokens from now on. Fix: raise the server's context length (Ollama: OLLAMA_CONTEXT_LENGTH or num_ctx; it recommends at least 64000 for agents).`;
+        emit({ kind: "trim", saved: 0, what: `silent truncation: ${detail}` }); emit({ kind: "hook", event: "Window", detail, blocked: false });
+      }
+      ceiling = low ? { reported: lastPrompt, est: sentEst } : undefined;
+      if (win && !m.usage?.estimated && lastPrompt > 0 && !low) calib = calibration(lastPrompt, sentEst);      // `msgs` is exactly what was sent: learn how far our estimate is from the provider's count
       if (o.record) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
       emit({ kind: "turn", step, tokens, prompt: m.usage?.prompt_tokens ?? 0, completion: m.usage?.completion_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0, reasoning: m.usage?.reasoning_tokens ?? 0 });
       if (m.content?.trim()) emit({ kind: "assistant", text: m.content, streamed });
