@@ -167,6 +167,10 @@ export const TUNE_HELP = `usage: amness tune [flags]
   --seed <n>           seed for the split and the intervals
   --profile-model <p>  the model name or pattern to write the profile for (default: the configured model)
   --out <file>         where to write the profile (default .amness/profile.json)
+  --text-tool-calls    also try taking tool calls the model writes as text (profile textToolCalls)
+  --tier-local         also try the local tier: short prompt, lean tools (profile tier)
+  --prompts <id,...>   also try these system prompts from .amness/prompts (profile prompt)
+  --tools <name,...>   the tool set to start from; also try it with each tool left out, one at a time (profile tools)
   --yes                skip the cost confirmation`;
 
 export async function runTune(argv: string[], deps: { model: () => Model; modelName: string; maxTokens: number; confirm: (q: string) => Promise<boolean>; modelFor?: (spec: string) => { model: Model; name: string } }): Promise<number> {
@@ -176,13 +180,14 @@ export async function runTune(argv: string[], deps: { model: () => Model; modelN
     const cases = val("--cases") ? loadCases(resolve(val("--cases")!)) : builtinCases, model = deps.model(), maxTokens = Number(val("--max-tokens") ?? deps.maxTokens), maxSteps = Number(val("--max-steps") ?? 30);
     const guards = val("--guards")?.split(",").map((s) => s.trim()) as any, stag = val("--stagnation")?.split(",").map(Number), trials = Math.max(1, Number(val("--trials") ?? 2));
     const steps = val("--steps")?.split(",").map(Number).filter((x) => x > 0), toolChoice = argv.includes("--tool-choice");
+    const textToolCalls = argv.includes("--text-tool-calls"), tierLocal = argv.includes("--tier-local"), prompts = val("--prompts")?.split(",").map((s) => s.trim()).filter(Boolean), toolSet = val("--tools")?.split(",").map((s) => s.trim()).filter(Boolean);
     const specs = val("--models")?.split(",").map((s) => s.trim()).filter(Boolean) ?? [];
     if (specs.length && !deps.modelFor) throw new Error("--models is not available here");
     const models = specs.length ? specs.map((s) => deps.modelFor!(s)) : [{ model, name: deps.modelName }];
-    const n = ((guards?.length ?? 13) + (stag?.length ?? 0) + (steps?.length ?? 0) + (toolChoice ? 1 : 0)) * models.length, runs = Math.round(cases.length * 0.66) * 2 * trials * n + Math.max(1, Math.round(cases.length * 0.34)) * 2 * trials * models.length;
+    const n = ((guards?.length ?? 16) + (stag?.length ?? 0) + (steps?.length ?? 0) + (toolChoice ? 1 : 0) + (textToolCalls ? 1 : 0) + (tierLocal ? 1 : 0) + (prompts?.length ?? 0) + (toolSet?.length ?? 0)) * models.length, runs = Math.round(cases.length * 0.66) * 2 * trials * n + Math.max(1, Math.round(cases.length * 0.34)) * 2 * trials * models.length;
     console.log(`${bold("plan")}  up to ${runs} agent sessions (${cases.length} tasks, ${n} candidate changes, ${trials} trial(s)), up to ${maxTokens.toLocaleString()} tokens each`);
     if (!argv.includes("--yes") && !(await deps.confirm(`This calls your model up to ${(runs * maxTokens).toLocaleString()} tokens in the worst case. Continue?`))) return 1;
-    const { results, shared } = await tuneModels({ cases, trials, guards, stagnationTurns: stag, maxSteps: steps, toolChoice, jobs: Number(val("--jobs") ?? 1), seed: val("--seed") ? Number(val("--seed")) : undefined,
+    const { results, shared } = await tuneModels({ cases, trials, guards, stagnationTurns: stag, maxSteps: steps, toolChoice, textToolCalls, tierLocal, prompts, toolSet, jobs: Number(val("--jobs") ?? 1), seed: val("--seed") ? Number(val("--seed")) : undefined,
       models: models.map((m) => ({ name: m.name, makeVariant: (profile, name) => ({ ...harnessVariant(m.model, "full", { maxTokens, maxSteps, profile }), name }) })),
       onStep: (s) => console.log(`  ${s.model && models.length > 1 ? dim(`[${s.model}] `) : ""}${s.accepted ? green("keep") : red("drop")} ${s.stage === "heldout" ? "[held-out] " : ""}${s.change}  ${dim(s.why)}${s.predicted ? dim(` · expected ${s.predicted}: ${s.held ? "yes" : "no"}`) : ""}`) });
     const first = Object.values(results)[0];

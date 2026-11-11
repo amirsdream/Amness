@@ -305,6 +305,10 @@ export type CodeAgentOptions = {
    * It gets a packet (task, rules, a note of the work so far, files changed, the diff, the last failure), never the transcript, and has no tools.
    */
   advisor?: Model | "native";
+  /** Agents defined in code, next to the ones in .amness/agents (a file with the same name wins). Used by the edit:delegate experiment. */
+  extraAgents?: AgentDef[];
+  /** Take tool calls written as text (see the harness option). Default: the model card's `caps.textToolCalls`. */
+  textToolCalls?: boolean;
   /** The recovery ladder (see the harness option); its model is usually also `model`. */
   ladder?: LadderModel;
   /** Most consultations of the generic advisor per request (default 4). */
@@ -437,7 +441,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const sbx = o.sandbox, sandboxMode: () => SandboxMode = typeof sbx === "function" ? sbx : () => sbx ?? "off";
   let agentList: AgentDef[] = []; const agentWarnings: string[] = []; let patchCount = 0;
   const agentOf = (name?: string) => (name && name !== "explore" ? agentList.find((a) => a.name === name) : undefined);
-  const rescanAgents = () => { if (o.agents === false) return; const r = loadAgents(o.cwd); agentList = r.agents; agentWarnings.splice(0, agentWarnings.length, ...r.warnings); };
+  const rescanAgents = () => { if (o.agents === false) return; const r = loadAgents(o.cwd); agentList = [...r.agents, ...(o.extraAgents ?? []).filter((x) => !r.agents.some((a) => a.name === x.name))]; agentWarnings.splice(0, agentWarnings.length, ...r.warnings); };
   rescanAgents();
   let tasksThisRequest = 0; const MAX_SUBAGENTS_PER_REQUEST = 6;
   let taskSlots = 3; const taskWaiters: (() => void)[] = [];
@@ -532,7 +536,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
           if (d.model) { const k = d.model as keyof Roles; try { agentModel = o.agentModels?.[d.model] ?? o.models?.[k] ?? o.modelById?.(d.model) ?? o.model; } catch (e) { return `ERROR: agent ${d.name} names model "${d.model}", which cannot be used: ${(e as Error).message}`; } }
           let wt: Worktree | undefined; if (isolated) { if (!(await isRepo(o.cwd))) return "ERROR: isolation: worktree needs a git repository with at least one commit"; wt = await createWorktree(o.cwd); }
           try {
-            const base = codeTools(wt?.dir ?? o.cwd, { mode: plan ? () => "plan" : (mode ?? (() => "default")), sandbox: sandboxMode, dirs: o.dirs, outside: o.outside }).filter((t) => names.includes(t.name));
+            const base = codeTools(wt?.dir ?? o.cwd, { mode: plan ? () => "plan" : mode, sandbox: sandboxMode, dirs: o.dirs, outside: o.outside }).filter((t) => names.includes(t.name));
             if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList, onSkillLoad));
             const r = await createHarness({
               model: agentModel, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
@@ -596,7 +600,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   let task = "";
   const h = createHarness({
     model: o.model, toolCache, finishChecks: [coverageCheck, auditCheck(o.cwd, () => codeIndex, () => [...created])], compactSpecs: () => o.compactSchemas ?? lean(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
-    budget: o.budget, stableTools: o.stableTools, ladder: o.ladder, hollow: (name, args) => hollowWhy(o.cwd, name, args), reread: localTier() && !o.review, advise: advisorModel ? (why, msgs) => consult(why === "start" ? "the engineer is about to make the first change" : why === "stuck" ? "the engineer seems stuck: recent steps failed or changed nothing measurable" : "the engineer is about to declare the task done", msgs) : undefined, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? "auto" : o.toolChoice, thinkingBudget: o.thinkingBudget, request: o.request, keepThinking: o.keepThinking, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
+    budget: o.budget, stableTools: o.stableTools, ladder: o.ladder, textToolCalls: o.textToolCalls, hollow: (name, args) => hollowWhy(o.cwd, name, args), reread: localTier() && !o.review, advise: advisorModel ? (why, msgs) => consult(why === "start" ? "the engineer is about to make the first change" : why === "stuck" ? "the engineer seems stuck: recent steps failed or changed nothing measurable" : "the engineer is about to declare the task done", msgs) : undefined, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? "auto" : o.toolChoice, thinkingBudget: o.thinkingBudget, request: o.request, keepThinking: o.keepThinking, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff
 

@@ -18,11 +18,13 @@ export type TuneOptions = {
   makeVariant: (profile: Profile, name: string) => Variant;
   base?: Profile; trials?: number; jobs?: number; seed?: number; heldOutFraction?: number;
   guards?: Guard[]; stagnationTurns?: number[]; /** step limits to try */ maxSteps?: number[]; /** also try requiring a tool call at every step */ toolChoice?: boolean;
+  /** per-model settings to try (Track M): take tool calls written as text; the local tier's prompt and tools; a prompt id; one tool fewer from this tool set */
+  textToolCalls?: boolean; tierLocal?: boolean; prompts?: string[]; toolSet?: string[];
   onStep?: (s: Step) => void; onRow?: (r: Row) => void;
 };
 /** Guards the search may switch off. Safety guards (secret masking) are never candidates. */
 const NEVER: Guard[] = ["redact"];
-const DEFAULT_GUARDS: Guard[] = ["nudge", "loop", "stuck", "wrapup", "condense", "stagnation", "readdelta", "toolcache", "anchor", "pin", "audit", "coverage", "ledger"];
+const DEFAULT_GUARDS: Guard[] = ["nudge", "loop", "stuck", "wrapup", "condense", "stagnation", "readdelta", "toolcache", "anchor", "pin", "audit", "coverage", "ledger", "argfix", "hollow", "reread"];
 
 /** A deterministic split of tasks into a training set and a held-out set (at least one task in each when there are two or more). */
 export function split(cases: Case[], fraction = 0.34, seed = 1): { train: Case[]; heldOut: Case[] } {
@@ -30,12 +32,14 @@ export function split(cases: Case[], fraction = 0.34, seed = 1): { train: Case[]
   const n = cases.length < 2 ? 0 : Math.max(1, Math.round(cases.length * fraction)), held = new Set(order.slice(0, n));
   return { train: cases.filter((_, i) => !held.has(i)), heldOut: cases.filter((_, i) => held.has(i)) };
 }
-type Change = { guard?: Guard; stagnation?: number; maxSteps?: number; toolChoice?: "required" };
-const withChange = (p: Profile, c: Change): Profile => ({ ...p, ...(c.guard && { off: [...new Set([...(p.off ?? []), c.guard])] }), ...(c.stagnation !== undefined && { stagnationTurns: c.stagnation }),
-  ...(c.maxSteps !== undefined && { maxSteps: c.maxSteps }), ...(c.toolChoice && { toolChoice: c.toolChoice }) });
+type Change = { guard?: Guard; stagnation?: number; maxSteps?: number; toolChoice?: "required"; textToolCalls?: true; tier?: "local"; prompt?: string; dropTool?: string };
+const withChange = (p: Profile, c: Change, toolSet?: string[]): Profile => ({ ...p, ...(c.guard && { off: [...new Set([...(p.off ?? []), c.guard])] }), ...(c.stagnation !== undefined && { stagnationTurns: c.stagnation }),
+  ...(c.maxSteps !== undefined && { maxSteps: c.maxSteps }), ...(c.toolChoice && { toolChoice: c.toolChoice }), ...(c.textToolCalls && { textToolCalls: true }), ...(c.tier && { tier: c.tier }), ...(c.prompt && { prompt: c.prompt }),
+  ...(c.dropTool && { tools: (p.tools ?? toolSet ?? []).filter((t) => t !== c.dropTool) }) });
 /** What each kind of change is expected to do: removing scaffolding should cost less at the same pass rate; requiring tool calls should pass more. */
 const predictionFor = (c: Change): { text: string; held: (dPass: number, dTokens: number) => boolean } =>
-  c.toolChoice ? { text: "a higher pass rate (fewer turns lost to prose)", held: (dp) => dp > 0 }
+  c.toolChoice || c.textToolCalls ? { text: "a higher pass rate (fewer turns lost to prose or lost calls)", held: (dp) => dp > 0 }
+    : c.tier || c.prompt ? { text: "a higher pass rate, or the same with fewer tokens", held: (dp, dt) => dp > 0 || (dp >= -0.02 && Number.isFinite(dt) && dt < 0) }
     : { text: "the same pass rate with fewer tokens per solved task", held: (dp, dt) => dp >= -0.02 && Number.isFinite(dt) && dt < 0 };
 
 /** Is `cand` at least as good as `cur` on these cases? Never worse on pass rate, and either better or cheaper per solved task. */
@@ -54,9 +58,13 @@ export async function tune(o: TuneOptions): Promise<TuneResult> {
   let cur = startingPoint, strength = "";
   const candidates: { label: string; c: Change }[] = [...(o.guards ?? DEFAULT_GUARDS).filter((g) => !NEVER.includes(g) && !(cur.off ?? []).includes(g)).map((g) => ({ label: `switch off ${g}`, c: { guard: g } })),
     ...(o.stagnationTurns ?? []).map((n) => ({ label: `stagnationTurns = ${n}`, c: { stagnation: n } })), ...(o.maxSteps ?? []).map((n) => ({ label: `maxSteps = ${n}`, c: { maxSteps: n } })),
-    ...(o.toolChoice && cur.toolChoice !== "required" ? [{ label: "toolChoice = required", c: { toolChoice: "required" as const } }] : [])];
+    ...(o.toolChoice && cur.toolChoice !== "required" ? [{ label: "toolChoice = required", c: { toolChoice: "required" as const } }] : []),
+    ...(o.textToolCalls && !cur.textToolCalls ? [{ label: "textToolCalls = true", c: { textToolCalls: true as const } }] : []),
+    ...(o.tierLocal && cur.tier !== "local" ? [{ label: "tier = local", c: { tier: "local" as const } }] : []),
+    ...(o.prompts ?? []).filter((id) => id !== cur.prompt).map((id) => ({ label: `prompt = ${id}`, c: { prompt: id } })),
+    ...(o.toolSet ?? []).filter((t) => t !== "finish").map((t) => ({ label: `tools without ${t}`, c: { dropTool: t } }))];
   for (const { label, c } of candidates) {
-    const cand = withChange(cur, c), t = await compare(train, cur, cand, o), pr = predictionFor(c);
+    const cand = withChange(cur, c, o.toolSet), t = await compare(train, cur, cand, o), pr = predictionFor(c);
     strength = `${t.tasks} training task(s) can only detect differences above ~${(t.minDetectable * 100).toFixed(0)} points`;
     note({ change: label, stage: "train", accepted: t.ok, why: t.why, predicted: pr.text, held: pr.held(t.dPass, t.dTokens) });
     if (t.ok) { cur = cand; accepted.push(label); }

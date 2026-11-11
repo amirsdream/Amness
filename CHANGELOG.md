@@ -19,6 +19,9 @@
 - **New guards `hollow` and `reread`.** `hollow` refuses a write or edit that would replace code with a placeholder line ("// ... rest of the code unchanged ..."). `reread` sends a local-tier model back once at its first finish to check each requirement of the task. Both not measured yet (`full-hollow`, `full-reread`).
 - **A response schema is never sent together with tools to a local server** (it can stop tool calling entirely); you are told once.
 - **`amness eval --builtin ladder`**: five levels of tool use; the report says which jobs a model qualifies for, and `--write-profile` saves it.
+- **`amness tune` can try per-model settings:** `--text-tool-calls`, `--tier-local`, `--prompts`, `--tools` (one tool fewer at a time), and the new guards. Kept only when they hold on training and held-out tasks, and written only into that model's profile.
+- **Eval variants `edit:whole-small` and `edit:delegate`** (edit-format experiments, not defaults).
+- **Fixed:** a writing subagent asked for approval of its edits in a run without permission modes (evaluations, the library), where the main agent did not.
 - **Fixed:** the handoff note written without the model (when the context is too small to ask for one) always said `COMMANDS: none`, because it looked for the wrong argument name. A tool call that is not valid JSON is now counted as a `repair` event, like other malformed calls.
 
 ## 0.7.4 (2026-11-10)

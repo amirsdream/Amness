@@ -9,6 +9,7 @@ import { ladderModel, type LadderModel } from "./ladder.ts";
 import { Budget, type Event, type Guard, type Model, type Tool } from "./harness.ts";
 import type { Profile } from "./profiles.ts";
 import type { Plugin, VariantSpec } from "./plugins.ts";
+import type { AgentDef } from "./agents.ts";
 import { STRATEGIES } from "./strategies.ts";
 import { CHAOS_KINDS, chaosModel, chaosTools } from "./chaos.ts";
 import { promptPlugin } from "./prompts.ts";
@@ -170,7 +171,7 @@ export function formatReport(a: Analysis): string {
 const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "pin", "anchor", "audit", "argfix", "hollow", "reread"];
 /** Features that are not loop guards but can be switched off the same way for ablations. */
 const FEATURES = ["index", "taint"] as const;
-export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · <variant>@role=model+role=model (the variant with jobs on other models: explore, compact, review, cheap; a model is an id, provider:model or server:<name>) · full+plugins (every loaded plugin active, needs --plugin) · full+ranges (subagents on, and the explorer answers with checked file ranges) · prompt:<id> (a system prompt from .amness/prompts) · model:<id> (the full harness on another model) · ladder:<model>+<model>[+…] (the full harness on a recovery ladder, cheapest first) · tools:stable (the full harness with a fixed tool list: tool_search + call_tool) · tier:local|mid|frontier (the full harness with the prompt and tools of that tier; local = short prompt, lean tools) · chaos:tools|429|args|argshape|slow-tools (the full harness while things break on purpose) · strategy:<name> (the full harness with a loop strategy: plan-first, explore-then-act) · any variant a plugin defines · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
+export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · <variant>@role=model+role=model (the variant with jobs on other models: explore, compact, review, cheap; a model is an id, provider:model or server:<name>) · full+plugins (every loaded plugin active, needs --plugin) · full+ranges (subagents on, and the explorer answers with checked file ranges) · prompt:<id> (a system prompt from .amness/prompts) · model:<id> (the full harness on another model) · ladder:<model>+<model>[+…] (the full harness on a recovery ladder, cheapest first) · edit:whole-small | edit:delegate (edit-format experiments; edit:delegate@edit=<model> puts the editor on another model) · tools:stable (the full harness with a fixed tool list: tool_search + call_tool) · tier:local|mid|frontier (the full harness with the prompt and tools of that tier; local = short prompt, lean tools) · chaos:tools|429|args|argshape|slow-tools (the full harness while things break on purpose) · strategy:<name> (the full harness with a loop strategy: plan-first, explore-then-act) · any variant a plugin defines · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
 
 /** Build a named variant of the code agent. Names: see VARIANT_HELP. */
 /** A plugin-defined variant: the plugin's variants are looked up by `name` or `plugin:name`. */
@@ -214,6 +215,11 @@ export function countEvents(events: Record<string, number>): (e: Event) => void 
   };
 }
 
+/** The editor of edit:delegate: a clean context that applies a described change and reports the diff. */
+const EDITOR_AGENT = (model?: string): AgentDef => ({ name: "editor", description: "applies a code change that you describe exactly", tools: ["read_file", "edit_file", "write_file", "apply_patch"], ...(model && { model }), maxSteps: 12, scope: "project", source: "built-in (edit:delegate)", file: "",
+  prompt: "You apply one code change that another engineer describes: the file, the intent and the exact snippets. Read the file, make exactly that change with edit_file (or write_file for a new file), nothing more. Report what you changed." } as AgentDef);
+const DELEGATE_PLUGIN: Plugin = { name: "edit-delegate", system: (s: string) => s + "\nEditing: do not edit files yourself. For each change, call task({agent: \"editor\", description}) with the file path, the intent and the exact old and new snippets; then read the result and check it." };
+
 /** Parse a role suffix: `explore=server:lab+review=anthropic:claude-haiku-5-5` → { explore: "server:lab", review: "anthropic:claude-haiku-5-5" }. */
 export function parseRoleSpec(spec: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -224,9 +230,9 @@ export function parseRoleSpec(spec: string): Record<string, string> {
   }
   return out;
 }
-const ROLE_KEYS = ["explore", "compact", "review", "cheap"] as const;
+const ROLE_KEYS = ["explore", "compact", "review", "cheap", "edit"] as const;
 
-export function harnessVariant(model: Model, name: string, o: { maxSteps?: number; maxTokens?: number; /** the cheaper model for the `full+route` variant */ cheap?: Model; /** models by id, for `model:<id>` variants */ modelFor?: (id: string) => Model; wrapTools?: (tools: Tool[]) => Tool[]; /** harness settings to run under (used by `amness tune`) */ profile?: Profile; /** loaded plugins: a variant name may refer to one of their `variants` (as `name` or `plugin:name`) */ plugins?: Plugin[]; /** the model's context window, and whether tool definitions are compacted (see CodeAgentOptions) */ contextWindow?: number; compactSchemas?: boolean; prices?: { strong: { input: number; output: number }; cheap: { input: number; output: number } }; /** jobs on other models (from a `@role=model` suffix) */ roles?: Roles; /** the model's tier (from a `tier:` variant) */ tier?: ModelTier; /** fixed tool list (tools:stable) */ stableTools?: boolean; /** the recovery ladder (ladder: variants) */ ladder?: LadderModel } = {}): Variant {
+export function harnessVariant(model: Model, name: string, o: { maxSteps?: number; maxTokens?: number; /** the cheaper model for the `full+route` variant */ cheap?: Model; /** models by id, for `model:<id>` variants */ modelFor?: (id: string) => Model; wrapTools?: (tools: Tool[]) => Tool[]; /** harness settings to run under (used by `amness tune`) */ profile?: Profile; /** loaded plugins: a variant name may refer to one of their `variants` (as `name` or `plugin:name`) */ plugins?: Plugin[]; /** the model's context window, and whether tool definitions are compacted (see CodeAgentOptions) */ contextWindow?: number; compactSchemas?: boolean; prices?: { strong: { input: number; output: number }; cheap: { input: number; output: number } }; /** jobs on other models (from a `@role=model` suffix) */ roles?: Roles; /** the model's tier (from a `tier:` variant) */ tier?: ModelTier; /** fixed tool list (tools:stable) */ stableTools?: boolean; /** the recovery ladder (ladder: variants) */ ladder?: LadderModel; /** edit:delegate */ extraAgents?: AgentDef[]; delegateEdits?: boolean } = {}): Variant {
   // `<variant>@role=model+role=model`: the same variant with some jobs on other models (any provider or saved server).
   const at = name.indexOf("@");
   if (at > 0) {
@@ -244,6 +250,10 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
     const lad = ladderModel(refs.map((r) => ({ model: o.modelFor!(r), label: r })));
     return { ...harnessVariant(lad, "full", { ...o, ladder: lad, modelFor: undefined }), name };
   }
+  // Edit-format experiments (M16). Evidence is mixed (SWE-Edit, arXiv 2604.26102, abstract; Cascaded Code Editing, arXiv 2604.19201, read: untuned
+  // appliers over-edit and under-edit), so these exist only as variants, never as defaults.
+  if (name === "edit:whole-small") return pluginVariant(model, name, { spec: { verify: true }, owner: { name: "edit-whole-small", system: (s: string) => s + "\nEditing: for a file under 80 lines, write the whole new file with write_file; for a longer file, change only the part you mean with edit_file." } }, o);
+  if (name === "edit:delegate") return { ...harnessVariant(model, "full", { ...o, extraAgents: [EDITOR_AGENT(o.roles?.edit ? "edit" : undefined)], delegateEdits: true }), name };
   if (name === "tools:stable") return { ...harnessVariant(model, "full", { ...o, stableTools: true }), name };
   const tierV = /^tier:(.+)$/.exec(name)?.[1];
   if (tierV) { if (!["local", "mid", "frontier"].includes(tierV)) throw new Error(`unknown tier "${tierV}". Tiers: local, mid, frontier`); return { ...harnessVariant(model, "full", { ...o, tier: tierV as ModelTier }), name }; }
@@ -265,8 +275,8 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
       const off = name === "baseline" ? ALL_GUARDS : [...(dropped ? [dropped] : []), ...(o.profile?.off ?? [])];
       if (name === "full+route" && !o.cheap) throw new Error("the full+route variant needs a cheap model: pass --cheap-model <id>");
       const r = await createCodeAgent({
-        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, models: o.roles, subagents: o.roles?.explore || name === "full+ranges" ? true : undefined, exploreRanges: name === "full+ranges" || undefined, tier: o.tier, stableTools: o.stableTools, ladder: o.ladder, cwd: dir, budget, maxSteps: o.profile?.maxSteps ?? o.maxSteps ?? 30, toolChoice: o.profile?.toolChoice, stagnationTurns: o.profile?.stagnationTurns, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
-        plugins: name === "full+plugins" ? o.plugins : undefined, wrapTools: o.wrapTools, contextWindow: o.contextWindow, compactSchemas: o.compactSchemas, verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined, review: name === "full+review" || undefined,
+        model: name === "full+route" ? routedModel({ strong: model, cheap: o.cheap!, prices: o.prices, onRoute: (d) => { events[d.switched ? `route-${d.tier}` : "route-stay"] = (events[d.switched ? `route-${d.tier}` : "route-stay"] ?? 0) + 1; } }) : model, models: o.roles, subagents: o.roles?.explore || name === "full+ranges" ? true : undefined, exploreRanges: name === "full+ranges" || undefined, tier: o.tier ?? o.profile?.tier, toolAllow: o.profile?.tools, textToolCalls: o.profile?.textToolCalls, stableTools: o.stableTools, ladder: o.ladder, extraAgents: o.extraAgents, ...(o.delegateEdits && { subagents: true }), cwd: dir, budget, maxSteps: o.profile?.maxSteps ?? o.maxSteps ?? 30, toolChoice: o.profile?.toolChoice, stagnationTurns: o.profile?.stagnationTurns, off, memory: false, index: name === "baseline" || feature === "index" ? false : undefined, taint: name === "baseline" || feature === "taint" ? "off" : undefined, tools: c.tools?.(dir),
+        plugins: name === "full+plugins" ? o.plugins : [...(o.profile?.prompt ? [promptPlugin(process.cwd(), o.profile.prompt)] : []), ...(o.delegateEdits ? [DELEGATE_PLUGIN] : [])], wrapTools: o.wrapTools, contextWindow: o.contextWindow, compactSchemas: o.compactSchemas, verify: name === "baseline" || name === "no-gate" ? undefined : c.verify, check: name === "full+check" ? c.verify : undefined, review: name === "full+review" || undefined,
         onEvent: countEvents(events),
       }).run(c.task);
       return { text: r.text, steps: r.steps, tokens: budget.tokens, events, prompt: budget.promptTokens, cached: budget.cachedTokens, byModel: budget.byModel, byTier: budget.byTier };

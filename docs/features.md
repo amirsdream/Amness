@@ -1354,7 +1354,7 @@ guard verdicts:
 amness tune --cases ./my-tasks --models 192.168.1.20:8000,openai/gpt-6-luna --tool-choice --steps 40,80
 ```
 
-**What it may change.** Switching off guards (all except secret masking), the no-progress limit (`--stagnation`), the step limit (`--steps`) and requiring a tool call at every step (`--tool-choice`). Permissions, the sandbox, secret masking and the checks that judge the tasks are never in reach. That way it cannot win by weakening safety or the tests.
+**What it may change.** Switching off guards (all except secret masking), the no-progress limit (`--stagnation`), the step limit (`--steps`) requiring a tool call at every step (`--tool-choice`), and per-model settings: taking tool calls written as text (`--text-tool-calls`), the local tier's prompt and tools (`--tier-local`), a system prompt (`--prompts a,b`), and a smaller tool set (`--tools read_file,grep,edit_file,sh` tries the set with each tool left out in turn). Moving a job to another model is not in reach yet: that changes your config, not a model's profile. Permissions, the sandbox, secret masking and the checks that judge the tasks are never in reach. That way it cannot win by weakening safety or the tests.
 
 **Predictions.** Each change states what it should do: removing a guard should keep the pass rate with fewer tokens per solved task; requiring tool calls should raise the pass rate. Each step's line says whether that came true (`expected …: yes` or `no`).
 

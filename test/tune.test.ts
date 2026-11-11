@@ -55,3 +55,17 @@ test("tune v2: requiring tool calls and step limits are candidates too; writePro
   assert.equal(j.models.qwen.maxSteps, 30); assert.equal(j.models.qwen.toolChoice, "required");
   assert.match(readFileSync(archiveTune(join(f, "..", "tune"), { ok: 1 }), "utf8"), /"ok": 1/);
 });
+
+test("Track M changes: textToolCalls and tier local are kept only when they help; a tool left out is kept when it costs less and breaks nothing", async () => {
+  // A model that loses half its tasks unless text calls are taken, does no better on the local tier, and does not need the grep tool.
+  const mk = (p: Profile, name: string): Variant => ({ name, run: async (c, dir) => {
+    const lost = !p.textToolCalls && Number(c.name.slice(1)) % 2 === 0;
+    writeFileSync(`${dir}/r`, lost ? "no" : "yes");
+    return { text: "", steps: 1, tokens: 1000 - (p.tools && !p.tools.includes("grep") ? 300 : 0) + (p.tier === "local" ? 50 : 0), events: {} };
+  } });
+  const r = await tune({ cases: cases(9, marker), makeVariant: mk, trials: 1, guards: [], textToolCalls: true, tierLocal: true, toolSet: ["read_file", "grep", "edit_file"], seed: 4 });
+  assert.ok(r.accepted.includes("textToolCalls = true"), r.accepted.join(", "));
+  assert.ok(!r.accepted.includes("tier = local"));
+  assert.ok(r.accepted.includes("tools without grep"));
+  assert.equal(r.profile.textToolCalls, true); assert.deepEqual(r.profile.tools, ["read_file", "edit_file"]);
+});
