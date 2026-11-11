@@ -1,38 +1,31 @@
 # Skills for working on Amness
 
-Claude Code loads these skills when a task matches their description. The first four are ours. The others are copied unchanged from MIT-licensed repositories (each folder has its `LICENSE` and a `SOURCE.md` with the commit).
+Claude Code loads a skill when a task matches its description. Each skill here is either written for this project or kept because it adds knowledge our code and docs do not have.
 
-## Ours
+## Written for Amness
 
 | Skill | Use it to |
 |---|---|
 | `add-feature` | add a tool, guard, slash command or provider, with tests, docs and the roadmap tick |
-| `check` | run the type check and tests the way CI does |
+| `check` | run the type check and tests the way CI does, and report with evidence |
 | `release` | cut and stage an npm release |
 | `write-docs` | write docs in plain English (CEFR B1) |
+| `measure-a-change` | decide whether a harness change helps before keeping it: claim first, smallest setup, honest size, fair comparison |
+| `read-agent-run` | find why a run failed (config line, result, tests, steps, harness checks) and whether the cause is the harness, the model, the task or the setup; `steps.py` prints a run as steps |
+| `update-diagrams` | change a picture in `docs/diagrams/` so it stays readable and true to the code |
 
-## Building the harness
+## Kept from other projects (MIT, copied unchanged; each folder has `LICENSE` and `SOURCE.md`)
 
-Each one matches a part of Amness. Read the matching code first. A skill gives a checklist and common failure modes, not facts about this code.
-
-| Skill | Source | The part of Amness it helps with |
+| Skill | Source | Why it is here |
 |---|---|---|
-| `harness-engineering` | Agent-Skills-for-Context-Engineering | the loop as a whole: locked and editable surfaces, durable logs, pruning, rollback (`src/harness.ts`, evaluation campaigns) |
-| `context-compression` | Agent-Skills-for-Context-Engineering | compaction, handoff notes, pinned rules (`src/context.ts`, `makeHandoff`) |
-| `context-optimization` | Agent-Skills-for-Context-Engineering | prompt-cache prefix, observation masking, token budgets (cache breaks, `readdelta`, `condense`) |
-| `context-degradation` | Agent-Skills-for-Context-Engineering | diagnosing lost-in-the-middle, context poisoning and clash in long runs |
-| `tool-design` | Agent-Skills-for-Context-Engineering | tool descriptions, schemas, error messages the model can act on (`src/code.ts` tools, `argfix`) |
-| `multi-agent-patterns` | Agent-Skills-for-Context-Engineering | subagents, explorer, models per job, the recovery ladder (`src/route.ts`, `src/ladder.ts`) |
-| `memory-systems` | Agent-Skills-for-Context-Engineering | memory notes, ranking, consolidation (`src/memory.ts`) |
-| `self-improvement-loops` | Agent-Skills-for-Context-Engineering | `amness tune`, failure mining, harness checks that feed fixes |
-| `evaluation` | Agent-Skills-for-Context-Engineering | `amness eval`, held-out checks, regression suites, baselines |
-| `advanced-evaluation` | Agent-Skills-for-Context-Engineering | LLM judges: the reviewer, tournament selection, judge bias |
-| `agent-introspection-debugging` | ECC | reading a failed agent run (a trace or a Studio run) before changing anything |
-| `systematic-debugging` | superpowers | root cause before a fix, for any bug or failing test |
-| `verification-before-completion` | superpowers | run the command and read its output before saying "done" |
+| `systematic-debugging` | superpowers | root cause before a fix; none of our skills covers the debugging method |
+| `tool-design` | Agent-Skills-for-Context-Engineering | descriptions, parameters and error messages a model can act on; `add-feature` covers the mechanics, not this |
+| `context-compression` | Agent-Skills-for-Context-Engineering | risks of summaries (invented facts, lost paths and names, losses that add up over repeated compactions) to check when changing compaction or handoff notes |
 
-`excalidraw-diagram` (diagrams in `docs/diagrams/`) is installed locally only: its source has no licence file.
+## Removed after review (2026-11-12)
 
-## What the evidence says about skills
+Copied the same day, then removed because they repeated what Amness already does or rarely applied here: `advanced-evaluation`, `agent-introspection-debugging`, `context-degradation`, `context-optimization`, `evaluation`, `harness-engineering`, `memory-systems`, `multi-agent-patterns`, `self-improvement-loops`, `verification-before-completion`. The useful parts of `evaluation`, `harness-engineering`, `agent-introspection-debugging` and `verification-before-completion` are now in `measure-a-change`, `read-agent-run` and `check`, adapted to our own tools.
 
-Skills do not help everywhere. Two 2026 studies found that a skill helps on some tasks and models and not on others, and that it makes every prompt longer ([Agent Skill Evolution, arXiv 2610.04832](https://arxiv.org/html/2610.04832v1); [WebDev-Skills-Bench, arXiv 2608.23067](https://arxiv.org/abs/2608.23067), both seen as abstracts and snippets only). So this folder keeps only skills that match a part of this project, one per job, and no general collections.
+Why few: studies of agent skills found that a skill helps on some tasks and models and not others, and that every skill makes the prompt longer ([arXiv 2610.04832](https://arxiv.org/html/2610.04832v1), [arXiv 2608.23067](https://arxiv.org/abs/2608.23067); abstracts and snippets only). Skills written from a project's own knowledge are kept over general ones.
+
+Local only, not in git: `excalidraw-diagram` (its source has no licence) and `run-studio-campaign` (it names the home lab).
