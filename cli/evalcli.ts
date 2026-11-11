@@ -1,5 +1,6 @@
 // `amness eval`: compare harness variants on a task suite, with statistics you can act on.
 import { parseRoleSpec } from "../src/evals.ts";
+import { LADDER_SUITE_VERSION, ladderCases, ladderVerdict } from "../src/laddercases.ts";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -29,7 +30,7 @@ export const EVAL_HELP = `usage: amness eval [flags]
   --limit <n>          only the first n instances of a suite
   --audit              contamination checks on a suite (fix lines in the problem statement or already in the base checkout); runs no model
   --seed <n>           seed for the bootstrap intervals (reproducible reports)
-  --builtin <name>     which built-in suite: code (default, 13 easy tasks), hard (6 tasks with hidden edge cases, a misleading symptom and an exploration question) or adversarial (prompt-injection attempts; a run passes only if the injected command never ran)
+  --builtin <name>     which built-in suite: code (default, 13 easy tasks), hard (6 tasks with hidden edge cases, a misleading symptom and an exploration question), ladder (5 levels of tool use: which jobs a model qualifies for; --write-profile saves the verdict) or adversarial (prompt-injection attempts; a run passes only if the injected command never ran)
   --cases <dir|file>   your own tasks: a folder of *.json ({ name, files, task, verify, check }), or a .ts/.js module exporting a list of cases (checks may be functions)
   --metrics <a,b>      extra numbers to record per run and compare (diff-lines, tool-calls, tokens-per-step, overclaim, or a metric a plugin defines)
   --gate <file>        compare with a saved results file (from --out) and exit 1 on a clear regression: pass rate down by more than --gate-tol points (default 5) or cost per solved task up by more than --gate-cost percent (default 25)
@@ -75,11 +76,11 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelN
       const saved = JSON.parse(readFileSync(resolve(val("--report")!), "utf8")) as { rows: Row[]; baseline?: string; k?: number };
       console.log(formatReport(analyze(saved.rows, { baseline: val("--baseline") ?? saved.baseline, k: saved.k }))); return 0;
     }
-    const builtin = val("--builtin") ?? "code"; if (!["code", "adversarial", "hard"].includes(builtin)) throw new Error(`unknown built-in suite "${builtin}" (code, hard or adversarial)`);
+    const builtin = val("--builtin") ?? "code"; if (!["code", "adversarial", "hard", "ladder"].includes(builtin)) throw new Error(`unknown built-in suite "${builtin}" (code, hard, adversarial or ladder)`);
     const plugins: Plugin[] = [];
     for (const f of (val("--plugin") ?? "").split(",").filter(Boolean)) { const r = await importPlugins(f); for (const w of r.warnings) console.error(red("! ") + w); plugins.push(...r.plugins); }
     const casesArg = val("--cases"), isModule = !!casesArg && /\.(m?[jt]s)$/.test(casesArg);
-    let cases: Case[] = isModule ? await casesFromModule(resolve(casesArg!)) : casesArg ? loadCases(resolve(casesArg)) : builtin === "adversarial" ? adversarialCases : builtin === "hard" ? hardCases : builtinCases;
+    let cases: Case[] = isModule ? await casesFromModule(resolve(casesArg!)) : casesArg ? loadCases(resolve(casesArg)) : builtin === "adversarial" ? adversarialCases : builtin === "hard" ? hardCases : builtin === "ladder" ? ladderCases : builtinCases;
     if (val("--suite")) {
       const inst = loadSuite(resolve(val("--suite")!)).slice(0, Number(val("--limit") ?? 1e9));
       if (has("--audit")) { const leaks = await leakAudit(inst); for (const l of leaks) console.log(`${red("leak")} ${l.id}: ${l.problem}`); console.log(leaks.length ? `${leaks.length} instance(s) with problems` : green("no contamination found in " + inst.length + " instance(s)")); return leaks.length ? 1 : 0; }
@@ -121,6 +122,12 @@ export async function runEval(argv: string[], deps: { model: () => Model; modelN
     writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), model: mname || undefined, ...provenance(cases), cliArgs: argv.filter((a, i) => !/key|token/i.test(a) && !/key|token/i.test(argv[i - 1] ?? "")), baseline: analysis.baseline, k: Math.min(3, trials), variants: names, harness: names.map((n) => ({ variant: n, base: n.split("@")[0], roles: n.includes("@") ? parseRoleSpec(n.slice(n.indexOf("@") + 1)) : {} })), trials, estimatedCost: spent ?? undefined, stopped, rows }, null, 1));
     if (stopped) console.log(`\n${red("stopped early")}: ${stopped}. ${skipped} planned session${skipped === 1 ? "" : "s"} did not run, so the results below cover only the runs that finished.`);
     if (spent !== null) console.log(dim(`estimated spend: about $${spent.toFixed(3)} for ${rows.length} session${rows.length === 1 ? "" : "s"}${rows.length ? ` ($${(spent / rows.length).toFixed(4)} each)` : ""}  (an estimate from token counts, not an invoice)`));
+    if (builtin === "ladder" && !casesArg && !isModule) {
+      // The qualification ladder: the highest level each variant cleared, and the jobs that gives; --write-profile saves it for this model.
+      console.log("\n" + bold("qualification ladder") + dim(`  (${LADDER_SUITE_VERSION}; a level counts only when every trial of it and of every level below passed)`));
+      for (const v of names) { const q = ladderVerdict(rows, v); console.log(`  ${v.padEnd(22)} level ${q.level}/5  qualified for: ${q.roles.join(", ") || "nothing"}${q.failed ? dim(`  (first failure: ${q.failed})`) : ""}`); }
+      if (has("--write-profile") && mname) { const q = ladderVerdict(rows, names[0]), at = new Date().toISOString().slice(0, 10); writeProfile(join(".amness", "profile.json"), mname, { qualified: { roles: q.roles, at, by: LADDER_SUITE_VERSION } }, `qualified with amness eval --builtin ladder on ${at}`); console.log(dim(`  saved in .amness/profile.json (${mname})`)); }
+    }
     if (calib) {
       console.log("\n" + bold("how hard is each task?") + dim(`  (baseline, ${trials} trials; keep 30% to 70%)`));
       for (const x of calibrate(rows, names[0])) console.log(`  ${x.verdict === "keep" ? green("keep      ") : red(x.verdict.padEnd(10))} ${x.case.padEnd(26)} ${x.passes}/${x.runs} passed  ${dim((x.rate * 100).toFixed(0) + "%")}`);

@@ -43,6 +43,14 @@ export function effortsFor(model: string): Effort[] {
   return ["none", "low", "medium", "high", "xhigh", "max"];
 }
 
+/** Request fields that constrain the whole reply to a schema or grammar (OpenAI-style, vLLM, SGLang, llama.cpp). */
+export const SCHEMA_KEYS = ["response_format", "json_schema", "guided_json", "guided_regex", "guided_grammar", "guided_choice", "structured_outputs", "grammar"];
+let adapterWarn: (msg: string) => void = (m) => console.error(`note: ${m}`);
+const warnedOnce = new Set<string>();
+/** Where adapter warnings go (the chat app shows them as notes). Each warning is given once per process. */
+export const onAdapterWarning = (fn: (msg: string) => void) => { adapterWarn = fn; };
+const warnOnce = (m: string) => { if (!warnedOnce.has(m)) { warnedOnce.add(m); adapterWarn(m); } };
+
 // ------------------------------------------------------------------ Responses API: request side
 /** Our transcript -> Responses `instructions` + `input` items. Reasoning/function-call items from the same model are replayed verbatim. */
 export function toResponsesInput(msgs: Message[], model: string): { instructions?: string; input: any[] } {
@@ -225,6 +233,9 @@ export function openai(opts: OpenAIOptions = {}): Model {
       ...opts.extra, ...o.request,
       ...(o.keepThinking && !official && { chat_template_kwargs: { preserve_thinking: true, ...(o.request?.chat_template_kwargs as object | undefined) } }),   // Qwen-style templates drop old thinking unless told to keep it
     };
+    // Never a response schema together with tools on an open-weight server: in one study that stopped tool calling entirely on vLLM and SGLang,
+    // and tool_choice "required" did not bring it back (arXiv 2606.25605, read). Tools win; the schema goes; the user is told once.
+    if (tools.length && !official) { const gone = SCHEMA_KEYS.filter((k) => k in body); if (gone.length) { for (const k of gone) delete body[k]; warnOnce(`not sent with tools to ${base}: ${gone.join(", ")} (a response schema together with tools can stop a local server from calling tools; use it in a tool-free request instead)`); } }
     for (const k of dropped) delete body[k];
     const r = await post("/chat/completions", body, o.signal);
     if ((r.headers.get("content-type") ?? "").includes("text/event-stream")) return readChatStream(r, o.onText ?? (() => {}), o.onThinking, !!o.keepThinking);

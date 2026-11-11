@@ -175,9 +175,9 @@ export class Budget {
 
 export type Approve = (req: { name: string; args: any; reason?: string; preview?: string; id?: string; /** from the built-in safety floor: "don't ask again" shortcuts must not skip this prompt */ floor?: boolean }) => Promise<boolean | string> | boolean | string;
 /** Turn-off switches, mainly so evals can measure what each guard is worth. */
-export type Guard = "coverage" | "toolcache" | "nudge" | "loop" | "compact" | "readdelta" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation" | "review" | "redact" | "pin" | "anchor" | "audit" | "argfix";
+export type Guard = "coverage" | "toolcache" | "nudge" | "loop" | "compact" | "readdelta" | "stuck" | "wrapup" | "condense" | "schedule" | "ledger" | "stagnation" | "review" | "redact" | "pin" | "anchor" | "audit" | "argfix" | "hollow" | "reread";
 /** Every guard name, for checking names that come from files and flags. */
-export const GUARD_NAMES: readonly Guard[] = ["coverage", "toolcache", "nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "review", "redact", "pin", "anchor", "audit", "argfix"];
+export const GUARD_NAMES: readonly Guard[] = ["coverage", "toolcache", "nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "review", "redact", "pin", "anchor", "audit", "argfix", "hollow", "reread"];
 
 export type Options = {
   model: Model;
@@ -244,6 +244,10 @@ export type Options = {
   advise?: (why: "start" | "stuck" | "finish", messages: Message[]) => Promise<string | undefined>;
   /** The recovery ladder (src/ladder.ts): the model object that switches tiers; usually `model` itself. With it, risk is scored from the loop's events and the loop reflects, replans, escalates or steps down. */
   ladder?: LadderModel;
+  /** The hollow-write check (guard `hollow`): returns why a write or edit leaves code out behind a placeholder, or undefined. The code agent supplies it. */
+  hollow?: (name: string, args: Record<string, unknown>) => string | undefined;
+  /** The task re-read check (guard `reread`): on the first finish, send the model back to check each requirement once. The code agent turns it on for a local-tier model. */
+  reread?: boolean;
   /** Keep the tool list the same for the whole session: tools found with tool_search are run through \`call_tool\` (or by name) instead of being added to the list, so the provider's prompt cache (or a local server's prefix cache) survives. Off by default (eval variant \`tools:stable\`). */
   stableTools?: boolean;
   /** Rescue tool calls the model wrote as text (`<tool_call>…`, `<function=…>`, a JSON object) when it sent no structured call. Default: the model card's `caps.textToolCalls`. Each rescue is a `repair` event. */
@@ -510,6 +514,7 @@ export function createHarness(o: Options) {
     const seen = new Map<string, number>(), history: string[] = [];
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     world++;            // files may have changed since the last run
+    let rereadDone = false;
     const advised = new Set<string>(), tried = new Set<string>(), lad = o.ladder;
     meter = lad ? new RiskMeter() : undefined; lad?.moveTo(lad.start);   // every run (a task, a chat turn, an eval case) starts on the start tier
     const adviceFor = async (why: "start" | "stuck" | "finish") => { if (!o.advise || advised.has(why)) return undefined; advised.add(why); try { const a = (await o.advise(why, msgs))?.trim(); if (a) emit({ kind: "hook", event: "Advisor", detail: `${why}: ${a.slice(0, 160)}`, blocked: false }); return a || undefined; } catch { return undefined; } };
@@ -711,6 +716,8 @@ export function createHarness(o: Options) {
         if (name === "finish") {
           const stop = await hook("Stop", { summary: args.summary, task, ...(o.ledger ? o.ledger.audit(task) : { changed: [], notes: [] }) });
           if (stop?.block) { emit({ kind: "rejected", detail: stop.block }); return `REJECTED by a hook: ${clip(stop.block, 3000)}\nFix the problem, then finish again.`; }
+          // Re-read the task once before finishing (local tier): the largest single effect in one local-model harness's ablation (Mingbird, arXiv 2610.02001, read; weak evidence).
+          if (o.reread && !off.has("reread") && !rereadDone) { rereadDone = true; emit({ kind: "rejected", detail: "reread: check each requirement of the task first" }); return `NOT YET. Read the task again:\n---\n${clip(task, 4000)}\n---\nCheck each requirement against what you did. Then finish again, and in the summary list each requirement and where it is satisfied (file, command or output).`; }
           if (o.ledger && !off.has("ledger")) {
             const problems = o.ledger.check(String(args.summary ?? ""), { gated: !!o.verify });
             if (problems.length && ledgerRejects < 2) { ledgerRejects++; const detail = `the record does not support your summary: ${problems.join(" ")}`; emit({ kind: "rejected", detail }); return `REJECTED: ${detail}\nFix it (run the command, or correct the summary), then finish again.`; }
@@ -739,6 +746,7 @@ export function createHarness(o: Options) {
         if (n > 2 && !off.has("loop")) { emit({ kind: "loop", detail: key.slice(0, 100) }); return `ERROR: you've made this exact call ${n} times. Do something different.`; }
         const cycle = off.has("loop") ? undefined : findCycle(history);
         if (cycle) { emit({ kind: "loop", detail: `cycle of ${cycle.length} calls: ${cycle.map((c) => c.slice(0, 40)).join(" → ")}` }); return `ERROR: you are going in circles (${cycle.map((c) => c.split("{")[0]).join(" → ")} → repeating, with the same arguments). Stop and think about why it is not working: read the last results again, check an assumption with a different tool, or change approach.`; }
+        if (o.hollow && !off.has("hollow") && t && !t.readOnly) { const why = o.hollow(name, args); if (why) { emit({ kind: "rejected", detail: `hollow ${name}: ${why}` }); return `REFUSED: ${why}. Write the complete text (for a big file, change only the part you mean with edit_file), then call again.`; } }
         if (t && !t.readOnly && o.advise && !advised.has("start")) { const a = await adviceFor("start"); if (a) return `PAUSED before your first change. A stronger model looked at the task and your work so far and advises:\n${clip(a, 3000)}\nTake this into account, then make your call again (or a better one).`; }
         const pre = await hook("PreToolUse", { tool: name, args });
         if (pre?.block) { emit({ kind: "denied", detail: `${name}: blocked by a hook` }); return `BLOCKED BY A HOOK: ${clip(pre.block, 2000)}\nDo not retry the same call; choose another approach or explain what you could not do.`; }

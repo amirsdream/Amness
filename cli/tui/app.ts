@@ -5,7 +5,7 @@ import { join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { onRateLimitWait } from "../model.ts";
 import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
-import { quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { PROVIDERS, home, keyFor, keyIdOf, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
@@ -157,6 +157,7 @@ export class App {
   async start() {
     setShell(this.cfg.shell); { const fb = shellFallbackNote(); if (fb) this.note(fb); }
     if (!this.cfg.sandboxEngine || sandboxBackends().some((b) => b.name === this.cfg.sandboxEngine)) applySandboxEngine(this.cfg, (m) => this.note(m));   // a plugin's engine is applied once plugins load
+    onAdapterWarning((m) => this.note(m));
     onRateLimitWait((ms, attempt, conc) => this.note(`rate limited by the provider: waiting ${Math.ceil(ms / 1000)}s, then retrying (attempt ${attempt}); ${conc} request${conc === 1 ? "" : "s"} at a time for now`));
     const { input, output } = this.io;
     if (this.ui !== "remote") {                                                    // a remote front end owns its own window: no terminal to set up
