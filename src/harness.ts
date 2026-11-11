@@ -95,6 +95,8 @@ export type Event =
   | { kind: "nudge" | "loop" | "rejected" | "denied" | "budget" | "tools" | "aborted"; detail: string }
   /** A malformed tool call: returned to the model as an error, or (`fixed`) corrected in place and run. */
   | { kind: "repair"; detail: string; fixed?: boolean }
+  /** A worker on another model failed and its work went back to the parent (`count`: failures of this role so far). */
+  | { kind: "takeover"; role: string; model: string; reason: string; count: number }
   | { kind: "edit"; path: string; created: boolean; added: number; removed: number; diff: string; /** File content before the edit (null = it did not exist); lets a UI offer undo. */ before?: string | null }
   | { kind: "turn"; step: number; tokens: number; prompt: number; completion: number; cached: number; reasoning: number }
   | { kind: "rollover"; detail: string }
@@ -128,13 +130,15 @@ export function ensureUsage(m: Message, sent: Message[]): Message {
 }
 export class Budget {
   tokens = 0; promptTokens = 0; completionTokens = 0; /** prompt tokens the provider served from its cache */ cachedTokens = 0; calls = 0; t0 = Date.now(); maxTokens: number; maxMs: number;
-  constructor(o: { maxTokens?: number; maxMs?: number } = {}) { this.maxTokens = o.maxTokens ?? Infinity; this.maxMs = o.maxMs ?? Infinity; }
+  /** How much a token of each tier counts against the cap (default 1 for all). `{ local: 0.1 }` lets a free local worker read a lot without using up the paid model's budget. */
+  tierWeights?: Partial<Record<string, number>>;
+  constructor(o: { maxTokens?: number; maxMs?: number; tierWeights?: Partial<Record<string, number>> } = {}) { this.maxTokens = o.maxTokens ?? Infinity; this.maxMs = o.maxMs ?? Infinity; this.tierWeights = o.tierWeights; }
   /** Set on a slice made by `slice()`: everything it spends is charged to the parent too. */
   parent?: Budget;
   /** A smaller budget for a subagent: at most `share` of what is left here (and no more than `max` tokens). Its spending counts against this budget as well. */
   slice(share: number, max = Infinity): Budget {
     const left = Number.isFinite(this.maxTokens) ? Math.max(0, this.maxTokens - this.effective) : Infinity;
-    const b = new Budget({ maxTokens: Math.min(left * share, max), maxMs: Number.isFinite(this.maxMs) ? Math.max(1000, (this.maxMs - this.ms) * share) : undefined }); b.parent = this; return b;
+    const b = new Budget({ maxTokens: Math.min(left * share, max), maxMs: Number.isFinite(this.maxMs) ? Math.max(1000, (this.maxMs - this.ms) * share) : undefined, tierWeights: this.tierWeights }); b.parent = this; return b;
   }
   /** Spending per model (by card id; "main" when the model has no card), with its tier and model time, so mixed-tier runs can report each tier. */
   byModel: Record<string, { tier?: string; calls: number; tokens: number; prompt: number; completion: number; cached: number; ms: number }> = {};
@@ -150,7 +154,11 @@ export class Budget {
     return out;
   }
   /** What the cap is measured in: tokens, with cached input counted at a tenth (it costs about that much, and a long session re-reads its history every turn). */
-  get effective() { return Math.max(0, this.tokens - 0.9 * this.cachedTokens); }
+  get effective() {
+    let discount = 0;
+    if (this.tierWeights) for (const e of Object.values(this.byModel)) { const w = this.tierWeights[e.tier ?? "unknown"]; if (w !== undefined && w < 1) discount += (1 - Math.max(0, w)) * Math.max(0, e.tokens - 0.9 * e.cached); }
+    return Math.max(0, this.tokens - 0.9 * this.cachedTokens - discount);
+  }
   get ms() { return Date.now() - this.t0; }
   /** How much of the tightest cap is used, 0 to 1 (0 when there is no cap). */
   get fraction() { return Math.max(Number.isFinite(this.maxTokens) ? this.effective / this.maxTokens : 0, Number.isFinite(this.maxMs) ? this.ms / this.maxMs : 0); }

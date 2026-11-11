@@ -46,6 +46,8 @@ export const HELP = `usage: amness run [flags] "task"
   --add-dir <path>     let the file tools use this folder outside the project too (repeatable; without it, outside paths are refused)
   --explore-model <ref> --compact-model <ref> --review-model <ref> --cheap-model <ref> --approve-model <ref> --quarantine-model <ref>
                        a model for one role: a bare id (main provider), provider:model (anthropic:claude-haiku-5-5), or server:<name>[/model]; default from config "models"
+  --local-weight <0-1> how much a token of a local-tier model counts against --max-tokens (default 1); 0.1 lets free local workers read a lot
+  --explore-ranges     the explorer answers with file ranges that are checked against the files (ANSWER / FILES), not prose
   --subagents          offer the task tool (explorer and custom subagents); on by itself when --explore-model or models.explore is set
   --fallback <ref>     answer from this model when the main one is overloaded or unreachable      --router   route exploration steps to --cheap-model when it pays off
   --max-steps <n>      most model turns (default 40)        --context-window <tokens>   the model's window (8192 for a small local model); default: learned from the provider
@@ -54,8 +56,8 @@ exit code: 0 finished, 1 not finished, 2 usage/config error`;
 
 /** The options of `amness run` (keep in step with HELP). Anything else in the arguments is the task. */
 const VALUE_FLAGS = new Set(["--cwd", "--verify", "--check", "--bundle", "--export", "--trace", "--sandbox", "--sandbox-engine", "--provider", "--model", "--base-url", "--effort", "--api", "--best-of", "--parts", "--image", "--max-tokens",
-  "--server", "--add-dir", "--max-steps", "--context-window", "--max-time", "--off", "--plugin", "--tool-choice", "--thinking-budget", "--request", "--explore-model", "--compact-model", "--review-model", "--cheap-model", "--approve-model", "--quarantine-model", "--fallback"]);   // --live takes an optional port: it is read on its own, before the task
-const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking", "--router", "--subagents"]);
+  "--server", "--add-dir", "--max-steps", "--context-window", "--max-time", "--off", "--plugin", "--tool-choice", "--thinking-budget", "--request", "--local-weight", "--explore-model", "--compact-model", "--review-model", "--cheap-model", "--approve-model", "--quarantine-model", "--fallback"]);   // --live takes an optional port: it is read on its own, before the task
+const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking", "--router", "--subagents", "--explore-ranges"]);
 
 export async function runHeadless(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(HELP); return 0; }       // asking for help must never start a model run
@@ -104,7 +106,9 @@ export async function runHeadless(argv: string[]): Promise<number> {
   const live = livePort === undefined ? undefined : await startLive({ port: livePort });
   if (live) console.error(`live view: ${live.url}`);
   const approve: Approve = yes ? () => true : () => "non-interactive run: risky commands are denied unless --yes is passed";
-  const budget = new Budget({ maxTokens });
+  const lw = val("--local-weight"), localWeight = lw !== undefined ? Number(lw) : cfg.budgetLocalWeight;
+  if (localWeight !== undefined && !(localWeight >= 0 && localWeight <= 1)) { console.error(`--local-weight must be between 0 and 1, not ${lw}`); return 2; }
+  const budget = new Budget({ maxTokens, tierWeights: localWeight !== undefined ? { local: localWeight } : undefined });
   const make = (c: typeof cfg) => (bool("--cache") ? cachedModel(createModel(c), { dir: join(cwd, ".amness", "cache", "responses"), salt: `${c.provider}|${c.baseUrl}|${c.model}|${c.effort ?? ""}` }) : createModel(c));
   for (const r of ["explore", "compact", "review", "cheap", "approve", "quarantine"] as const) { const v = val(`--${r}-model`); if (v) cfg.models = { ...cfg.models, [r]: v }; }
   { const f = val("--fallback"); if (f) cfg.fallback = f; if (bool("--router")) cfg.router = true; }
@@ -173,7 +177,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
       maxSteps: maxSteps ?? 40, maxTime: maxTime || null, maxTokens, off, toolChoice: toolChoice ?? "auto", textToolCalls: !!wired.model.card?.caps?.textToolCalls, thinkingBudget: thinkingBudget ?? null, keepThinking: !!keepThinking, subagents, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
       sandbox: sandbox ?? null, sandboxEngine: cfg.sandboxEngine ?? null, quarantine: !!(bool("--quarantine") || cfg.quarantine), verify: verify ?? null, review: bool("--review"), approvalReviewer: bool("--approval-reviewer"), trace: !!tracer, memory: !noMemory }) }));
   const agent = createCodeAgent({
-    subagents,
+    subagents, exploreRanges: bool("--explore-ranges") || cfg.exploreRanges || undefined,
     dirs: addDirs.length ? () => addDirs : undefined,
     plans: bool("--plans") || cfg.plans || undefined,
     contextWindow,

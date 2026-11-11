@@ -358,6 +358,9 @@ export function buildCommands(): Cmd[] {
     { name: "tokens", alias: "cost", help: "context window, what fills it, tokens and cost", live: true, run: (a) => {
       a.commit(tokenReport({ model: a.cfg.model, window: a.window, messages: a.session.messages, usage: a.session.usage, series: a.session.usage.series ?? [], lastPrompt: a.lastPrompt, turnTokens: a.runTokens, turnBudget: a.running ? a.cfg.maxTokens : 0, width: a.width,
         toolDefChars: JSON.stringify(a.agent.registry.visible({ step: 0, messages: [] }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }))).length }));
+      // The last turn's spending per model, when more than one model worked on it (a local explorer, a cheaper reviewer).
+      const bm = Object.entries(a.budget.byModel);
+      if (bm.length > 1) a.commit(["", bold("  Last turn by model"), ...bm.map(([id, e]) => `  ${dim((e.tier ?? "?").padEnd(9))}${id.padEnd(32)} ${String(e.calls).padStart(3)} calls  ${fmtTokens(e.tokens).padStart(7)} tokens  ${(e.ms / 1000).toFixed(1).padStart(6)}s waiting`)]);
     } },
     { name: "todos", help: "show the agent's checklist, or change it: /todos edit", args: "[edit]", live: true, run: async (a, arg) => {
       if (arg.trim() === "edit") return void (await a.editTodos());

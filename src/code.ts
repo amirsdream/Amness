@@ -254,6 +254,33 @@ How to work:
 - Servers and watchers: start them with \`sh_start\` (plain \`sh\` waits for the command to end), read their output with \`sh_read\`, and \`sh_stop\` them when you are done.
 - Never invent file contents or command output. The user can type while you work; their new messages arrive between your steps, so adjust course when they do.`;
 
+/**
+ * Check an explorer's ANSWER / FILES result against the workspace: every range must name a file inside it and lines that exist.
+ * A weak explorer's wrong prose does less damage when the parent gets exact ranges it can read itself (G28).
+ */
+export function checkRanges(cwd: string, text: string): { ok: true; text: string } | { ok: false; why: string } {
+  const answer = /ANSWER:\s*([\s\S]*?)(?:\n\s*FILES:|$)/i.exec(text)?.[1]?.trim();
+  const lines = [...text.matchAll(/^\s*-\s*([^\s:]+):(\d+)(?:-(\d+))?\s*(.*)$/gm)];
+  if (!answer || !/FILES:/i.test(text)) return { ok: false, why: "its result did not use the ANSWER / FILES format" };
+  const good: string[] = [], bad: string[] = [], root = resolve(cwd);
+  for (const m of lines) {
+    const p = resolve(root, m[1]), a = Number(m[2]), b = Number(m[3] ?? m[2]);
+    if (!(p === root || p.startsWith(root + sep)) || !existsSync(p)) { bad.push(`${m[1]} (no such file)`); continue; }
+    let n = 0; try { n = readFileSync(p, "utf8").split("\n").length; } catch { bad.push(`${m[1]} (unreadable)`); continue; }
+    if (a < 1 || b < a || a > n) { bad.push(`${m[1]}:${a}-${b} (the file has ${n} lines)`); continue; }
+    good.push(`- ${m[1]}:${a}-${Math.min(b, n)}${m[4] ? " " + m[4].trim() : ""}`);
+  }
+  if (!good.length) return { ok: false, why: lines.length ? `none of its file ranges exist (${bad.slice(0, 3).join(", ")})` : "it listed no file ranges" };
+  return { ok: true, text: `ANSWER (from the explorer, unchecked): ${clip(answer, 1500)}\nFILES (checked: these ranges exist; read them yourself before you rely on the answer):\n${good.join("\n")}${bad.length ? `\n(dropped ${bad.length} range(s) that do not exist: ${bad.slice(0, 4).join(", ")})` : ""}` };
+}
+
+/** The explorer's prompt for a local-tier model: the same job in short, plain steps. */
+const EXPLORE_LOCAL = `You are a read-only code explorer. Answer the question in the brief.
+- Use grep first, then read_file on the lines that matter. About 10 tool calls at most.
+- You cannot change anything.
+- Then call finish with: the answer in a few sentences, and the files with line numbers (path:line).`;
+/** The structured result (exploreRanges): an answer plus exact ranges, so the parent reads the code itself instead of trusting the prose. */
+const RANGES_FORMAT = `\n\nFormat of your finish summary (exactly):\nANSWER: <the answer in at most three sentences>\nFILES:\n- <path>:<first line>-<last line> <why it matters>\n(one line per range, at most 8; only ranges you actually read)`;
 const EXPLORE_SYSTEM = `You are a read-only code explorer working for another engineer. Investigate the question using list_files, read_file, grep and read-only shell commands. You have a small budget (about 12 tool calls): ask for the most informative things first (grep, then read only the relevant ranges), do not read whole files you do not need, and stop as soon as you can answer. If the question is too broad, answer what you can and say what you did not cover. Report concisely (under 300 words): the answer, the relevant files with line numbers, and anything surprising. You cannot change anything. Finish with \`finish(summary)\`; the requester sees only that summary.`;
 
 export type CodeAgentOptions = {
@@ -263,6 +290,8 @@ export type CodeAgentOptions = {
   tier?: ModelTier;
   /** Only these tools (and finish) are offered. Default: the model card's profile `tools`. */
   toolAllow?: string[];
+  /** The explorer answers with exact file ranges (ANSWER / FILES lines) that are checked against the files; the parent reads them itself. Off by default (not measured). */
+  exploreRanges?: boolean;
   /** Offer the `task` tool (explorer and custom subagents). Default: on in chat mode only. */
   subagents?: boolean;
   /** Live permission mode. When given, edits and shell commands ask for approval per the mode (see PermMode); omit for the autonomous behaviour. */
@@ -444,6 +473,14 @@ export function createCodeAgent(o: CodeAgentOptions) {
         run: async (args, ctx) => { await acquireTask(); try { return await runTask(args, ctx); } finally { releaseTask(); } },
       }),
   );
+  // Takeover: a worker on another model that fails hands the work back to the parent, plainly, and is counted. After TAKEOVER_LIMIT failures of one role, that role runs on the main model for the rest of the session.
+  const takeovers = new Map<string, number>(), TAKEOVER_LIMIT = 2;
+  const takeover = (role: string, model: string, why: string, partial: string) => {
+    const n = (takeovers.get(role) ?? 0) + 1; takeovers.set(role, n);
+    o.onEvent?.({ kind: "takeover", role, model, reason: why, count: n } as Event);
+    const off = n >= TAKEOVER_LIMIT ? ` This is failure ${n} of ${role} on ${model}: from now on ${role} runs on the main model.` : "";
+    return `TAKEOVER: the ${role} on ${model} failed: ${why}. Do this part yourself (read the files directly).${off}${partial.trim() ? `\nWhat it said before it failed (unchecked):\n${clip(partial, 1500)}` : ""}`;
+  };
   /** The `task` tool's work: a read-only explorer, or one of the custom agents. */
   async function runTask({ description, agent }: { description: string; agent?: string }, ctx: ToolCtx): Promise<string> {
     let slice: Budget | undefined;
@@ -458,9 +495,15 @@ export function createCodeAgent(o: CodeAgentOptions) {
           if (unknown) o.onEvent?.({ kind: "nudge", detail: `no agent named "${unknown}"; used the read-only explorer` });
           const plan = mode?.() === "plan", emitAs = (name: string) => (e: Event) => o.onEvent?.({ ...e, agent: name, parent: ctx.callId } as unknown as Event);
           if (!d) {
-            const r = await createHarness({ model: o.models?.explore ?? o.model, system: EXPLORE_SYSTEM, tools: codeTools(o.cwd, { mode: () => "plan", dirs: o.dirs, outside: o.outside, related: o.off?.includes("anchor") ? undefined : (files) => (codeIndex ? relatedFiles(codeIndex, files) : "") }), maxSteps: 14, contextBudget: 120_000, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            // The explorer runs with its own model's settings: its window comes from the card (the harness reads it), and a small window or a local tier gets compact tool specs and a short prompt.
+            const em = (takeovers.get("explore") ?? 0) >= TAKEOVER_LIMIT ? o.model : (o.models?.explore ?? o.model), ew = windowOf(em), emLocal = em.card?.tierFrom === "profile" && em.card.tier === "local";
+            const ranges = !!o.exploreRanges, label = em.card?.id ?? (em === o.model ? "the main model" : "the explore model");
+            const r = await createHarness({ model: em, system: (emLocal || (ew !== undefined && ew <= 16_384) ? EXPLORE_LOCAL : EXPLORE_SYSTEM) + (ranges ? RANGES_FORMAT : ""), compactSpecs: () => emLocal || (ew !== undefined && ew <= 16_384), tools: codeTools(o.cwd, { mode: () => "plan", dirs: o.dirs, outside: o.outside, related: o.off?.includes("anchor") ? undefined : (files) => (codeIndex ? relatedFiles(codeIndex, files) : "") }), maxSteps: 14, contextBudget: 120_000, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
             const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";
-            return note + clip(r.text || "(the explorer returned nothing)", 8000);                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
+            const checked = ranges && r.finished ? checkRanges(o.cwd, r.text) : undefined;
+            const why = !r.finished ? `it stopped before finishing (${r.stopped ?? "no finish"})` : !r.text.trim() ? "it returned nothing" : checked && !checked.ok ? checked.why : undefined;
+            if (why && em !== o.model) return note + takeover("explore", label, why, r.text);
+            return note + (checked?.ok ? checked.text : clip(r.text || "(the explorer returned nothing)", 8000));                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
           }
           const names = plan ? d.tools.filter((t) => !WRITE_TOOLS.has(t)) : d.tools, isolated = d.isolation === "worktree" && isWriter(d) && !plan;
           // The agent's `model:` key: an entry of agentModels, a role name (explore, review, cheap, compact), or a model reference resolved by modelById.
@@ -474,6 +517,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
               model: agentModel, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
               budget: track(o.budget?.slice(0.25, 120_000)), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), policy: policyFn, hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
             }).run(description);
+            if ((!r.finished || !r.text.trim()) && agentModel !== o.model && !isWriter(d)) return takeover(d.name, agentModel.card?.id ?? d.model ?? d.name, !r.finished ? `it stopped before finishing (${r.stopped ?? "no finish"})` : "it returned nothing", r.text);
             let out = clip(r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`, 8000);
             if (wt) {
               const diff = await worktreeDiff(wt);

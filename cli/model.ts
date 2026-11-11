@@ -8,7 +8,9 @@ export const onRateLimitWait = (fn: typeof waitListener) => { waitListener = fn;
 /** Build the model for a config (shared by the menu and headless mode). */
 export function createModel(cfg: Config, retries?: number, o: { cacheKey?: string; /** told when a rate limit makes calls wait */ onWait?: (ms: number, attempt: number, concurrency: number) => void } = {}): Model {
   // Every model built for the same endpoint and key shares one gate, so parallel subagents slow down together when the provider says 429.
-  const gate = gateFor(`${cfg.provider}|${cfg.baseUrl}|${(cfg.apiKey ?? "").slice(-6)}`, cfg.maxConcurrent ?? 4);
+  // A local server usually has one slot (llama.cpp's default): requests in parallel only queue there, and a second one can evict the first one's prefix cache.
+  const local = cfg.provider === "ollama" || (cfg.provider === "custom" && !/api\.(openai|anthropic)\.com|openrouter\.ai/.test(cfg.baseUrl));
+  const gate = gateFor(`${cfg.provider}|${cfg.baseUrl}|${(cfg.apiKey ?? "").slice(-6)}`, cfg.maxConcurrent ?? (local ? 1 : 4));
   return rateLimited(rawModel(cfg, retries, o), { gate, onWait: (ms, attempt, g) => { o.onWait?.(ms, attempt, g.max); waitListener?.(ms, attempt, g.max); } });
 }
 function rawModel(cfg: Config, retries: number | undefined, o: { cacheKey?: string }): Model {

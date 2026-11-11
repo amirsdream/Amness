@@ -19,6 +19,7 @@ export function formatEvent(e: Event & { agent?: string }): string {
       return `${who}${bad ? red("✗") : green("✓")} ${e.name} ${dim(argSummary(e.name, e.args))}${bad ? "  " + red(one(e.result, 70)) : ""}`;
     }
     case "nudge": return `${who}${yellow("↻ nudge")} ${dim("model described an action instead of doing it → told to act")}`;
+    case "takeover": return `${who}${yellow("↩ takeover")} ${dim(`${e.role} on ${e.model} failed (${one(e.reason, 60)}); the main agent does it${e.count >= 2 ? `; ${e.role} now runs on the main model` : ""}`)}`;
     case "repair": return `${who}${yellow("⚒ repair")} ${dim((e.fixed ? "tool call corrected and run: " : "invalid tool call → error returned to model: ") + one(e.detail, 70))}`;
     case "loop": return `${who}${yellow("∞ loop guard")} ${dim("repeated identical call refused")}`;
     case "rejected": return `${who}${yellow("⛔ finish rejected")} ${dim(one(e.detail, 80))}`;

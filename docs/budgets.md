@@ -145,7 +145,7 @@ What the vendors say ([OpenAI rate limits](https://developers.openai.com/api/doc
 
 What Amness does (`src/ratelimit.ts`, for every provider, shared by all agents in the process):
 
-1. One gate for each endpoint and key limits the requests in flight. The ceiling is 4 by default (`maxConcurrent` in the config). The gate starts at 2 and adds one after three successes, so traffic ramps up step by step.
+1. One gate for each endpoint and key limits the requests in flight. The ceiling is 4 by default (`maxConcurrent` in the config), and 1 for a local server (Ollama, or a custom server that is not api.openai.com, api.anthropic.com or OpenRouter): such a server usually answers one request at a time, so more only wait in its queue and can push out the first request's prompt cache. The gate starts at 2 and adds one after three successes, so traffic ramps up step by step.
 2. On a 429 that waiting can fix, every caller pauses for the server's `Retry-After` time (or an exponential backoff of up to 60 seconds, with jitter). The gate halves its concurrency, like TCP congestion control. The chat tells you: `rate limited by the provider: waiting 12s, then retrying (attempt 1); 2 requests at a time for now`.
 3. These cases are not retried, and the error reaches you: quota, billing and spend-cap errors; an abort; a requested wait longer than two minutes; and more than six retries.
 4. The OpenAI adapter does not retry 429 by itself when the gate is on (`externalRetry`). It still retries timeouts and 5xx errors, and it honours `Retry-After`.

@@ -529,6 +529,12 @@ Models
 - A subagent file can name a model with `model:`: a job name (`model: explore`) or a model as in the table above (`model: server:lab`). If the name cannot be used, the `task` call says why and the subagent does not run.
 - `amness run` reads the same settings. Flags set them for one run: `--explore-model`, `--compact-model`, `--review-model`, `--cheap-model`, `--approve-model`, `--quarantine-model`, `--fallback` and `--router`. The first line of `--json` lists the jobs that use another model (`"roles"`).
 - In the Settings (terminal `/settings`, desktop Preferences) the same fields are under **Model**.
+
+**When a job's model fails.** Each job runs with its own model's settings: an explorer on a small local model gets that model's window, a short prompt and short tool descriptions. If an explorer (or a read-only subagent) on another model stops without finishing or returns nothing, the main agent is told plainly ("TAKEOVER: the explore on qwen-4b failed: … Do this part yourself") and the event is counted (`takeover`). After two such failures in one session, that job runs on the main model, and Amness says so. In one report, delegating to local workers cost more of the frontier model per verified success than doing the work directly (arXiv 2610.34241, abstract only), so measure before you rely on it: `amness eval --variants full,full@explore=server:lab`.
+
+**Exact file ranges from the explorer.** With **Explorer returns file ranges** (Settings, or `"exploreRanges": true`, or `amness run --explore-ranges`), the explorer answers as `ANSWER:` plus `FILES:` lines (`- src/a.ts:12-40 why`). Amness checks each range against the files, drops the ones that do not exist, and tells the agent to read the ranges itself. A weak explorer's wrong summary then does less harm. A result without this format is a takeover. Off by default; compare with `amness eval --variants full,full+ranges`.
+
+**Budget for free local models.** `"budgetLocalWeight": 0.1` in the config (or `amness run --local-weight 0.1`) counts a token of a local-tier model as a tenth of a token against the token cap, so a local explorer can read a lot without using up the budget of your paid model. `/tokens` shows the last turn's tokens and waiting time per model when more than one model worked on it.
 - Status: default (nothing is set until you set it). Covered by automated tests.
 
 **Related pages.** [Providers](providers.md), [Library](library.md), [Budgets](budgets.md).
