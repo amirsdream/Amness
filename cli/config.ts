@@ -122,8 +122,18 @@ export function loadConfig(): Config {
   tavilyEnv = envSecret("TAVILY_API_KEY"); c.tavilyKey = tavilyEnv ?? tv;
   if (process.env.OPENAI_BASE_URL && !claude) c.baseUrl = process.env.OPENAI_BASE_URL;
   if (process.env.AMNESS_MODEL) c.model = process.env.AMNESS_MODEL;
+  remember(c);
   return c;
 }
+
+// Several windows (two terminals, chats in the desktop app) each hold their own copy of the config. Saving a copy writes only the keys that copy
+// changed since it was loaded, merged into the file as it is now, so one window never undoes another window's settings.
+const SKIP = new Set(["apiKey", "apiKeys", "tavilyKey"]);
+const baselines = new WeakMap<Config, Map<string, string>>();
+const snapshot = (c: object) => new Map(Object.entries(c).filter(([k]) => !SKIP.has(k)).map(([k, v]) => [k, JSON.stringify(v) ?? "undefined"]));
+const remember = (c: Config) => { baselines.set(c, snapshot(c)); };
+/** A separate copy of the config (a desktop chat with its own provider and model). Saving it writes only what it changed. */
+export function cloneConfig(c: Config): Config { const copy = structuredClone(c); remember(copy); return copy; }
 
 function writeConfigFile(c: Config) {
   mkdirSync(home(), { recursive: true });
@@ -141,7 +151,16 @@ export function saveConfig(c: Config) {
   if (tv && tv === tavilyEnv) delete out.tavilyKey;
   else if (!tv) { deleteSecret("tavilyKey"); delete out.tavilyKey; }
   else if (setSecret("tavilyKey", tv) || noStore()) delete out.tavilyKey;
-  writeConfigFile(out);
+  const base = baselines.get(c);
+  if (!base) { writeConfigFile(out); return; }
+  const disk = readFileCfg() as Record<string, unknown>, merged: Record<string, unknown> = { ...disk }, now = snapshot(out);
+  for (const k of new Set([...now.keys(), ...base.keys()])) {
+    if (SKIP.has(k) || now.get(k) === base.get(k)) continue;
+    const v = (out as Record<string, unknown>)[k]; if (v === undefined) delete merged[k]; else merged[k] = v;
+  }
+  if (out.tavilyKey) merged.tavilyKey = out.tavilyKey; else delete merged.tavilyKey;
+  delete merged.apiKey; delete merged.apiKeys;
+  writeConfigFile(merged as Config); remember(c);
 }
 
 export const ready = (c: Config) => !PROVIDERS[c.provider].needsKey || !!c.apiKey;

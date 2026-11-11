@@ -511,6 +511,8 @@ img.empty-logo { width: 56px; height: 56px; display: inline-block; filter: drop-
 .chat-row .cdot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
 .chat-row.on .cdot { background: var(--accent); }
 .chat-row.running .cdot { background: var(--accent2); animation: pulse 1.3s ease-in-out infinite; }
+.chat-row.waiting .cdot { background: var(--warn, #e0a030); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn, #e0a030) 30%, transparent); }
+.chat-row.waiting .ct { font-weight: 600; }
 .chat-row.new { color: var(--text); font-weight: 500; margin-bottom: 4px; }
 .chat-row.new .cdot.plus { width: 14px; height: 14px; background: none; display: grid; place-items: center; font-size: 15px; line-height: 1; padding-bottom: 2px; color: var(--accent); margin-left: -4px; }
 .chat-row .kbd-hint { opacity: 0; transition: opacity .15s; }

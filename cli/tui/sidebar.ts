@@ -19,6 +19,7 @@ export type SidebarData = {
   /** skills: loaded in this conversation (uses > 0), available, or switched off */ skills?: { name: string; uses: number; off: boolean }[];
   /** the token cap for the current/last turn: tokens counted (cached input at a tenth), the cap, and whether usage was estimated */ budget?: { used: number; max: number };
   procs?: { id: string; name: string; status: string; secs: number }[];
+  /** background tasks (/bg): one line each */ tasks?: { id: number; task: string; status: string; secs: number; changed: number }[];
   /** what the last finished turn cost (subagents included) */ lastTurnCost?: number | null;
   /** subagents working right now: their brief, what they are doing, how far along */ agents?: { task: string; doing: string; steps: number; secs: number }[];
   tools: number; mcp: number; memory: number; running: boolean; elapsedMs: number; tip?: string;
@@ -82,6 +83,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
     }
     if (d.changes.length > 8) push(F(t.faint, `+${d.changes.length - 8} more files`));
   }
+  if (d.tasks?.length) { head("TASKS"); for (const x of d.tasks.slice(0, 5)) push((x.status === "running" ? F(t.ok, "● ") : x.status === "done" ? F(t.ok, "✓ ") : F(t.faint, "■ ")) + F(t.text, clipWidth(`${x.id} ${x.task}`, inner - 10)) + F(t.faint, ` ${x.status === "running" ? x.secs + "s" : x.changed ? x.changed + " files" : x.status}`)); }
   if (d.procs?.length) { head("PROCESSES"); for (const p of d.procs.slice(0, 5)) push((p.status === "running" ? F(t.ok, "● ") : F(t.faint, "○ ")) + F(t.text, clipWidth(`${p.id} ${p.name}`, inner - 10)) + F(t.faint, ` ${p.status === "running" ? p.secs + "s" : p.status}`)); }
   if (d.skills?.length) {                                                                                             // which skills exist, and which one the model is using
     const on = d.skills.filter((s) => !s.off), used = on.filter((s) => s.uses > 0);

@@ -484,7 +484,7 @@ function onServer(e) {
   switch (e.type) {
     case "blocks": blocks.clear(); order = []; cache.clear(); for (const b of e.blocks) { blocks.set(b.id, b); order.push(b.id); } render(true); toBottom(); break;
     case "block": if (!blocks.has(e.block.id)) order.push(e.block.id); blocks.set(e.block.id, e.block); render(); break;
-    case "state": { const prev = state; state = e.state; sd = state.sidebar; applyState(prev); break; }
+    case "state": { const prev = state; state = e.state; sd = state.sidebar; applyState(prev); const sig = (st) => JSON.stringify((st?.live || []).map((l) => [l.id, l.running, l.waiting])); if (sig(prev) !== sig(state)) loadSessions(); break; }
     case "dialog": showDialog(e.dialog); break;
     case "dialogClose": if (dialogOpen === e.id) closeModal(); break;
     case "toast": toast(e.level, stripAnsi(e.text)); break;
@@ -571,6 +571,7 @@ function renderPanel() {
     d.map?.length ? h("div", { class: "ctxmap" }, d.map.filter((m) => m.pct > 0).map((m) => h("div", { class: "cm" }, h("span", { class: "sw", style: `background:${themeColor(m.color)}` }), h("span", { text: m.label }), h("span", { class: "faint", text: `${m.pct}%` })))) : null,
     kv([u.reasoning ? ["reasoning", fmtTokens(u.reasoning)] : null, b !== null ? ["budget", `${b}% of ${fmtTokens(d.budget.max)}`] : null, ["requests", String(u.calls)]])));
   out.push(sec("Session", d.model, kv([["model", d.model], d.api && ["api", d.api], d.effort && ["effort", d.effort], ...Object.entries(d.roles || {}).map(([r, l]) => [r, l]), ["branch", d.branch || "no git"], ["mode", { default: "Ask", acceptEdits: "Auto-edit", plan: "Plan", yolo: "Yolo" }[d.mode] || d.mode], d.sandbox && d.sandbox !== "off" && ["sandbox", d.sandbox]])));
+  if (d.tasks?.length) out.push(sec("Tasks", String(d.tasks.filter((x) => x.status === "running").length || d.tasks.length), ...d.tasks.map((x) => h("div", { class: "proc", title: `/bg show ${x.id}` }, h("span", { class: `dot ${x.status === "running" ? "on" : ""}` }), h("span", { text: `${x.id}. ${x.task.slice(0, 48)}` }), h("span", { class: "faint", text: x.status === "running" ? `${x.secs}s` : x.changed ? `${x.status} · ${x.changed} files · /bg apply ${x.id}` : x.status })))));
   if (d.procs?.length) out.push(sec("Background", String(d.procs.length), ...d.procs.map((p) => h("div", { class: "proc" }, h("span", { class: `dot ${p.status === "running" ? "on" : ""}` }), h("span", { class: "mono", text: p.name }), h("span", { class: "faint", text: `${p.status} · ${p.secs}s` })))));
   if (d.skills?.length) { const used = d.skills.filter((x) => x.uses > 0).length; out.push(sec("Skills", `${used ? used + " used · " : ""}${d.skills.length}`, h("div", { class: "chips" }, d.skills.map((x) => h("button", { class: `chip-s ${x.uses ? "on" : x.off ? "off" : ""}`, title: x.off ? "switched off" : x.uses ? `used ${x.uses}×` : "available", onclick: () => run(`/skills show ${x.name}`) }, x.name, x.uses ? h("span", { class: "n", text: ` ${x.uses}` }) : null))))); }
   if (d.pluginStatus?.length) out.push(sec("Plugins", String(d.pluginStatus.length), ...d.pluginStatus.map((p) => h("div", { class: "small muted", text: p }))));
@@ -861,7 +862,7 @@ async function openProjectPicker() {
   inp.onkeydown = (e) => { if (e.key === "Enter") go(); };
   modal(h("div", { class: "modal narrow" }, h("header", {}, "Open a project folder"), h("div", { class: "body" }, inp), h("footer", {}, h("span", { class: "spacer" }), h("button", { class: "btn primary", onclick: go }, "Open"))));
 }
-async function switchProject(dir) { if (state?.running) { toast("warn", "stop the running turn first"); return; } if (await tryApi("/api/project", { dir })) toast("ok", `opened ${dir.split(/[\\/]/).pop()}`); }
+async function switchProject(dir) { if (state?.running) toast("info", "this chat keeps working in the background"); if (await tryApi("/api/project", { dir })) toast("ok", `opened ${dir.split(/[\\/]/).pop()}`); }
 async function projectMenu() {
   const recent = ((await tryApi("/api/projects")) || []).filter((p) => p !== state?.cwd);
   popover($("projectBtn"), [popItem("Open folder…", openProjectPicker, undefined, "Work in another project folder. The running turn must be stopped first"),
@@ -897,11 +898,20 @@ async function loadSessions() { chatsList = (await tryApi(`/api/sessions?q=${enc
 function drawSessions() {
   const searching = !!$("sessionSearch").value.trim();
   const rows = [h("button", { class: `chat-row new${state && !state.session.turns ? " on" : ""}`, onclick: () => newChat() }, h("span", { class: "cdot plus", text: "+" }), h("span", { class: "ct", text: "New chat" }), h("span", { class: "ctime kbd-hint", text: /Mac/.test(navigator.platform) ? "⌘N" : "Ctrl N" }))];
+  // Chats alive in another project are not in this project's list: show them first, so you can go back to them.
+  const elsewhere = (state?.live || []).filter((l) => !l.current && !chatsList.some((c) => c.id === l.id));
+  if (elsewhere.length) {
+    rows.push(h("div", { class: "chat-group", text: "Working now" }));
+    for (const l of elsewhere) rows.push(h("button", { class: `chat-row${l.running ? " running" : ""}${l.waiting ? " waiting" : ""}`, title: `${l.project} · ${l.provider} ${l.model}`, onclick: () => resume(l.id) },
+      h("span", { class: "cdot" }), h("span", { class: "ct", text: `${l.title || "(untitled)"} · ${l.project}` }), h("span", { class: "ctime", text: l.waiting ? "waiting" : l.running ? "working" : "" })));
+  }
   const groups = new Map();
   for (const c of [...chatsList].sort((x, y) => Date.parse(y.updated) - Date.parse(x.updated))) { const g = recency(c.updated); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(c); }
+  const live = new Map((state?.live || []).map((l) => [l.id, l]));
   const row = (c) => {
-    const current = c.id === state?.session.id;
-    return h("button", { class: `chat-row${current ? " on" : ""}${current && state?.running ? " running" : ""}`,
+    const current = c.id === state?.session.id, l = live.get(c.id);
+    // A chat that keeps working behind this one pulses too; one waiting for your answer is marked, so you can open it.
+    return h("button", { class: `chat-row${current ? " on" : ""}${l?.running ? " running" : ""}${l?.waiting && !current ? " waiting" : ""}`, title: l && !current ? `${l.waiting ? "waiting for you" : l.running ? "working" : "open"} · ${l.provider} ${l.model}${l.branch ? ` · branch ${l.branch}` : ""}` : "",
       onmouseenter: (e) => showPreview(c, e.currentTarget), onmouseleave: hidePreview, onclick: () => { hidePreview(); resume(c.id); } },
       h("span", { class: "cdot" }), h("span", { class: "ct", text: c.title || "(untitled)" }), h("span", { class: "ctime", text: shortAgo(c.updated) }));
   };
@@ -939,8 +949,8 @@ function showPreview(c, row) {
   }, 280);
 }
 function hidePreview() { clearTimeout(previewTimer); hoverRow = null; $("sessionPreview").classList.add("hidden"); }
-async function resume(id) { if (id === state?.session.id) return; if (state?.running) { toast("warn", "wait for the current turn to finish (or stop it)"); return; } if (await tryApi("/api/resume", { id })) input.focus(); }
-async function newChat() { if (state?.running) { toast("warn", "wait for the current turn to finish (or stop it)"); return; } if (await tryApi("/api/new", {})) input.focus(); }
+async function resume(id) { if (id === state?.session.id) return; if (state?.running) toast("info", "this chat keeps working in the background; it is marked in the list"); if (await tryApi("/api/resume", { id })) input.focus(); }
+async function newChat() { if (state?.running) toast("info", "this chat keeps working in the background; it is marked in the list"); if (await tryApi("/api/new", {})) input.focus(); }
 let searchT; $("sessionSearch").oninput = () => { clearTimeout(searchT); searchT = setTimeout(loadSessions, 150); };
 
 // ------------------------------------------------------------------ files (sidebar tree and the live file view)

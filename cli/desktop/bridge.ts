@@ -1,11 +1,12 @@
 // The desktop app runs the terminal app's own App, with no terminal (ui "remote"). So every command, the agent loop, approvals, plugins, MCP, hooks, memory,
 // budgets and the transcript are one implementation for both front ends; a feature added to App shows up in both.
 // This bridge only translates: App state -> events for the window, window actions -> App calls. Dialogs are the App's own overlays, serialised as they open.
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, resolve, sep } from "node:path";
-import { PROVIDERS, ready, saveConfig, windowFor, type Config } from "../config.ts";
-import { SHELL_CHOICES, STRATEGIES, effortsFor } from "../../src/index.ts";
+import { PROVIDERS, cloneConfig, ready, saveConfig, windowFor, type Config } from "../config.ts";
+import { SHELL_CHOICES, STRATEGIES, createSessionWorktree, effortsFor, isRepo, removeWorktree, worktreeIsUntouched } from "../../src/index.ts";
 import { strip } from "../ui.ts";
 import { loadState, saveState } from "../state.ts";
 import { App, NOT_TRUSTED } from "../tui/app.ts";
@@ -35,8 +36,12 @@ export type StateView = {
   version: string; cwd: string; project: string; provider: string; providerLabel: string; model: string; mode: string; ready: boolean;
   running: boolean; runStart: number; runTokens: number; runSeries: number[]; phase?: { phase: string; step: number; max: number; n?: number };
   thinking: string; queued: string[]; session: { id: string; title: string; turns: number }; vim: boolean; sidebar: SidebarData;
+  /** chats that keep working while another one is shown (the shown one is marked current) */ live: LiveView[];
   /** the terminal's own run panel (stages, current step, steps), as coloured lines, so both front ends show the same loop */ loop?: { title: string; right: string; lines: string[]; hits: { line: number; step: number }[] };
 };
+
+/** A chat that is alive: the one shown, and the ones that keep working behind it. */
+export type LiveView = { id: string; title: string; project: string; provider: string; model: string; running: boolean; waiting: boolean; current: boolean; branch?: string; startedAt: number };
 
 export type ServerEvent =
   | { type: "blocks"; blocks: Block[] } | { type: "block"; block: Block }
@@ -51,8 +56,13 @@ const nullIo = () => ({ input: Object.assign(new EventEmitter(), { setRawMode() 
 
 export type BridgeOptions = { cfg: Config; cwd: string; version: string; emit: (e: ServerEvent) => void; persist?: boolean; makeModel?: (c: Config) => Model };
 
+/** A chat kept alive behind the one shown. */
+type Live = { app: App; panel: PanelState; cwd: string; worktree?: { dir: string; branch: string; repo: string; base: string }; waited?: boolean; wasRunning?: boolean };
+
 export class DesktopBridge {
   app!: App; cwd: string; panel: PanelState = newPanelState();
+  /** Chats that keep working while another one is shown. The shown one is `app`. */
+  private live: Live[] = []; private fgWorktree?: Live["worktree"]; private chatN = 0;
   private o: BridgeOptions; private emit: BridgeOptions["emit"];
   private sent = new Map<number, string>(); private sentCount = 0; private timer?: ReturnType<typeof setTimeout>;
   private dialogOf?: object; private dialogId = 0; private switching = false;
@@ -62,17 +72,21 @@ export class DesktopBridge {
   constructor(o: BridgeOptions) { this.o = o; this.emit = o.emit; this.cwd = resolve(o.cwd); setLevel(3); forceColor(true); this.open(this.cwd); }   // the window turns terminal colours into HTML
   get theme() { return getTheme(this.scheme === "light" ? "daylight" : this.app.cfg.theme && getTheme(this.app.cfg.theme).dark ? this.app.cfg.theme : "aurora"); }
 
-  /** Run an App for `cwd`. A project switch ends the previous one (its conversation is saved). */
-  private open(cwd: string) {
+  /**
+   * Run an App for `cwd`. The previous one ends (its conversation is saved), unless it is busy (working, or waiting for your answer):
+   * then it keeps going behind the new one (`keep`). `o.cfg` gives the new chat its own copy of the settings, so it can use another provider.
+   */
+  private open(cwd: string, o: { keep?: boolean; cfg?: Config; resume?: string; sessionsRoot?: string; worktree?: Live["worktree"] } = {}) {
     const back = this.app ? this.cwd : undefined;                                   // a switch the user declines (an untrusted folder) goes back here
-    if (this.app) { this.switching = true; this.app.exit(0); this.switching = false; }
-    const io = nullIo();
-    const app = new App({ cfg: this.o.cfg, cwd, version: this.o.version, ui: "remote", persist: this.o.persist, makeModel: this.o.makeModel, input: io.input, output: io.output as never,
-      remote: { changed: () => this.changed(), toast: (level, text) => this.emit({ type: "toast", level, text }), copy: (text) => this.emit({ type: "copy", text }) } });
+    if (this.app) { if (o.keep && this.busy(this.app)) this.live.push({ app: this.app, panel: this.panel, cwd: this.cwd, worktree: this.fgWorktree, wasRunning: this.app.running }); else { this.switching = true; this.app.exit(0); this.switching = false; this.dropWorktreeIfUntouched(this.fgWorktree); } }
+    const io = nullIo(), cfg = o.cfg ?? this.o.cfg;
+    const app: App = new App({ cfg, cwd, version: this.o.version, ui: "remote", persist: this.o.persist, makeModel: this.o.makeModel, input: io.input, output: io.output as never, sessionsRoot: o.sessionsRoot, ...(o.resume && { resume: o.resume }),
+      remote: { changed: () => (this.app === app ? this.changed() : this.behindChanged(app)), toast: (level, text) => this.emit({ type: "toast", level, text: this.app === app ? text : `${this.titleOf(app)}: ${text}` }), copy: (text) => this.emit({ type: "copy", text }) } });
     const onEvent = app.onEvent.bind(app);
-    app.onEvent = (e) => { onEvent(e); if (e.kind === "edit") this.emit({ type: "fileChanged", path: e.path, diff: e.diff, created: e.created }); };
-    this.app = app; this.cwd = cwd; this.panel = newPanelState(); this.sent.clear(); this.sentCount = 0; this.dialogOf = undefined;
+    app.onEvent = (e) => { onEvent(e); if (e.kind === "edit" && this.app === app) this.emit({ type: "fileChanged", path: e.path, diff: e.diff, created: e.created }); };
+    this.app = app; this.cwd = cwd; this.fgWorktree = o.worktree; this.panel = newPanelState(); this.sent.clear(); this.sentCount = 0; this.dialogOf = undefined;
     void app.done.then((code) => {
+      this.live = this.live.filter((l) => l.app !== app);
       if (this.switching || this.app !== app) return;
       if (code === NOT_TRUSTED && back) { this.emit({ type: "toast", level: "warn", text: `not opened: you did not trust ${cwd}` }); this.open(back); this.fullSync(); this.changed(); return; }
       this.emit({ type: "exit" });
@@ -81,6 +95,51 @@ export class DesktopBridge {
     const startMode = this.o.cfg.desktop?.defaultMode;                              // Preferences: the mode a new window starts in
     if (startMode === "acceptEdits" || startMode === "plan") app.setMode(startMode);
     if (!ready(this.o.cfg)) setTimeout(() => void app.runCommand("/connect"), 300);     // first start without a key: the same connect dialog as the terminal
+  }
+
+  // ------------------------------------------------------------------ chats that keep working
+  /** Working, or waiting for an answer (an approval): such a chat must not be ended by switching away. */
+  private busy(a: App) { return a.running || !!a.overlay || a.queued.length > 0; }
+  private titleOf(a: App) { return a.session.title && a.session.title !== "New conversation" ? a.session.title.slice(0, 40) : "a chat in the background"; }
+  /** A chat behind the shown one changed: tell the window when it needs you or when it is done, and refresh the chat list. */
+  private behindChanged(a: App) {
+    const l = this.live.find((x) => x.app === a); if (!l) return;
+    if (a.overlay && !l.waited) { l.waited = true; this.emit({ type: "toast", level: "warn", text: `${this.titleOf(a)} is waiting for you (an approval or a question). Open it from the chat list.` }); }
+    if (!a.overlay) l.waited = false;
+    if (l.wasRunning && !a.running) this.emit({ type: "toast", level: "ok", text: `${this.titleOf(a)} finished${l.worktree ? ` (its changes are on branch ${l.worktree.branch})` : ""}` });
+    l.wasRunning = a.running;
+    this.changed();
+  }
+  /** Show a chat that is alive behind this one; the shown one stays alive behind it if it is busy. */
+  private bringForward(l: Live) {
+    this.live = this.live.filter((x) => x !== l);
+    if (this.busy(this.app)) this.live.push({ app: this.app, panel: this.panel, cwd: this.cwd, worktree: this.fgWorktree, wasRunning: this.app.running });
+    else { this.switching = true; this.app.exit(0); this.switching = false; this.dropWorktreeIfUntouched(this.fgWorktree); }
+    this.app = l.app; this.cwd = l.cwd; this.panel = l.panel; this.fgWorktree = l.worktree; this.sent.clear(); this.sentCount = 0; this.dialogOf = undefined;
+    this.hello();
+  }
+  /** The project a chat belongs to (a chat in a worktree belongs to the repository it came from). */
+  private projectOf(cwd: string, wt?: Live["worktree"]) { return wt?.repo ?? cwd; }
+  /**
+   * Where a new chat should work. When another chat of the same git project is busy, the new one gets its own worktree (Preferences: "parallelWorktree", default on),
+   * so two chats never edit the same files. Otherwise it works in the project itself.
+   */
+  private async placeFor(project: string): Promise<{ cwd: string; worktree?: Live["worktree"]; note?: string }> {
+    const others = [{ app: this.app, cwd: this.cwd, worktree: this.fgWorktree }, ...this.live].filter((x) => this.busy(x.app) && this.projectOf(x.cwd, x.worktree) === project);
+    if (!others.length || this.o.cfg.desktop?.parallelWorktree === false) return { cwd: project, ...(others.length && { note: "another chat is working in the same folder: both may edit the same files" }) };
+    if (!(await isRepo(project))) return { cwd: project, note: "another chat is working in this folder, and it is not a git repository, so both chats share its files" };
+    const wt = await createSessionWorktree(project, `chat-${++this.chatN}-${Date.now().toString(36).slice(-4)}`);
+    return { cwd: wt.dir, worktree: { dir: wt.dir, branch: wt.branch, repo: wt.repo, base: wt.base }, note: `this chat works on its own copy (branch ${wt.branch}), because another chat is working in ${basename(project)}` };
+  }
+  /** A worktree a chat made but did not change is removed when the chat ends. */
+  private dropWorktreeIfUntouched(wt?: Live["worktree"]) {
+    if (!wt) return;
+    void worktreeIsUntouched(wt.dir, wt.base).then(async (u) => { if (!u) return; await removeWorktree({ dir: wt.dir, repo: wt.repo }); try { execFileSync("git", ["branch", "-D", wt.branch], { cwd: wt.repo, stdio: "ignore" }); } catch { /* already gone */ } }).catch(() => {});
+  }
+  /** Every live chat, for the chat list: the shown one first. */
+  liveView(): LiveView[] {
+    const v = (a: App, current: boolean, wt?: Live["worktree"]): LiveView => ({ id: a.session.id, title: a.session.title, project: basename(wt?.repo ?? a.cwd), provider: a.cfg.provider, model: a.cfg.model, running: a.running, waiting: !!a.overlay, current, ...(wt && { branch: wt.branch }), startedAt: a.runStart });
+    return [v(this.app, true, this.fgWorktree), ...this.live.map((l) => v(l.app, false, l.worktree))];
   }
 
   // ------------------------------------------------------------------ App -> window
@@ -105,7 +164,7 @@ export class DesktopBridge {
     return {
       version: this.o.version, cwd: a.cwd, project: basename(a.cwd), provider: a.cfg.provider, providerLabel: PROVIDERS[a.cfg.provider]?.label ?? a.cfg.provider, model: a.cfg.model, mode: a.mode, ready: ready(a.cfg),
       running: a.running, runStart: a.runStart, runTokens: a.runTokens, runSeries: a.runSeries, phase: a.phase, thinking: a.running ? a.thinkBuf.slice(-400) : "", queued: a.queued.map((q) => q.text),
-      session: { id: a.session.id, title: a.session.title, turns: a.session.turns.length }, vim: false,
+      session: { id: a.session.id, title: a.session.title, turns: a.session.turns.length }, vim: false, live: this.liveView(),
       sidebar, loop: sidebar.loop && sidebar.loop.steps.length ? renderLoop(sidebar.loop, this.theme, 44, 60) : undefined,
     };
   }
@@ -186,10 +245,29 @@ export class DesktopBridge {
   commands() { return this.app.cmds.map((c) => ({ name: c.name, alias: c.alias, help: c.help, args: c.args, group: groupOf(c.name), live: !!c.live })); }
   suggest(text: string, cursor: number) { return this.app.suggestionsFor(text, cursor, () => this.emit({ type: "suggestReady" })); }
 
-  sessions(q = "") { const n = q.trim().toLowerCase(); return this.app.store.list().filter((s) => !n || s.title.toLowerCase().includes(n)).map((s) => ({ ...s, current: s.id === this.app.session.id })); }
+  sessions(q = "") {
+    const n = q.trim().toLowerCase(), alive = new Map(this.liveView().map((l) => [l.id, l]));
+    return this.app.store.list().filter((s) => !n || s.title.toLowerCase().includes(n)).map((s) => ({ ...s, current: s.id === this.app.session.id, running: !!alive.get(s.id)?.running, waiting: !!alive.get(s.id)?.waiting, live: alive.has(s.id) }));
+  }
   sessionPreview(id: string) { const s = this.app.store.load(id); return s ? previewLines(s, 8) : []; }
-  async resume(id: string) { if (this.app.running) throw new Error("wait for the current turn to finish"); await this.app.resumeById(id); this.fullSync(); this.changed(); }
-  newConversation() { if (this.app.running) throw new Error("wait for the current turn to finish"); this.app.newConversation(); this.fullSync(); this.changed(); }
+  /** Open a conversation. One that is alive behind this one comes forward; a busy chat keeps working behind the one you open. */
+  async resume(id: string) {
+    if (id === this.app.session.id) return;
+    const l = this.live.find((x) => x.app.session.id === id); if (l) return this.bringForward(l);
+    if (!this.busy(this.app)) { await this.app.resumeById(id); this.fullSync(); this.changed(); return; }
+    await this.spawnChat(id);
+  }
+  /** A new conversation. When this one is busy, it keeps working behind the new one. */
+  async newConversation() {
+    if (!this.busy(this.app)) { this.app.newConversation(); this.fullSync(); this.changed(); return; }
+    await this.spawnChat();
+  }
+  /** A new live chat next to a busy one: its own settings copy (so it can use another provider), its own worktree when they share a git project. */
+  private async spawnChat(resume?: string) {
+    const project = this.projectOf(this.cwd, this.fgWorktree), place = await this.placeFor(project);
+    this.open(place.cwd, { keep: true, cfg: cloneConfig(this.app.cfg), resume, sessionsRoot: project, worktree: place.worktree });
+    this.hello(); if (place.note) this.emit({ type: "toast", level: "info", text: place.note });
+  }
   /** Which of your turns a message bubble is: your messages and the session's turns, matched in order by their text (messages sent while Amness worked are not turns). */
   turnOfBlock(blockId: number): number | undefined {
     const turns = this.app.session.turns; let t = 0;
@@ -210,9 +288,8 @@ export class DesktopBridge {
 
   openProject(dir: string) {
     const abs = resolve(dir); if (!existsSync(abs) || !statSync(abs).isDirectory()) throw new Error(`not a folder: ${dir}`);
-    if (this.app.running) throw new Error("wait for the current turn to finish");
     if (this.o.persist !== false) { const st = loadState() as ReturnType<typeof loadState> & { recentProjects?: string[] }; st.recentProjects = [abs, ...(st.recentProjects ?? []).filter((p) => p !== abs)].slice(0, 12); saveState(st); }
-    this.open(abs); this.hello();
+    this.open(abs, { keep: true, cfg: this.busy(this.app) ? cloneConfig(this.app.cfg) : undefined }); this.hello();
   }
   recentProjects(): string[] { return ((loadState() as { recentProjects?: string[] }).recentProjects ?? []).filter((p) => existsSync(p)); }
 
@@ -226,5 +303,5 @@ export class DesktopBridge {
     const buf = readFileSync(abs); if (buf.subarray(0, 8000).includes(0)) throw new Error("binary file");
     return { path: rel, text: buf.toString("utf8"), size: st.size };
   }
-  close() { this.switching = true; this.app.exit(0); }
+  close() { this.switching = true; for (const l of this.live.splice(0)) l.app.exit(0); this.app.exit(0); }
 }

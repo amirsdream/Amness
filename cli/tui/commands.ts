@@ -1,5 +1,6 @@
 // Slash commands. Each gets the running App and the raw argument string.
 import { ROLE_NAMES, resolveConfig } from "../roles.ts";
+import { bgLine } from "./background.ts";
 import { formatDoctor, loadProfile, runDoctor, writeProfile } from "../../src/index.ts";
 import { previewLines, relatives } from "./session.ts";
 import { GUARDS, harnessView } from "./harnessinfo.ts";
@@ -563,6 +564,23 @@ export function buildCommands(): Cmd[] {
         if (q && !q.roles.includes(need)) a.say(`  note: amness doctor did not qualify ${label} for ${need} (it qualified for: ${q.roles.join(", ") || "nothing"})`, yellow);
         else if (!q) a.say(`  tip: /doctor ${id} checks how this model uses tools`, dim);
       }
+    } },
+    { name: "bg", alias: "background", help: "run a task in the background, in its own worktree: /bg <task> · /bg (list) · /bg show|apply|drop|stop <n>", args: "[task | show|apply|drop|stop n]", live: true, run: async (a, arg) => {
+      const [sub, n] = arg.trim().split(/\s+/), id = Number(n);
+      if (!arg.trim()) {
+        if (!a.bg.tasks.length) return void a.say("no background tasks. Start one with /bg <task>: it runs in its own git worktree while you keep working here", dim);
+        return void a.commit(["", bold("  Background tasks"), ...a.bg.tasks.map((t) => "  " + bgLine(t)), dim("  /bg show <n> · /bg apply <n> (take its changes) · /bg drop <n> · /bg stop <n>")]);
+      }
+      if (["show", "apply", "drop", "stop"].includes(sub) && Number.isInteger(id) && n !== undefined) {
+        if (sub === "stop") return void a.say(a.bg.stop(id), dim);
+        if (sub === "drop") return void a.say(await a.bg.drop(id), dim);
+        if (sub === "apply") { const msg = await a.bg.apply(id); a.say(msg, /^applied/.test(msg) ? green : yellow); return; }
+        const t = a.bg.get(id); if (!t) return void a.say(`no background task ${id}`, red);
+        return void a.commit(["", bold(`  Background task ${t.id}`), `  ${dim("task".padEnd(8))} ${t.task}`, `  ${dim("status".padEnd(8))} ${t.status}`, `  ${dim("branch".padEnd(8))} ${t.branch}  ${dim(t.dir)}`,
+          `  ${dim("changed".padEnd(8))} ${t.changed?.join(", ") || (t.status === "running" ? "(running)" : "nothing")}`, "", ...(t.summary ?? "(no summary yet)").split("\n").map((l) => "  " + l)]);
+      }
+      try { const t = await a.bg.start(arg.trim()); a.say(`started background task ${t.id} in ${t.branch}; keep working, you will be told when it ends (/bg lists them)`, green); }
+      catch (e) { a.say((e as Error).message, red); }
     } },
     { name: "doctor", help: "check how a model uses tools and which jobs it can take: /doctor [model] [write]", args: "[model] [write]", run: async (a, arg) => {
       const words = arg.split(/\s+/).filter(Boolean), write = words.includes("write"), ref = words.find((w) => w !== "write") ?? a.cfg.model;

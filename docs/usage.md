@@ -342,6 +342,7 @@ Type `/` in the input box to see the popup. It lists **every** command, grouped 
 | `/api [auto\|responses\|chat]` | Chooses the OpenAI wire API. It does not apply to Claude. |
 | `/models [role model]` | Uses another model for one job: `explore`, `compact`, `review`, `cheap`, `approve`, `quarantine` or `advisor`. The model can be on another provider or a saved server (`anthropic:claude-haiku-5-5`, `server:lab`). `/models fallback <model>` sets a model for when the main one is overloaded or not reachable. Use `off` to remove one. See [Models per job](features.md#models-per-job-and-a-fallback). |
 | `/doctor [model] [write]` | Checks how a model uses tools (about ten short requests) and lists the jobs it can take. `write` saves the result in `.amness/profile.json`. |
+| `/bg [task]` | Runs a task in the background, in its own git worktree, while you keep working. `/bg` lists tasks; `/bg show\|apply\|drop\|stop <n>`. See [Work on several things at once](features.md#work-on-several-things-at-once-background-tasks-and-live-chats). |
 | `/router [on\|off]` | Sends read-only exploration steps to the `cheap` model when this pays off. You must set a cheap model first with `/models cheap <id>`. |
 | `/keepwarm [on\|off]` | Keeps the Claude prompt cache alive while you are away. It affects Claude only. |
 

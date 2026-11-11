@@ -124,6 +124,9 @@ New measurement items: **E14** a stronger injection suite (models resisted all t
 | G42 | Shared rate limiter for all model calls (Retry-After, jitter, AIMD concurrency, ramp-up, quota errors not retried). Left: see a real 429, tune the defaults (start 2, ceiling 4), and use `x-ratelimit-remaining-tokens` to slow down before the 429. | P1 | M | [~] |
 | G43 | Subagent steps nested inside their card (parent ids), one live line per subagent inline. Left: subagent token/step counts on the card, and click-through to a subagent's full transcript. | P1 | M | [x] |
 | G44 | Reviewer/criteria should catch spec details (see E16); re-read-the-spec check before finishing when the task mentions a spec or docs file. Built as `strategy:spec-check`; measured once: 1 of 8 against 0 of 8 at twice the steps, inconclusive. Next idea: turn the spec's examples into checks automatically. | P2 | M | [~] |
+| G45 | Several live chats in the desktop app (from user feedback, 2026-11-11: "run multiple sessions and even use different providers"): a busy chat keeps working when another is opened; the list shows working and waiting chats; each chat keeps its own provider. | P1 | M | [x] |
+| G46 | Background tasks: `/bg` in both front ends (own worktree, notice and notification at the end, `apply`/`drop`), `amness run --background` and `amness tasks`. | P1 | M | [x] |
+| G47 | A worktree per parallel chat on the same git project (desktop, default on, `desktop.parallelWorktree`), and settings saved per key so windows do not overwrite each other. | P1 | S | [x] |
 
 
 ### D. Track C: programmable harness (added 2026-10-30, "maximum power to customise")
@@ -982,6 +985,8 @@ Not found or not verified: a controlled study of prefix-cache behaviour across l
 ## Done log
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
+
+- **G45, G46, G47** (2026-11-11): `cli/tui/background.ts` (`BackgroundTasks`: worktree per task, edits allowed there, approvals refused, notice + system notification at the end, apply/drop/stop/show; at most 3 at once) and `/bg` in the shared App (sidebar TASKS in both front ends); `cli/desktop/bridge.ts` keeps busy chats alive behind the shown one (toasts when one waits or finishes, `live` in the state, the chat list marks them, a "Working now" group for other projects), each new parallel chat with `cloneConfig` and, on the same git project, its own worktree (`sessionsRoot` keeps its conversations with the project; an untouched worktree is removed); `cli/bgrun.ts` (`amness run --background`, `amness tasks`); `saveConfig` writes only changed keys merged into the file. Tests: `test/multitask.test.ts`. Not used on real work yet.
 
 - **M19** [~] (2026-11-11): `tune` change kinds `textToolCalls = true`, `tier = local`, `prompt = <id>`, `tools without <name>` (from `toolSet`), and the guards `argfix`, `hollow`, `reread` in the default candidates; predictions per kind; flags `--text-tool-calls`, `--tier-local`, `--prompts`, `--tools`. Eval variants now honour the profile's `tier`, `tools`, `prompt`, `textToolCalls`. Test in `test/tune.test.ts`. Not done: "move one role one tier down" (it changes the config, not a profile; needs a config writer and a rule for whose config), and the M13 risk-weight search.
 - **M16** [x] (2026-11-11): variants `edit:whole-small` (a system rule) and `edit:delegate` (built-in `editor` agent through `extraAgents`, a system rule that the main model delegates every edit; `@edit=<model>` puts the editor elsewhere; `Roles.edit`). Found on the way: a writing subagent defaulted to permission mode "default" when the parent had none (evals, library), so its edits were denied; it now inherits the parent's mode. Tests: `test/editvariants.test.ts`.

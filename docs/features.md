@@ -51,6 +51,7 @@ Extend it
 - [Custom subagents](#custom-subagents)
 - [Skills](#skills)
 - [Your own commands](#your-own-commands)
+- [Work on several things at once: background tasks and live chats](#work-on-several-things-at-once-background-tasks-and-live-chats)
 - [Several agents at once: best-of-n and parallel parts](#several-agents-at-once-best-of-n-and-parallel-parts)
 
 Measure and improve
@@ -1055,6 +1056,60 @@ Amness replaces `$ARGUMENTS` with the text after the command name. If the file h
 - Status: default. Covered by automated tests of the loader. Not verified: what happens when a custom command has the same name as a built-in command.
 
 **Related pages.** [Using the chat](usage.md).
+
+## Work on several things at once: background tasks and live chats
+
+**What it is.** You can give Amness a task to do in the background and keep working, in the terminal, in the desktop app and from scripts. Each background task, and each extra chat that works at the same time on the same project, gets its own git worktree: a separate copy of the project on its own branch. So two jobs never edit the same files. Each chat can use its own provider and model.
+
+**Why you would use it.** A long job (a refactor, a test run that takes minutes, a slow local model) does not block you. You can ask a quick question with Claude while a local model works on something else.
+
+**How to use it.**
+
+1. In the chat (terminal or desktop), start a background task:
+
+   ```text
+   /bg add a --json flag to the export command and test it
+   ```
+
+   Amness answers `started background task 1 in amness/bg-1-…` and you can keep typing. The sidebar shows it under **TASKS**.
+2. When it ends, you get a notice in the chat and a system notification: what it said, and how many files it changed.
+3. Look at it, then take its changes or throw them away:
+
+   ```text
+   /bg show 1
+   /bg apply 1
+   /bg drop 1
+   ```
+
+   `/bg` alone lists the tasks, and `/bg stop 1` stops one.
+4. In the desktop app, you can also just open another chat while one works: click **New chat** or another conversation. The working chat keeps going. Its line in the chat list pulses, and it is marked when it waits for you (an approval or a question). A toast tells you when it finishes. Click it to go back. Each chat keeps its own provider and model, so `/provider` in one chat does not change the others.
+5. From a script, start a run that keeps going after the command returns:
+
+   ```bash
+   amness run --background --server lab "update the changelog for the last 10 commits"
+   amness tasks                 # list them
+   amness tasks <id>            # the result
+   amness tasks --apply <id>    # take its changes
+   ```
+
+**Example.** `/bg` shows:
+
+```text
+Background tasks
+  ● 1. add a --json flag to the export command and test it  · running (sh) · 12 steps · 95s
+  ✓ 2. fix the typo in the README  · done · 3 steps · 20s · 1 file(s) changed
+```
+
+**Limits and common problems.**
+
+- Background tasks and extra chats on the same project need a git repository with a commit (for the worktree). Outside git, `/bg` refuses; an extra desktop chat then shares the folder, and Amness says so. `"desktop": { "parallelWorktree": false }` in the config makes extra chats share the folder on purpose.
+- A worktree starts from the last commit, so work you have not committed is not in it.
+- Nobody is there to approve, so a background task may edit files in its own worktree, but a command that needs approval is refused (the agent is told so). In `yolo` mode it may run them, as you do.
+- `/bg apply` puts the changes into your working tree as uncommitted changes. `/undo` does not cover them; review them with git. If they do not apply cleanly, they stay on the task's branch.
+- At most 3 background tasks run at once. They stop when you close Amness; their worktrees stay, so you can still look at the branches.
+- A local server with one slot answers one request at a time, so parallel jobs on it wait for each other.
+- Two windows can now save settings at the same time: each writes only what it changed.
+- Status: covered by automated tests (background tasks in a real git repository, two live desktop chats, a real `amness run --background`). Not used on real work yet.
 
 ## Several agents at once: best-of-n and parallel parts
 

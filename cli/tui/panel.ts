@@ -50,6 +50,7 @@ export function sidebarData(app: App, st: PanelState, t: Theme, now: number): Si
     usage: { prompt: u.prompt, completion: u.completion, calls: u.calls, cached: u.cached ?? 0, reasoning: u.reasoning ?? 0 }, cost: estimateCost(app.cfg.model, u.prompt, u.completion, u.cached ?? 0),
     todos: app.todos, changes: [...changes.values()].reverse(), tools: app.agent.registry.visible({ step: 0, messages: [] }).length, mcp: app.mcp.length, memory: app.memory?.list().length ?? 0,
     sandbox: app.cfg.sandbox,
+    tasks: app.bg?.tasks.map((x) => ({ id: x.id, task: x.task.replace(/\s+/g, " "), status: x.status, secs: Math.round(((x.ended ?? now) - x.started) / 1000), changed: x.changed?.length ?? 0 })),
     procs: app.agent.procs?.list().map((p) => ({ id: p.id, name: p.name, status: p.status, secs: Math.round((now - p.startedAt) / 1000) })),
     running: app.running, elapsedMs: now - st.startedAt, tip: TIPS[st.tipIdx], lastTurnCost: app.lastTurnCost,
     agents: app.blocks.blocks.filter((b): b is Extract<Block, { kind: "tool" }> => b.kind === "tool" && b.name === "task" && b.status === "running").map((b) => {

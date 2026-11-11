@@ -7,6 +7,7 @@ import { promptPlugin, harnessCard, quarantineReader, Budget, Tracer, Hooks, Per
 import { PROVIDERS, keyFor, loadConfig, ready, useServer, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
 import { wireModels, type Wired } from "./roles.ts";
+import { finishBackground, startBackground } from "./bgrun.ts";
 import { formatEvent } from "./format.ts";
 import { estimateCost } from "./tui/pricing.ts";
 import { createModel, nativeAdvisor } from "./model.ts";
@@ -48,6 +49,7 @@ export const HELP = `usage: amness run [flags] "task"
                        a model for one role: a bare id (main provider), provider:model (anthropic:claude-haiku-5-5), or server:<name>[/model]; default from config "models"
   --local-weight <0-1> how much a token of a local-tier model counts against --max-tokens (default 1); 0.1 lets free local workers read a lot
   --stable-tools       keep the tool list the same all run: tools found with tool_search run through call_tool, so the prompt cache survives
+  --background         start the run and return at once: it goes on in its own git worktree (--here: in this folder); follow it with amness tasks
   --explore-ranges     the explorer answers with file ranges that are checked against the files (ANSWER / FILES), not prose
   --subagents          offer the task tool (explorer and custom subagents); on by itself when --explore-model or models.explore is set
   --advisor-model <ref> a stronger model to consult: with a Claude main model and a Claude advisor, Anthropic's advisor tool; otherwise
@@ -60,12 +62,13 @@ export const HELP = `usage: amness run [flags] "task"
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
 
 /** The options of `amness run` (keep in step with HELP). Anything else in the arguments is the task. */
-const VALUE_FLAGS = new Set(["--cwd", "--verify", "--check", "--bundle", "--export", "--trace", "--sandbox", "--sandbox-engine", "--provider", "--model", "--base-url", "--effort", "--api", "--best-of", "--parts", "--image", "--max-tokens",
+export const VALUE_FLAGS = new Set(["--cwd", "--verify", "--check", "--bundle", "--export", "--trace", "--sandbox", "--sandbox-engine", "--provider", "--model", "--base-url", "--effort", "--api", "--best-of", "--parts", "--image", "--max-tokens",
   "--server", "--add-dir", "--max-steps", "--context-window", "--max-time", "--off", "--plugin", "--tool-choice", "--thinking-budget", "--request", "--local-weight", "--explore-model", "--compact-model", "--review-model", "--cheap-model", "--approve-model", "--quarantine-model", "--advisor-model", "--fallback", "--ladder", "--ladder-start"]);   // --live takes an optional port: it is read on its own, before the task
-const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking", "--router", "--subagents", "--explore-ranges", "--stable-tools"]);
+export const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking", "--router", "--subagents", "--explore-ranges", "--stable-tools", "--background", "--here"]);
 
 export async function runHeadless(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(HELP); return 0; }       // asking for help must never start a model run
+  if (argv.includes("--background")) return startBackground(argv);
   const args = [...argv];
   // Every option is taken out of the arguments before the task text is built (what is left is the task), even when the code reads it much later.
   // Before, an option read after that point (--trace, --off, --max-time…) or only looked up with argv.includes (--cache, --plans…) became part of the task.
@@ -196,9 +199,11 @@ export async function runHeadless(argv: string[]): Promise<number> {
     const out = { kind: "result", finished: r.finished, text: r.text, steps: r.steps, tokens: budget.tokens, stopped: stop.signal.aborted && r.stopped === "aborted" ? "time" : r.stopped, model: cfg.model, usage, cost: estimateCost(cfg.model, usage.prompt, usage.completion, usage.cached),
       ...(Object.keys(budget.byModel).length > 1 && { byModel: budget.byModel, byTier: budget.byTier }) };
     if (json) console.log(JSON.stringify(out)); else console.log(r.text);
+    finishBackground({ finished: r.finished, text: r.text, steps: r.steps, tokens: budget.tokens, stopped: r.stopped });
     return r.finished ? 0 : 1;
   } catch (e) {
     if (json) console.log(JSON.stringify({ kind: "error", message: (e as Error).message })); else console.error("error: " + (e as Error).message);
+    finishBackground({ finished: false, text: `error: ${(e as Error).message}` });
     return 1;
   } finally { for (const t of timers) clearTimeout(t); await agent.procs?.dispose(); await tracer?.close(); await live?.close(); }
 }

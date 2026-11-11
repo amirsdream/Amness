@@ -18,6 +18,7 @@ import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
 import { createModel, nativeAdvisor } from "../model.ts";
 import { wireModels, type Wired } from "../roles.ts";
+import { BackgroundTasks, type BgTask } from "./background.ts";
 import { loadState, saveState } from "../state.ts";
 import { bold, cyan, dim, gray, green, magenta, red, yellow } from "../ui.ts";
 import { BlockStore } from "./blocks.ts";
@@ -47,7 +48,7 @@ export type AppOptions = {
   cfg: Config; cwd: string; version: string;
   input?: any; output?: Out & { on?: (e: string, f: () => void) => void };
   makeModel?: (cfg: Config) => Model;
-  resume?: "last" | string; prompt?: string; persist?: boolean; /** idle ms before a cache keep-alive ping (default 270000) */ keepWarmMs?: number;
+  resume?: "last" | string; prompt?: string; persist?: boolean; /** where conversations are saved (default `cwd`): a chat working in a worktree keeps its conversations with the project */ sessionsRoot?: string; /** idle ms before a cache keep-alive ping (default 270000) */ keepWarmMs?: number;
   /** "full" = the full-screen UI (alternate screen, mouse, sidebar); "inline" = the classic scrollback UI; "remote" = no terminal: another front end (the desktop app) shows the same App through `remote`. */
   ui?: "full" | "inline" | "remote";
   /** For ui "remote": how the App tells its front end that something changed. Dialogs are the App's own overlays (`app.overlay`), which the front end shows and answers. */
@@ -105,7 +106,7 @@ export class App {
   constructor(o: AppOptions) {
     this.opts = o; this.cfg = o.cfg; this.cwd = o.cwd; this.snaps = new Snapshots(o.cwd); this.version = o.version; this.persist = o.persist ?? true; this.savedDirs = this.persist ? loadState().dirs?.[o.cwd] ?? [] : [];
     this.io = { input: o.input ?? process.stdin, output: o.output ?? (process.stdout as any) };
-    this.ui = o.ui ?? "inline"; this.remote = o.remote; this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.cwd);
+    this.ui = o.ui ?? "inline"; this.remote = o.remote; this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.sessionsRoot ?? o.cwd);
     if (this.ui === "full") this.full = new FullView(this);
     this.session = newSession(o.cwd, o.cfg.model);
     this.builtin = buildCommands();
@@ -113,6 +114,22 @@ export class App {
     const st = loadState(); this.verify = st.verifyByDir[o.cwd] ?? (detectVerify(o.cwd) || undefined);
     if (this.persist) try { this.editor.history = JSON.parse(readFileSync(join(home(), "history.json"), "utf8")).slice(0, 200); } catch { /* first run */ }
     this.buildAgent();
+    this.bg = new BackgroundTasks({ cwd: o.cwd, maxTokens: () => this.cfg.maxTokens, onChange: () => this.render(), onEnd: (t) => this.bgEnded(t),
+      run: ({ dir, task, budget, signal, onEvent }) => {
+        // A fresh agent in the task's worktree, on the same models. Edits there are allowed (they are isolated); a command that needs approval is refused, since nobody is there to answer.
+        const a = createCodeAgent({ model: this.model, models: this.roles, modelById: (id) => this.wired?.byRef(id) ?? this.model, cwd: dir, memory: false, budget, signal: () => signal, sandbox: this.cfg.sandbox,
+          permissions: { mode: () => (this.mode === "yolo" ? "yolo" : "acceptEdits") }, approve: async () => "this is a background task, so nobody can approve this right now; it was refused. Do it another way, or say in your summary what still needs doing",
+          verify: this.verify, onEvent });
+        return a.run(task).finally(() => a.procs?.dispose());
+      } });
+  }
+  /** A background task ended: say so in the conversation, as a toast, and as a system notification (the user may be in another window). */
+  private bgEnded(t: BgTask) {
+    const what = `background task ${t.id} ${t.status === "done" ? "finished" : t.status}: ${one(t.summary ?? "", 120)}${t.changed?.length ? ` · ${t.changed.length} file(s) changed · /bg apply ${t.id} to take them, /bg drop ${t.id} to throw them away` : ""}`;
+    this.notify(t.status === "done" ? "ok" : "warn", what, [(t.status === "done" ? green : yellow)(`  ${what}`)]);
+    if (this.remote) this.remote.toast(t.status === "done" ? "ok" : "warn", what);
+    if (this.cfg.notify !== "off") try { this.notifier(`Amness: background task ${t.id} ${t.status === "done" ? "finished" : t.status}`, one(t.summary ?? t.task, 160)); } catch { /* no notifier */ }
+    this.render();
   }
 
   private warnedShadow = new Set<string>();
@@ -198,7 +215,7 @@ export class App {
     try { if (this.full) this.full.leave(); else { this.screen.clear(); if (this.screen.alt) this.screen.leaveAlt(); } this.io.output.write(PASTE_OFF + FOCUS_OFF + "\x1b[?25h"); this.io.input.setRawMode?.(false); this.io.input.pause?.(); this.io.input.off?.("data", this.onData); } catch { /* terminal already gone */ }
   };
   exit(code = 0) {
-    this.stopWarm(); this.agent.procs?.killAllNow(); void this.tracer?.close();
+    this.bg?.stopAll(); this.stopWarm(); this.agent.procs?.killAllNow(); void this.tracer?.close();
     if (this.running) this.ac?.abort();
     this.saveSession(); this.restore();
     const hint = this.session.turns.length ? dim(`Resume this conversation with: amness -c   (session ${this.session.id})`) : "";
@@ -842,7 +859,7 @@ export class App {
     this.warmTimer.unref?.();
   }
   /** Project hooks run commands on this machine, so a cloned repo's hooks only run after the user approves this exact file. */
-  policyLog: string[] = []; hooks!: Hooks; rules!: Permissions; roles: Roles = {}; wired?: Wired; lastRoute = ""; warnedPlanFirst = false;
+  policyLog: string[] = []; hooks!: Hooks; rules!: Permissions; roles: Roles = {}; bg!: BackgroundTasks; wired?: Wired; lastRoute = ""; warnedPlanFirst = false;
   loadHooks() {
     const fp = projectConfigFingerprint(this.cwd), trusted = !!fp && loadState().hookTrust?.[this.cwd] === fp;
     try { this.hooks = Hooks.load(this.cwd, { trustProject: trusted }); } catch (e) { this.hooks = Hooks.load(this.cwd, { trustProject: false }); this.note(`hooks ignored: ${(e as Error).message}`); }

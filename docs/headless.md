@@ -92,6 +92,7 @@ The values are an example. The field `stopped` is missing when the run ends norm
 | `--advisor-model <model>` | A stronger model the agent consults at a few moments. See [Ask a stronger model](features.md#models-per-job-and-a-fallback). |
 | `--ladder <model,model,…>`, `--ladder-start <n>` | Runs the loop on a recovery ladder of models, cheapest first. |
 | `--explore-ranges` | The explorer answers with file ranges that are checked against the files. |
+| `--background` | Starts the run and returns at once. It goes on in its own git worktree (`--here`: in this folder), logs to `.amness/background/<id>.jsonl`, and sends a system notification at the end. Follow it with `amness tasks`, `amness tasks <id>`, `--apply <id>`, `--drop <id>`, `--stop <id>`. |
 | `--stable-tools` | Keeps the tool list the same for the whole run, so the prompt cache survives. |
 | `--tool-choice`, `--thinking-budget`, `--keep-thinking`, `--request`, `--off`, `--plugin`, `--max-time`, `--max-steps`, `--context-window` | See `amness run --help`. |
 | `--no-memory` | Turns memory off. |
