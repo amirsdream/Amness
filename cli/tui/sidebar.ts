@@ -9,7 +9,7 @@ import { fmtCost, fmtTokens } from "./pricing.ts";
 import { renderLoop, type LoopData } from "./looppanel.ts";
 
 export type SidebarData = {
-  title: string; model: string; provider: string; api?: string; branch?: string; cwd: string; mode: string; effort?: string;
+  title: string; model: string; provider: string; api?: string; branch?: string; cwd: string; mode: string; effort?: string; /** jobs that run on another model: role → reference label */ roles?: Record<string, string>;
   ctxPct: number | null; ctxUsed: number; ctxMax: number; series: number[]; /** each request in detail with its cost estimate (desktop chart tooltips) */ requests?: (RequestUsage & { cost: number | null })[]; map: { label: string; pct: number; color: number }[];
   usage: { prompt: number; completion: number; calls: number; cached: number; reasoning: number }; cost: number | null;
   todos: { content: string; status: string }[]; changes: { path: string; added: number; removed: number; created: boolean; blockId: number }[];
@@ -50,6 +50,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
   for (const l of wrap(d.title || "New conversation", inner, 2)) push(BOLD(F(t.text, l)));
   push(F(brand.color, brand.icon) + " " + F(t.text, clipWidth(d.model, inner - 4)));
   push(F(t.faint, [d.api ? `${d.api} api` : "", d.effort ? `effort ${d.effort}` : ""].filter(Boolean).join(" · ") || " "));
+  for (const [r, l] of Object.entries(d.roles ?? {})) push(F(t.faint, clipWidth(`${r} → ${l}`, inner)));
   push(F(t.dim, "⎇ " + (d.branch ?? "no git") + "  ") + F(t.faint, tail(d.cwd, Math.max(6, inner - 4 - (d.branch?.length ?? 6)))));
 
   head("CONTEXT", d.ctxPct === null ? "" : F(pctColor(d.ctxPct, t), `${d.ctxPct}%`));

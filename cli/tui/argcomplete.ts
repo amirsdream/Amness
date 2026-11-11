@@ -4,6 +4,9 @@ import { effortsFor, loadPrompts, SANDBOX_MODES, SHELL_CHOICES, STRATEGIES } fro
 import { GUARDS } from "./harnessinfo.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS } from "../config.ts";
 import { fetchModels } from "../models.ts";
+import { referenceOptions } from "../roles.ts";
+
+const ROLE_DETAIL: [string, string][] = [["explore", "read-only exploration subagent"], ["compact", "handoff notes when the context fills"], ["review", "independent reviewer"], ["cheap", "cheap tier for the router"], ["approve", "approval reviewer for risky calls"], ["quarantine", "reader of untrusted web and MCP content"]];
 import { listDrafts } from "../../src/index.ts";
 import { themeNames, THEMES } from "./themes.ts";
 import { settingsView, showValue } from "./settings.ts";
@@ -34,8 +37,8 @@ export function argOptions(a: App, cmd: string, words: string[]): ArgResult {
     case "api": return first ? ok(opts(["auto", "pick Responses for reasoning models, self-correct"], ["responses", "OpenAI Responses API"], ["chat", "Chat Completions API"])) : ok([]);
     case "effort": return first ? ok([{ value: "default", detail: "let the model decide" }, ...(a.cfg.provider === "anthropic" ? ["low", "medium", "high", "xhigh", "max"] : effortsFor(a.cfg.model)).map((e) => ({ value: e as string }))]) : ok([]);
     case "model": return first ? modelOptions(a) : ok([]);
-    case "models": return first ? ok([...["explore", "compact", "review", "cheap"].map((r) => ({ value: r, detail: `model for ${r} steps`, more: true })), { value: "fallback", detail: "answer from this model when the main one is down", more: true }])
-      : words.length === 1 ? modelOptions(a, [{ value: "off", detail: "use the main model" }]) : ok([]);
+    case "models": return first ? ok([...ROLE_DETAIL.map(([r, d]) => ({ value: r, detail: d, more: true })), { value: "fallback", detail: "answer from this model when the main one is down", more: true }])
+      : words.length === 1 ? ((r) => ({ ...r, options: [...r.options, ...referenceOptions(a.cfg).map((v) => ({ value: v, detail: v.startsWith("server:") ? "saved server" : "another provider" }))] }))(modelOptions(a, [{ value: "off", detail: "use the main model" }])) : ok([]);
     case "harness": return first ? ok(opts(["on", "switch a guard on"], ["off", "switch a guard off"], ["steps", "step limit"], ["stagnation", "no-progress limit"], ["budget", "context budget in characters"], ["rewrites", "cost-aware rewrites on or off"], ["reset", "back to the defaults"]).map((o) => ({ ...o, more: o.value !== "reset" })))
       : words.length === 1 && (words[0] === "on" || words[0] === "off") ? ok(GUARDS.map((g) => ({ value: g.name, detail: g.label }))) : words.length === 1 && words[0] === "rewrites" ? ok(opts(["on", ""], ["off", ""])) : ok([]);
     case "set": return first ? ok(settingsView(a, "terminal").flatMap((g) => g.items.filter((x) => x.kind !== "action").map((x) => ({ value: x.id, detail: `${x.label} · now ${showValue(x) || "—"}`, more: true }))))

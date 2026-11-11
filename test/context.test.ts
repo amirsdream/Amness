@@ -89,6 +89,7 @@ test("unit: the provider's own token count calibrates our estimate; the mechanic
   assert.equal(calibration(1200, 1000), 1.2); assert.equal(calibration(10, 1000), 0.6); assert.equal(calibration(9000, 1000), 2.5); assert.equal(calibration(0, 1000), 1);
   const note = mechanicalNote([{ role: "user", content: "task" }, { role: "assistant", content: null, tool_calls: [{ id: "1", function: { name: "write_file", arguments: '{"path":"src/a.ts","content":"x"}' } }, { id: "2", function: { name: "sh", arguments: '{"command":"npm test"}' } }] }, { role: "assistant", content: "tests pass, now docs" }]);
   assert.match(note, /write_file src\/a\.ts/); assert.match(note, /npm test/); assert.match(note, /tests pass, now docs/);
+  assert.match(mechanicalNote([{ role: "user", content: "task" }, { role: "assistant", content: null, tool_calls: [{ id: "1", function: { name: "sh", arguments: '{"cmd":"npm run build"}' } }] }]), /COMMANDS: npm run build/);   // the sh tool's argument is cmd
 });
 
 const tiny = defineTool<{ path: string }>({ name: "read", description: "Read a file.", schema: { type: "object", properties: { path: { type: "string" } } }, run: ({ path }) => `${path}: ` + "x".repeat(190) });

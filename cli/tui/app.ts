@@ -5,7 +5,7 @@ import { join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { onRateLimitWait } from "../model.ts";
 import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
-import { visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, routedModel, sandboxKind, withFallback, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { PROVIDERS, home, keyFor, keyIdOf, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
@@ -17,6 +17,7 @@ import { harnessView } from "./harnessinfo.ts";
 import { detectVerify } from "../detect.ts";
 import { createHash } from "node:crypto";
 import { createModel } from "../model.ts";
+import { wireModels, type Wired } from "../roles.ts";
 import { loadState, saveState } from "../state.ts";
 import { bold, cyan, dim, gray, green, magenta, red, yellow } from "../ui.ts";
 import { BlockStore } from "./blocks.ts";
@@ -133,18 +134,15 @@ export class App {
   buildAgent() {
     const cacheKey = "amness-" + createHash("sha1").update(this.cwd).digest("hex").slice(0, 12);          // stable per project: better prompt-cache hits
     const make = (c: Config) => (this.opts.makeModel ?? ((x) => createModel(x, undefined, { cacheKey })))(c);
-    const main = make(this.cfg), fb = this.cfg.fallback && this.cfg.fallback !== this.cfg.model ? make({ ...this.cfg, model: this.cfg.fallback }) : undefined;
-    this.model = fb ? withFallback(main, fb, () => this.note(`${this.cfg.model} is unavailable; answering from ${this.cfg.fallback}`)) : main;
-    const role = (id?: string) => (id && id !== this.cfg.model ? make({ ...this.cfg, model: id }) : undefined), m = this.cfg.models ?? {};
-    this.roles = { explore: role(m.explore), compact: role(m.compact), review: role(m.review), cheap: role(m.cheap) };
-    if (this.cfg.router && this.roles.cheap) {
-      const pm = priceOf(this.cfg.model), pc = priceOf(m.cheap ?? "");
-      this.model = routedModel({ strong: this.model, cheap: this.roles.cheap, prices: pm && pc ? { strong: { input: pm[1], output: pm[2] }, cheap: { input: pc[1], output: pc[2] } } : undefined,
-        onRoute: (d) => { this.lastRoute = `${d.tier === "cheap" ? m.cheap : this.cfg.model}`; if (d.switched) this.stepNow().notes.push(`route → ${d.tier === "cheap" ? m.cheap : this.cfg.model}: ${d.reason}`); } });
-    }
+    let w: Wired; const hooks = {
+      onFallback: () => this.note(`${this.cfg.model} is unavailable; answering from ${this.cfg.fallback}`),
+      onRoute: (d: { switched: boolean; reason: string }, label: string) => { this.lastRoute = label; if (d.switched) this.stepNow().notes.push(`route → ${label}: ${d.reason}`); } };
+    // A bad role reference in a hand-edited config must not stop the app: say so and run with the main model only.
+    try { w = wireModels(this.cfg, make(this.cfg), make, hooks); } catch (e) { this.note(`model roles ignored: ${(e as Error).message}`); w = wireModels({ ...this.cfg, models: undefined, fallback: undefined, router: false }, make(this.cfg), make, hooks); }
+    this.model = w.model; this.roles = w.roles; this.wired = w;
     this.agent = createCodeAgent({
-      model: this.model, modelById: (id) => make({ ...this.cfg, model: id }), cwd: this.cwd, chat: true, plans: this.cfg.plans || undefined, contextWindow: () => windowFor(this.cfg), onWindow: (w) => { rememberWindow(this.cfg, w); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`, [dim(`  context window learned: ${w.toLocaleString()} tokens`)]); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer || undefined, quarantine: this.cfg.quarantine || undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      model: this.model, modelById: (id) => w.byRef(id), cwd: this.cwd, chat: true, plans: this.cfg.plans || undefined, contextWindow: () => windowFor(this.cfg), onWindow: (w) => { rememberWindow(this.cfg, w); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`, [dim(`  context window learned: ${w.toLocaleString()} tokens`)]); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
+      signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer ? (w.approve ? { model: w.approve } : true) : undefined, quarantine: this.cfg.quarantine ? (w.quarantine ? quarantineReader(w.quarantine) : true) : undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
     if (!windowFor(this.cfg)) void detectWindow({ provider: this.cfg.provider, baseUrl: this.cfg.baseUrl, apiKey: this.cfg.apiKey, model: this.cfg.model }).then((w) => { if (w && !windowFor(this.cfg)) { rememberWindow(this.cfg, w); this.notify("info", `context window detected: ${w.toLocaleString()} tokens`, [dim(`  context window detected: ${w.toLocaleString()} tokens`)]); } });   // a local server states it
@@ -592,7 +590,7 @@ export class App {
       case "rejected": this.stepNow().notes.push("finish rejected: " + one(e.detail, 120)); this.notify("warn", `finish rejected by verification: ${one(e.detail, 300)}`, ["", `  ${yellow("⛔")} ${dim("finish rejected by verification:")} ${one(e.detail, w - 10)}`]); break;
       case "denied": this.stepNow().notes.push("denied: " + one(e.detail, 120)); this.notify("warn", `denied: ${one(e.detail, 300)}`, ["", `  ${red("⊘")} ${dim("denied: " + one(e.detail, w - 14))}`]); break;
       case "nudge": if (sub) break; this.stepNow().notes.push("nudged: " + one(e.detail, 80)); { const msg = /^budget \d+% used/.test(e.detail) ? `${e.detail}: asked the model to wrap up` : /^(step limit|stagnation|stuck|explored)/.test(e.detail) ? e.detail : "nudged the model to act instead of describing"; this.notify("info", msg, [dim(`  ↻ ${msg}`)]); } break;
-      case "repair": this.stepNow().notes.push("repaired a tool call: " + one(e.detail, 100)); this.notify("info", `repaired a malformed tool call: ${one(e.detail, 200)}`, [dim(`  ⚒ repaired a malformed tool call: ${one(e.detail, w - 30)}`)]); break;
+      case "repair": { const what = e.fixed ? "corrected a tool call" : "malformed tool call sent back"; this.stepNow().notes.push(`${what}: ` + one(e.detail, 100)); this.notify("info", `${what}: ${one(e.detail, 200)}`, [dim(`  ⚒ ${what}: ${one(e.detail, w - 30)}`)]); break; }
       case "loop": this.stepNow().notes.push("loop guard: " + one(e.detail, 100)); this.notify("info", "blocked a repeated identical call", [dim("  ∞ blocked a repeated identical call")]); break;
       case "rollover": this.notify("info", "context getting large: continued from a handoff note", [magenta("  ⟳ ") + dim("context getting large: continued from a handoff note")]); break;
       case "budget": if (sub) break; if (/exhausted/.test(e.detail)) this.notify("error", e.detail, ["", `  ${red("$")} ${e.detail}`]); else this.notify("warn", `${e.detail}: writing a final report`, [dim(`  $ ${e.detail}: writing a final report`)]); break;
@@ -841,7 +839,7 @@ export class App {
     this.warmTimer.unref?.();
   }
   /** Project hooks run commands on this machine, so a cloned repo's hooks only run after the user approves this exact file. */
-  policyLog: string[] = []; hooks!: Hooks; rules!: Permissions; roles: Roles = {}; lastRoute = "";
+  policyLog: string[] = []; hooks!: Hooks; rules!: Permissions; roles: Roles = {}; wired?: Wired; lastRoute = "";
   loadHooks() {
     const fp = projectConfigFingerprint(this.cwd), trusted = !!fp && loadState().hookTrust?.[this.cwd] === fp;
     try { this.hooks = Hooks.load(this.cwd, { trustProject: trusted }); } catch (e) { this.hooks = Hooks.load(this.cwd, { trustProject: false }); this.note(`hooks ignored: ${(e as Error).message}`); }

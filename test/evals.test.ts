@@ -56,8 +56,8 @@ test("loadCases reads json tasks and rejects malformed ones", () => {
 
 test("variantNames: presets expand, bad names are rejected", () => {
   assert.deepEqual(variantNames("ab"), ["baseline", "full"]);
-  assert.ok(variantNames("ablate").includes("full-index") && variantNames("ablate").length === 16);
-  for (const g of ["pin", "anchor", "audit"]) assert.ok(variantNames("ablate").includes(`full-${g}`), g);   // the newer guards are ablated too
+  assert.ok(variantNames("ablate").includes("full-index") && variantNames("ablate").length === 17);
+  for (const g of ["pin", "anchor", "audit", "argfix"]) assert.ok(variantNames("ablate").includes(`full-${g}`), g);   // the newer guards are ablated too
   const m: Model = async () => ({ role: "assistant", content: "x" });
   assert.throws(() => harnessVariant(m, "nonsense"), /unknown variant/); assert.throws(() => harnessVariant(m, "full-bogus"), /unknown guard/);
 });

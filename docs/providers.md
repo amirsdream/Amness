@@ -98,7 +98,7 @@ amness run --provider anthropic --model claude-sonnet-5-5 "explain src/index.ts"
 
 The flags `--provider`, `--model`, `--base-url`, `--effort` and `--api` are read by `amness run`. The interactive `amness` command does not read them. In the code, `amness --provider ollama` would send the extra words as your first message. Use `/provider` and `/model` in the chat. You can also set `AMNESS_MODEL` before you start.
 
-**Other models for other jobs.** `/models explore|compact|review|cheap <model>` uses a different model of the same provider for one job. `/models fallback <model>` names a model to use when the main one is overloaded or not reachable. See [Features: Models per job and a fallback](features.md#models-per-job-and-a-fallback).
+**Other models for other jobs.** `/models explore|compact|review|cheap|approve|quarantine <model>` uses a different model for one job. The model can be on the main provider (`gpt-6.1-luna`), on another provider you are connected to (`anthropic:claude-haiku-5-5`), or on a saved server (`server:lab`, or `server:lab/<model>`). Each one uses its own key: a saved server's key is never sent anywhere else. `/models fallback <model>` names a model to use when the main one is overloaded or not reachable. See [Features: Models per job and a fallback](features.md#models-per-job-and-a-fallback).
 
 ## Run a local model
 

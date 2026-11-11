@@ -245,6 +245,8 @@ const EXPLORE_SYSTEM = `You are a read-only code explorer working for another en
 export type CodeAgentOptions = {
   /** Conversational mode (the TUI): chat prompt, plus todo_write, task (read-only explorer subagent) and exit_plan_mode tools. */
   chat?: boolean;
+  /** Offer the `task` tool (explorer and custom subagents). Default: on in chat mode only. */
+  subagents?: boolean;
   /** Live permission mode. When given, edits and shell commands ask for approval per the mode (see PermMode); omit for the autonomous behaviour. */
   permissions?: { mode: () => PermMode };
   /** Polled every turn for messages the user typed while the agent works. */
@@ -403,12 +405,6 @@ export function createCodeAgent(o: CodeAgentOptions) {
           properties: { content: { type: "string" }, status: { type: "string", enum: ["pending", "in_progress", "done"] } } } } } },
         run: ({ todos: t }, ctx) => { todos = t; ctx.emit?.({ kind: "todos", todos: t }); return "todo list updated"; },
       }),
-      defineTool<{ description: string; agent?: string }>({
-        name: "task", readOnly: true, parallel: true, concurrent: ({ agent }) => { const d = agentOf(agent); return !d || !isWriter(d) || d.isolation === "worktree"; },
-        get description() { return `Delegate work to a subagent with its own fresh context: it sees only your brief and returns only its summary, so the brief must state the objective, where to look, what NOT to cover (so parallel subagents do not repeat each other) and what to report. Default: a read-only explorer for broad searches or questions that need reading many files; at most 3 run at once. Do not delegate what one grep or read would answer: a subagent costs a full session of tokens.${agentList.length ? ` Other agents (pass \`agent\`): ${agentList.map((a) => `${a.name}: ${a.description}${isWriter(a) ? (a.isolation === "worktree" ? " [edits in an isolated copy and returns a patch]" : " [can edit files]") : ""}`).join("; ")}.` : ""}`; },
-        schema: { type: "object", required: ["description"], properties: { description: { type: "string", description: "complete brief: the question or job, where to look, what to report" }, agent: { type: "string", description: "which agent (default: the read-only explorer)" } } },
-        run: async (args, ctx) => { await acquireTask(); try { return await runTask(args, ctx); } finally { releaseTask(); } },
-      }),
       defineTool<{ plan: string }>({
         name: "exit_plan_mode", readOnly: true, risky: true, when: () => mode?.() === "plan", preview: ({ plan }) => plan,
         description: "Plan mode only: present your finished plan to the user for approval. After approval you can edit files.",
@@ -417,6 +413,15 @@ export function createCodeAgent(o: CodeAgentOptions) {
       }),
     );
   }
+  // Subagents: in the chat app, and in `amness run` when asked for (an explore model, or --subagents).
+  if (o.subagents ?? o.chat) registry.add(
+      defineTool<{ description: string; agent?: string }>({
+        name: "task", readOnly: true, parallel: true, concurrent: ({ agent }) => { const d = agentOf(agent); return !d || !isWriter(d) || d.isolation === "worktree"; },
+        get description() { return `Delegate work to a subagent with its own fresh context: it sees only your brief and returns only its summary, so the brief must state the objective, where to look, what NOT to cover (so parallel subagents do not repeat each other) and what to report. Default: a read-only explorer for broad searches or questions that need reading many files; at most 3 run at once. Do not delegate what one grep or read would answer: a subagent costs a full session of tokens.${agentList.length ? ` Other agents (pass \`agent\`): ${agentList.map((a) => `${a.name}: ${a.description}${isWriter(a) ? (a.isolation === "worktree" ? " [edits in an isolated copy and returns a patch]" : " [can edit files]") : ""}`).join("; ")}.` : ""}`; },
+        schema: { type: "object", required: ["description"], properties: { description: { type: "string", description: "complete brief: the question or job, where to look, what to report" }, agent: { type: "string", description: "which agent (default: the read-only explorer)" } } },
+        run: async (args, ctx) => { await acquireTask(); try { return await runTask(args, ctx); } finally { releaseTask(); } },
+      }),
+  );
   /** The `task` tool's work: a read-only explorer, or one of the custom agents. */
   async function runTask({ description, agent }: { description: string; agent?: string }, ctx: ToolCtx): Promise<string> {
     let slice: Budget | undefined;
@@ -436,12 +441,15 @@ export function createCodeAgent(o: CodeAgentOptions) {
             return note + clip(r.text || "(the explorer returned nothing)", 8000);                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
           }
           const names = plan ? d.tools.filter((t) => !WRITE_TOOLS.has(t)) : d.tools, isolated = d.isolation === "worktree" && isWriter(d) && !plan;
+          // The agent's `model:` key: an entry of agentModels, a role name (explore, review, cheap, compact), or a model reference resolved by modelById.
+          let agentModel: Model = o.model;
+          if (d.model) { const k = d.model as keyof Roles; try { agentModel = o.agentModels?.[d.model] ?? o.models?.[k] ?? o.modelById?.(d.model) ?? o.model; } catch (e) { return `ERROR: agent ${d.name} names model "${d.model}", which cannot be used: ${(e as Error).message}`; } }
           let wt: Worktree | undefined; if (isolated) { if (!(await isRepo(o.cwd))) return "ERROR: isolation: worktree needs a git repository with at least one commit"; wt = await createWorktree(o.cwd); }
           try {
             const base = codeTools(wt?.dir ?? o.cwd, { mode: plan ? () => "plan" : (mode ?? (() => "default")), sandbox: sandboxMode, dirs: o.dirs, outside: o.outside }).filter((t) => names.includes(t.name));
             if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList, onSkillLoad));
             const r = await createHarness({
-              model: (d.model && o.agentModels?.[d.model]) || o.model, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
+              model: agentModel, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
               budget: track(o.budget?.slice(0.25, 120_000)), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), policy: policyFn, hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
             }).run(description);
             let out = clip(r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`, 8000);

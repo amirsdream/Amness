@@ -73,6 +73,10 @@ The values are an example. The field `stopped` is missing when the run ends norm
 | `--live [port]` | Serves the browser live view. The address goes to stderr. |
 | `--review` | An independent reviewer writes acceptance criteria and checks the work. It costs extra model calls. |
 | `--approval-reviewer` | A second model approves clearly safe risky calls. Without `--yes`, calls that it does not clear are still denied. |
+| `--explore-model`, `--compact-model`, `--review-model`, `--cheap-model`, `--approve-model`, `--quarantine-model` `<model>` | A model for one job, for this run. The model is an id on the main provider, `provider:model` (for example `anthropic:claude-haiku-5-5`), or a saved server (`server:lab`, `server:lab/<model>`). The default comes from `models` in your config. See [Models per job](features.md#models-per-job-and-a-fallback). |
+| `--fallback <model>` | Answers from this model when the main one is overloaded or not reachable. |
+| `--router` | Sends exploration steps to the `--cheap-model` when that saves money. |
+| `--subagents` | Offers the `task` tool (the explorer and your custom subagents). It is on by itself when a model for `explore` is set. |
 | `--image <file>` | Shows the model a picture. You can repeat it, up to 4 times. Allowed: png, jpg, gif, webp, up to 5 MB each. It needs a vision model. |
 | `--best-of <n>` | Tries the task up to n times in separate git worktrees. See below. |
 | `--best-of-all` | With `--best-of`: run all n attempts, then pick among the passing ones with a tournament. |

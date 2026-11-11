@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Models for jobs can be on any provider or saved server.** `/models explore server:lab`, `/models compact anthropic:claude-haiku-5-5`: a job's model is now a reference to any provider you are connected to or any saved server, each with its own key (a saved server's key is never sent anywhere else). Before, every job had to use the main provider. New jobs `approve` (the approval reviewer) and `quarantine` (the reader of untrusted content). A subagent file's `model:` key now works too: a job name or a reference. Same in the terminal, the desktop app and `amness run`.
+- **`amness run` uses models per job.** It now reads `models`, `fallback` and `router` from the config (before, only the chat did), and has flags for one run: `--explore-model`, `--compact-model`, `--review-model`, `--cheap-model`, `--approve-model`, `--quarantine-model`, `--fallback`, `--router`, and `--subagents` for the `task` tool. The `--json` config line lists the jobs on other models (`roles`).
+- **Broken tool calls are corrected instead of refused (new guard `argfix`).** Arguments that are almost JSON (trailing comma, single quotes, line breaks in a string, extra text, wrapped in `{"arguments": …}`), types that are clearly meant (`"12"` for a number, `"true"` for a boolean, one value for a list) and a tool name that can only mean one tool (`Read_File`) are fixed before the call runs, and the model is told what was corrected. A missing value is never guessed. Saves a round trip per mistake, which matters most on slow local models. Switch off with `/harness off argfix`. Not measured yet.
+- **Fixed:** the handoff note written without the model (when the context is too small to ask for one) always said `COMMANDS: none`, because it looked for the wrong argument name. A tool call that is not valid JSON is now counted as a `repair` event, like other malformed calls.
+
 ## 0.7.4 (2026-11-10)
 
 Found by the harness checks of Amness Evaluation Studio on a local Qwen.

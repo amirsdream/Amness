@@ -669,3 +669,20 @@ test("a 403 that is not about the key (region, model access) does not ask for a 
   try { await t.submit("hi"); assert.ok(await t.until(() => t.idle() && t.has("HTTP 403"))); assert.ok(!t.has("New API key")); }
   finally { await t.key(KEY.ctrlD); }
 });
+
+test("/models takes references to other providers and saved servers, refuses unknown ones, and both front ends list every role", async () => {
+  const { settingsView } = await import("../cli/tui/settings.ts");
+  const t = rig([], { cfg: { servers: [{ name: "lab", provider: "custom", baseUrl: "http://10.0.0.5:8000/v1", model: "qwen-35b" }] } }); await t.start();
+  await t.submit("/models explore server:nope"); await t.settle();
+  assert.ok(t.has(/no saved server named "nope"/)); assert.equal(t.app.cfg.models?.explore, undefined);
+  await t.submit("/models explore server:lab"); await t.settle();
+  assert.ok(t.has("explore → server:lab/qwen-35b")); assert.equal(t.app.cfg.models?.explore, "server:lab"); assert.ok(t.app.roles.explore);
+  await t.submit("/models"); await t.settle();
+  assert.ok(t.has(/explore\s+server:lab\/qwen-35b/)); assert.ok(t.has(/quarantine\s+\(main model\)/));
+  const { sidebarData } = await import("../cli/tui/panel.ts"), { newPanelState } = await import("../cli/tui/panel.ts"), { getTheme } = await import("../cli/tui/themes.ts");
+  assert.deepEqual(sidebarData(t.app, newPanelState(), getTheme(), Date.now()).roles, { explore: "server:lab/qwen-35b" });   // the terminal sidebar and the desktop panel both read this
+  for (const front of ["terminal", "desktop"] as const) {
+    const ids = settingsView(t.app, front).flatMap((g) => g.items.map((x) => x.id));
+    for (const r of ["explore", "compact", "review", "cheap", "approve", "quarantine"]) assert.ok(ids.includes(`models.${r}`), `${front}: models.${r}`);
+  }
+});

@@ -469,19 +469,32 @@ Do not retry the same call; choose another approach or explain what you could no
 
 ## Models per job and a fallback
 
-**What it is.** You can use a cheaper model for some jobs, and a backup model for when the main one fails. The jobs are `explore` (the read-only explorer subagent), `compact` (handoff notes and `/compact`), `review` (the reviewer, also used by `/review`) and `cheap` (used by the router).
+**What it is.** You can use a cheaper model for some jobs, and a backup model for when the main one fails. The jobs are `explore` (the read-only explorer subagent), `compact` (handoff notes and `/compact`), `review` (the reviewer, also used by `/review`), `cheap` (used by the router), `approve` (the approval reviewer, when it is on) and `quarantine` (the reader of untrusted web and MCP content, when quarantine is on).
+
+A model for a job can be on another provider or on one of your saved servers. Write it as one of these:
+
+| You write | It means |
+|---|---|
+| `gpt-6.1-luna` | this model on the main provider |
+| `anthropic:claude-haiku-5-5` (or `anthropic/claude-haiku-5-5`) | this model on that provider, with that provider's key |
+| `server:lab` | your saved server `lab` and the model saved with it |
+| `server:lab/qwen3-8b` | another model on the saved server `lab` |
+
+A job on a saved server uses only that server's own key. It never gets the main provider's key.
 
 **Why you would use it.** Reading files does not need your best model. A backup model keeps you working when the provider is overloaded.
 
 **How to use it.**
 
-1. Set a model for a job. The model must use the same provider as the main model:
+1. Set a model for a job:
 
    ```text
-   /models explore gpt-6.1-luna
-   /models compact gpt-6.1-luna
+   /models explore server:lab
+   /models compact anthropic:claude-haiku-5-5
    /models review gpt-6.1-sol
    ```
+
+   A name that Amness cannot find (`server:nope`) is refused with a list of what you can use.
 
 2. Set a fallback model:
 
@@ -499,20 +512,23 @@ Do not retry the same call; choose another approach or explain what you could no
 
 ```text
 Models
-  main       gpt-6.1-sol
-  explore    gpt-6.1-luna
-  compact    (main model)
-  review     (main model)
-  cheap      (main model)
-  fallback   gpt-6.1-terra
+  main        openai:gpt-6.1-sol
+  explore     server:lab/qwen-35b
+  compact     anthropic:claude-haiku-5-5
+  review      (main model)
+  cheap       (main model)
+  approve     (main model)
+  quarantine  (main model)
+  fallback    gpt-6.1-terra
 ```
 
 **Limits and common problems.**
 
 - The fallback answers only after the adapter's own retries failed, and only for rate limits (429), timeouts (408), server errors (5xx) and network errors. Authentication errors and bad requests are never sent to the fallback.
 - In the library you can use `models: { explore, compact, review }` and `withFallback(primary, fallback)`.
-- A subagent file can name a model with `model:`. That works only in the library (through the `agentModels` option). The chat and `amness run` do not read it, so the subagent uses the main model.
-- `amness run` does not read these settings.
+- A subagent file can name a model with `model:`: a job name (`model: explore`) or a model as in the table above (`model: server:lab`). If the name cannot be used, the `task` call says why and the subagent does not run.
+- `amness run` reads the same settings. Flags set them for one run: `--explore-model`, `--compact-model`, `--review-model`, `--cheap-model`, `--approve-model`, `--quarantine-model`, `--fallback` and `--router`. The first line of `--json` lists the jobs that use another model (`"roles"`).
+- In the Settings (terminal `/settings`, desktop Preferences) the same fields are under **Model**.
 - Status: default (nothing is set until you set it). Covered by automated tests.
 
 **Related pages.** [Providers](providers.md), [Library](library.md), [Budgets](budgets.md).
@@ -913,8 +929,8 @@ test-writer worked in an isolated copy; nothing in your working tree has changed
 - An agent with write tools shares your permission rules, the safety floor, the sandbox and the approvals. It runs alone. In plan mode it is forced to be read-only.
 - Worktree isolation needs a git repository with a commit. The copy starts from the last commit, so uncommitted work is not included.
 - `max-steps` is kept between 3 and 60. The default is 20.
-- The `model:` key does not work in the chat (see [Models per job and a fallback](#models-per-job-and-a-fallback)).
-- Subagents are available in the chat. `amness run` does not offer the `task` tool.
+- The `model:` key takes a job name or a model reference (see [Models per job and a fallback](#models-per-job-and-a-fallback)).
+- Subagents are available in the chat. `amness run` offers the `task` tool only with `--subagents`, or when a model for `explore` is set.
 - A file without a `description:` line is skipped, and `/agents` shows a warning.
 - Status: default. Covered by automated tests.
 

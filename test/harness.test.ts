@@ -21,7 +21,7 @@ const add = defineTool<{ a: number; b: number }>({
 
 test("bad tool args are fed back and the model repairs them", async () => {
   const { model, seen } = scripted(call("add", "{oops"), call("add", { a: 1 }), call("add", { a: "1", b: 2 }), call("add", { a: 1, b: 2 }), call("finish", { summary: "3" }));
-  const r = await createHarness({ model, tools: [add] }).run("t");
+  const r = await createHarness({ model, tools: [add], off: ["argfix"] }).run("t");
   assert.equal(r.text, "3");
   const t = toolMsgs(seen);
   assert.match(t[0], /not valid JSON/); assert.match(t[1], /\.b: required/); assert.match(t[2], /expected number/); assert.equal(t[3], "3");

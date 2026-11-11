@@ -29,7 +29,7 @@ export const calibration = (actual: number, estimated: number): number => (estim
 /** A note written without the model, for when even the handoff request will not fit: the task, the files touched, the commands run, and the last thing said. */
 export function mechanicalNote(msgs: Message[]): string {
   const files = new Set<string>(), cmds: string[] = [];
-  for (const m of msgs) for (const c of m.tool_calls ?? []) { try { const a = JSON.parse(c.function.arguments); if (typeof a.path === "string") files.add(`${c.function.name} ${a.path}`); else if (typeof a.command === "string") cmds.push(a.command.slice(0, 100)); } catch { /* skip */ } }
+  for (const m of msgs) for (const c of m.tool_calls ?? []) { try { const a = JSON.parse(c.function.arguments); if (typeof a.path === "string") files.add(`${c.function.name} ${a.path}`); else if (typeof (a.cmd ?? a.command) === "string") cmds.push(String(a.cmd ?? a.command).slice(0, 100)); } catch { /* skip */ } }
   const last = [...msgs].reverse().find((m) => m.role === "assistant" && m.content?.trim())?.content?.trim().slice(0, 400);
   return `(written automatically: the context was too small to ask the model for a summary)\nGOAL: see the task above\nDONE (tool calls, oldest first): ${[...files].slice(-40).join("; ") || "none recorded"}\nCOMMANDS: ${cmds.slice(-10).join("; ") || "none"}\nLAST SAID: ${last ?? "nothing"}\nNEXT: inspect the workspace (git status, git diff) to see the current state, then continue the task.`;
 }
@@ -56,6 +56,17 @@ export function closestName(name: string, names: string[]): string | undefined {
     if (score <= Math.max(2, Math.floor(m.length / 3)) && (!best || score < best.score)) best = { name: c, score };
   }
   return best?.name;
+}
+
+/** A tool name that is surely meant: the only candidate that differs by case or separators, or by one edit. Used to correct a call in place; anything less certain stays a suggestion. */
+export function exactName(name: string, names: string[]): string | undefined {
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const n = norm(name); if (n.length < 3) return undefined;
+  const one = (a: string, b: string) => { if (Math.abs(a.length - b.length) > 1) return false; let i = 0, j = 0, d = 0; while (i < a.length && j < b.length) { if (a[i] === b[j]) { i++; j++; continue; } if (++d > 1) return false; if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; } } return d + (a.length - i) + (b.length - j) <= 1; };
+  const exact = [...new Set(names)].filter((c) => norm(c) === n);
+  if (exact.length) return exact.length === 1 ? exact[0] : undefined;
+  const near = [...new Set(names)].filter((c) => norm(c).length >= 4 && one(n, norm(c)));
+  return near.length === 1 ? near[0] : undefined;
 }
 
 /** Index where the recent tail begins: the newest turns worth about `tailTokens` stay verbatim. Always at the start of a turn, never between a tool call and its results. */

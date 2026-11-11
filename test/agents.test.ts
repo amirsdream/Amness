@@ -92,3 +92,18 @@ test("task tool: at most 6 subagents per request, and each report says what it c
   assert.equal(outs.filter((o) => /subagents have already run for this request/.test(o)).length, 2);
   const good = outs.filter((o) => /^found it/.test(o)); assert.equal(good.length, 6); assert.ok(good.every((o) => /\[subagent used about 3k tokens; the budget for this request is \d+% used\]/.test(o)));
 });
+
+test("task tool: an agent's model key is a role name or a model reference (resolved by modelById); a reference that fails is reported", async () => {
+  const d = repo();
+  put(d, ".amness/agents/scout.md", agentMd("scout", "tools: read_file\nmodel: server:lab", "You are careful."));
+  put(d, ".amness/agents/rev.md", agentMd("rev", "tools: read_file\nmodel: review", "You are careful."));
+  put(d, ".amness/agents/bad.md", agentMd("bad", "tools: read_file\nmodel: server:nope", "You are careful."));
+  const used: string[] = [];
+  const tagged = (tag: string): Model => async () => (used.push(tag), call("finish", { summary: `from ${tag}` }));
+  const lead = [call("task", { description: "a", agent: "scout" }), call("task", { description: "b", agent: "rev" }), call("task", { description: "c", agent: "bad" }), { role: "assistant" as const, content: "done" }];
+  const b = createCodeAgent({ model: async () => lead.shift()!, cwd: d, memory: false, guidance: false, chat: true, permissions: { mode: () => "yolo" },
+    models: { review: tagged("review-role") }, modelById: (ref) => { if (ref === "server:nope") throw new Error("no saved server named \"nope\""); return tagged(ref); } });
+  const r = await b.chat([], "go"), outs = r.messages.filter((m) => m.role === "tool").map((m) => m.content!);
+  assert.deepEqual(used, ["server:lab", "review-role"]);
+  assert.match(outs[0], /from server:lab/); assert.match(outs[1], /from review-role/); assert.match(outs[2], /names model "server:nope", which cannot be used/);
+});

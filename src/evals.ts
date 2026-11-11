@@ -150,10 +150,10 @@ export function formatReport(a: Analysis): string {
 }
 
 // ------------------------------------------------------------------------------------------------------------------ variants
-const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "pin", "anchor", "audit"];
+const ALL_GUARDS: Guard[] = ["nudge", "loop", "compact", "readdelta", "stuck", "wrapup", "condense", "schedule", "ledger", "stagnation", "pin", "anchor", "audit", "argfix"];
 /** Features that are not loop guards but can be switched off the same way for ablations. */
 const FEATURES = ["index", "taint"] as const;
-export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · full+plugins (every loaded plugin active, needs --plugin) · prompt:<id> (a system prompt from .amness/prompts) · model:<id> (the full harness on another model) · chaos:tools|429|args|slow-tools (the full harness while things break on purpose) · strategy:<name> (the full harness with a loop strategy: plan-first, explore-then-act) · any variant a plugin defines · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
+export const VARIANT_HELP = "baseline (no guards, no gate) · full (all guards + verify gate) · full+check (adds a post-edit check) · full+review (adds the independent reviewer) · full+route (exploration on a cheaper model, needs --cheap-model) · full+plugins (every loaded plugin active, needs --plugin) · prompt:<id> (a system prompt from .amness/prompts) · model:<id> (the full harness on another model) · chaos:tools|429|args|argshape|slow-tools (the full harness while things break on purpose) · strategy:<name> (the full harness with a loop strategy: plan-first, explore-then-act) · any variant a plugin defines · no-gate (guards, no verify gate) · full-<guard> to switch one guard or feature off: " + [...ALL_GUARDS, ...FEATURES].join(", ");
 
 /** Build a named variant of the code agent. Names: see VARIANT_HELP. */
 /** A plugin-defined variant: the plugin's variants are looked up by `name` or `plugin:name`. */
@@ -187,7 +187,7 @@ export function harnessVariant(model: Model, name: string, o: { maxSteps?: numbe
   const chaos = /^chaos:(.+)$/.exec(name)?.[1] as (typeof CHAOS_KINDS)[number] | undefined;
   if (chaos) {
     if (!CHAOS_KINDS.includes(chaos)) throw new Error(`unknown chaos kind "${chaos}". Known: ${CHAOS_KINDS.join(", ")}`);
-    const m = chaos === "429" || chaos === "args" ? (chaos === "429" ? rateLimited(chaosModel(model, { kind: "429" }), { gate: new Gate(), retries: 8 }) : chaosModel(model, { kind: "args" })) : model;
+    const m = chaos === "429" ? rateLimited(chaosModel(model, { kind: "429" }), { gate: new Gate(), retries: 8 }) : chaos === "args" || chaos === "argshape" ? chaosModel(model, { kind: chaos }) : model;
     return { ...harnessVariant(m, "full", { ...o, wrapTools: chaos === "tools" ? (ts) => chaosTools(ts, { rate: 0.25 }) : chaos === "slow-tools" ? (ts) => chaosTools(ts, { rate: 0, delayMs: 400 }) : undefined }), name };
   }
   const strat = /^strategy:(.+)$/.exec(name)?.[1]; if (strat) { if (!STRATEGIES[strat]) throw new Error(`unknown strategy "${strat}". Known: ${Object.keys(STRATEGIES).join(", ")}`); return pluginVariant(model, name, { spec: { verify: true }, owner: STRATEGIES[strat]() }, o); }

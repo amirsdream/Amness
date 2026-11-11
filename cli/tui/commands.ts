@@ -1,4 +1,5 @@
 // Slash commands. Each gets the running App and the raw argument string.
+import { ROLE_NAMES, resolveConfig } from "../roles.ts";
 import { previewLines, relatives } from "./session.ts";
 import { GUARDS, harnessView } from "./harnessinfo.ts";
 import { applySettings, settingsView, showValue, type SettingChange, type SettingItem, type SettingValue } from "./settings.ts";
@@ -543,13 +544,14 @@ export function buildCommands(): Cmd[] {
       }
       a.commit(["", ...formatMining(join(a.cwd, ".amness", "traces")).split("\n").map((l) => "  " + l)]);
     } },
-    { name: "models", help: "use other models for some jobs: /models explore|compact|review <model|off> · /models fallback <model|off>", args: "[role model]", run: (a, arg) => {
-      const [role, id] = arg.split(/\s+/), roles = ["explore", "compact", "review", "cheap"];
-      if (!role) { const m = a.cfg.models ?? {}; return void a.commit(["", bold("  Models"), `  ${dim("main".padEnd(10))} ${a.cfg.model}`, ...roles.map((r) => `  ${dim(r.padEnd(10))} ${(m as Record<string, string | undefined>)[r] ?? dim("(main model)")}`), `  ${dim("fallback".padEnd(10))} ${a.cfg.fallback ?? dim("(none)")}`, dim("  e.g. /models explore gpt-6.1-luna   (a cheaper model for read-only exploration)")]); }
-      if (role !== "fallback" && !roles.includes(role)) return void a.say("usage: /models explore|compact|review|cheap|fallback <model id | off>", red);
-      if (!id) return void a.say(`usage: /models ${role} <model id | off>`, red);
+    { name: "models", help: "use other models for some jobs: /models <role> <model|off>; a model is an id, provider:model or server:<name>[/model]", args: "[role model]", run: (a, arg) => {
+      const [role, id] = arg.split(/\s+/), roles: readonly string[] = ROLE_NAMES.filter((r) => r !== "advisor");
+      if (!role) { const m = a.cfg.models ?? {}, lab = a.wired?.labels ?? {}; return void a.commit(["", bold("  Models"), `  ${dim("main".padEnd(11))} ${a.cfg.server ? `server:${a.cfg.server}/` : `${a.cfg.provider}:`}${a.cfg.model}`, ...roles.map((r) => `  ${dim(r.padEnd(11))} ${(lab as Record<string, string | undefined>)[r] ?? ((m as Record<string, string | undefined>)[r] ? `${(m as Record<string, string>)[r]} ${dim("(same as main)")}` : dim("(main model)"))}`), `  ${dim("fallback".padEnd(11))} ${lab.fallback ?? a.cfg.fallback ?? dim("(none)")}`, dim("  e.g. /models explore server:lab   /models compact anthropic:claude-haiku-5-5   /models review off")]); }
+      if (role !== "fallback" && !roles.includes(role)) return void a.say(`usage: /models ${roles.join("|")}|fallback <model | off>`, red);
+      if (!id) return void a.say(`usage: /models ${role} <model | off>`, red);
+      let label = id; if (id !== "off") { try { label = resolveConfig(id, a.cfg).label; } catch (e) { return void a.say((e as Error).message, red); } }
       if (role === "fallback") a.cfg.fallback = id === "off" ? undefined : id; else a.cfg.models = { ...(a.cfg.models ?? {}), [role]: id === "off" ? undefined : id };
-      a.saveConfig(); a.buildAgent(); a.say(`${role} → ${id === "off" ? "main model" : id}`, dim);
+      a.saveConfig(); a.buildAgent(); a.say(`${role} → ${id === "off" ? "main model" : label}`, dim);
     } },
     { name: "policy", help: "why recent actions were allowed, asked about or refused (rules, the safety floor, untrusted-text checks)", live: true, run: (a) => {
       a.commit(["", bold("  Recent policy decisions"), ...(a.policyLog.length ? a.policyLog.map((l) => "  " + (l.startsWith("deny") ? red(l.slice(0, 5)) : l.startsWith("ask") ? yellow(l.slice(0, 5)) : green(l.slice(0, 5))) + l.slice(5)) : [dim("  none yet: every call so far went through the permission mode alone")]),
@@ -645,7 +647,7 @@ export function buildCommands(): Cmd[] {
       a.commit(["", bold("  Tools"), ...vis.map((t) => `  ${cyan(t.name.padEnd(16))} ${dim(t.description.split(".")[0].slice(0, a.width - 22))}`)]);
     } },
     { name: "status", help: "model, mode, project, session", live: true, run: (a) => {
-      a.commit(["", bold("  Status"), `  ${dim("model")}     ${a.cfg.model} ${dim("via " + a.providerInfo().label + (a.model.api ? ` · ${a.model.api()} API` : ""))}`, ...(a.cfg.effort ? [`  ${dim("effort")}    ${a.cfg.effort}`] : []), `  ${dim("mode")}      ${a.mode}`, `  ${dim("project")}   ${a.cwd}${a.branch ? dim("  ⎇ " + a.branch) : ""}`,
+      a.commit(["", bold("  Status"), `  ${dim("model")}     ${a.cfg.model} ${dim("via " + a.providerInfo().label + (a.model.api ? ` · ${a.model.api()} API` : ""))}`, ...(a.cfg.effort ? [`  ${dim("effort")}    ${a.cfg.effort}`] : []), ...Object.entries(a.wired?.labels ?? {}).map(([r, l]) => `  ${dim(r.padEnd(10))}${l}`), `  ${dim("mode")}      ${a.mode}`, `  ${dim("project")}   ${a.cwd}${a.branch ? dim("  ⎇ " + a.branch) : ""}`,
         `  ${dim("verify")}    ${a.verify ?? "none"}`, `  ${dim("session")}   ${a.session.id} ${dim(`(${a.session.turns.length} turns)`)}`, `  ${dim("memory")}    ${a.memory?.list().length ?? 0} notes`, `  ${dim("sandbox")}   ${a.cfg.sandbox ?? "off"}`, `  ${dim("trace")}     ${a.tracer?.file ? a.tracer.file.replace(a.cwd + "/", "") : "(after the first message)"}`, `  ${dim("instructions")} ${a.agent.guidance?.files.join(", ") || "none loaded (add an AGENTS.md)"}`, `  ${dim("running")}   ${a.running ? "yes, " + fmtDuration(Date.now() - a.runStart) : "no"}`]);
     } },
     { name: "theme", help: "colour theme (live preview)", args: "[name]", run: async (a, arg) => {

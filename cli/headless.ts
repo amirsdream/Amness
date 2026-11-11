@@ -3,9 +3,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 const VERSION: string = (() => { for (const rel of ["../package.json", "../../package.json"]) { try { return JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8")).version; } catch { /* the built copy sits one folder deeper */ } } return "0.0.0"; })();
 import { join, resolve } from "node:path";
 import { cachedModel } from "../src/respcache.ts";
-import { Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
+import { quarantineReader, Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, keyFor, loadConfig, ready, useServer, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
+import { wireModels, type Wired } from "./roles.ts";
 import { formatEvent } from "./format.ts";
 import { estimateCost } from "./tui/pricing.ts";
 import { createModel } from "./model.ts";
@@ -43,14 +44,18 @@ export const HELP = `usage: amness run [flags] "task"
   --off <guard,...>    switch these guards off for this run (for ablations; see /harness for the names)
   --plugin <file,...>  load these plugin files for this run (no trust prompt: you named them)
   --add-dir <path>     let the file tools use this folder outside the project too (repeatable; without it, outside paths are refused)
+  --explore-model <ref> --compact-model <ref> --review-model <ref> --cheap-model <ref> --approve-model <ref> --quarantine-model <ref>
+                       a model for one role: a bare id (main provider), provider:model (anthropic:claude-haiku-5-5), or server:<name>[/model]; default from config "models"
+  --subagents          offer the task tool (explorer and custom subagents); on by itself when --explore-model or models.explore is set
+  --fallback <ref>     answer from this model when the main one is overloaded or unreachable      --router   route exploration steps to --cheap-model when it pays off
   --max-steps <n>      most model turns (default 40)        --context-window <tokens>   the model's window (8192 for a small local model); default: learned from the provider
   -                    as the task: read it from standard input (useful on Windows, where quoting a long task is painful)
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
 
 /** The options of `amness run` (keep in step with HELP). Anything else in the arguments is the task. */
 const VALUE_FLAGS = new Set(["--cwd", "--verify", "--check", "--bundle", "--export", "--trace", "--sandbox", "--sandbox-engine", "--provider", "--model", "--base-url", "--effort", "--api", "--best-of", "--parts", "--image", "--max-tokens",
-  "--server", "--add-dir", "--max-steps", "--context-window", "--max-time", "--off", "--plugin", "--tool-choice", "--thinking-budget", "--request"]);   // --live takes an optional port: it is read on its own, before the task
-const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking"]);
+  "--server", "--add-dir", "--max-steps", "--context-window", "--max-time", "--off", "--plugin", "--tool-choice", "--thinking-budget", "--request", "--explore-model", "--compact-model", "--review-model", "--cheap-model", "--approve-model", "--quarantine-model", "--fallback"]);   // --live takes an optional port: it is read on its own, before the task
+const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking", "--router", "--subagents"]);
 
 export async function runHeadless(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(HELP); return 0; }       // asking for help must never start a model run
@@ -100,7 +105,12 @@ export async function runHeadless(argv: string[]): Promise<number> {
   if (live) console.error(`live view: ${live.url}`);
   const approve: Approve = yes ? () => true : () => "non-interactive run: risky commands are denied unless --yes is passed";
   const budget = new Budget({ maxTokens });
-  const model = bool("--cache") ? cachedModel(createModel(cfg), { dir: join(cwd, ".amness", "cache", "responses"), salt: `${cfg.provider}|${cfg.baseUrl}|${cfg.model}|${cfg.effort ?? ""}` }) : createModel(cfg);
+  const make = (c: typeof cfg) => (bool("--cache") ? cachedModel(createModel(c), { dir: join(cwd, ".amness", "cache", "responses"), salt: `${c.provider}|${c.baseUrl}|${c.model}|${c.effort ?? ""}` }) : createModel(c));
+  for (const r of ["explore", "compact", "review", "cheap", "approve", "quarantine"] as const) { const v = val(`--${r}-model`); if (v) cfg.models = { ...cfg.models, [r]: v }; }
+  { const f = val("--fallback"); if (f) cfg.fallback = f; if (bool("--router")) cfg.router = true; }
+  if (cfg.router && !cfg.models?.cheap) { console.error("--router needs a cheap model (--cheap-model <ref>, or models.cheap in the config)"); return 2; }
+  let wired: Wired; try { wired = wireModels(cfg, make(cfg), make, { onFallback: () => console.error(`${cfg.model} is unavailable; answering from ${cfg.fallback}`) }); } catch (e) { console.error((e as Error).message); return 2; }
+  const model = wired.model;
   const loadedPlugins = await loadPlugins(cwd, { trustProject: trustHooks });
   for (const f of (val("--plugin") ?? "").split(",").filter(Boolean)) { const r = await importPlugins(resolve(f)); for (const w of r.warnings) console.error("plugin: " + w); loadedPlugins.plugins.push(...r.plugins); }   // named on the command line: you chose them, so no trust prompt
   const bestOf = Number(val("--best-of") ?? 0), partsFile = val("--parts");
@@ -147,6 +157,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
     timers.push(setTimeout(() => steer.push(`Time is almost up: about ${Math.round(maxTime - warnAt)} seconds are left of ${maxTime}. Stop exploring. Make sure what you changed is saved and works, then finish: say what you did and what is left.`), warnAt * 1000));
     timers.push(setTimeout(() => stop.abort(), maxTime * 1000));
   }
+  const subagents = bool("--subagents") || !!wired.roles.explore;
   const usage = { prompt: 0, completion: 0, cached: 0, requests: 0 };              // every model request, subagents included, for the result line (benchmarks read it)
   const contextWindow = Number(val("--context-window")) || windowFor(cfg) || await detectWindow({ provider: cfg.provider, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model });
   const maxSteps = Number(val("--max-steps")) || prof.maxSteps || undefined, sandbox = (val("--sandbox") as "off" | "workspace" | "strict" | undefined) ?? cfg.sandbox;
@@ -154,13 +165,14 @@ export async function runHeadless(argv: string[]): Promise<number> {
   if (json) console.log(JSON.stringify({ kind: "config", version: VERSION, provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl ?? null, effort: cfg.effort ?? null, contextWindow: contextWindow ?? null,
     maxSteps: maxSteps ?? 40, maxTime: maxTime || null, guardsOff: off, guardsOn: GUARD_NAMES.filter((g) => !off.includes(g)), toolChoice: toolChoice ?? "auto", thinkingBudget: thinkingBudget ?? null, keepThinking: !!keepThinking, request: request ?? null,
     profile: { sources: profSources, stagnationTurns: prof.stagnationTurns ?? null, contextBudget: prof.contextBudget ?? null }, sandbox: sandbox ?? null, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
-    verify: verify ?? null, memory: !noMemory, quarantine: !!(bool("--quarantine") || cfg.quarantine) }));
+    roles: wired.labels, router: !!cfg.router, subagents, verify: verify ?? null, memory: !noMemory, quarantine: !!(bool("--quarantine") || cfg.quarantine) }));
   const agent = createCodeAgent({
+    subagents,
     dirs: addDirs.length ? () => addDirs : undefined,
     plans: bool("--plans") || cfg.plans || undefined,
     contextWindow,
-    maxSteps, off: off.length ? off : undefined, toolChoice, thinkingBudget, request, keepThinking, quarantine: bool("--quarantine") || cfg.quarantine || undefined, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
-    model, modelById: (id) => createModel({ ...cfg, model: id }), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") || undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
+    maxSteps, off: off.length ? off : undefined, toolChoice, thinkingBudget, request, keepThinking, quarantine: bool("--quarantine") || cfg.quarantine ? (wired.quarantine ? quarantineReader(wired.quarantine) : true) : undefined, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
+    model, models: wired.roles, modelById: (id) => wired.byRef(id), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") ? (wired.approve ? { model: wired.approve } : true) : undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e: Event) => { if (e.kind === "turn") { usage.prompt += e.prompt; usage.completion += e.completion; usage.cached += e.cached; usage.requests++; } live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
   try {
