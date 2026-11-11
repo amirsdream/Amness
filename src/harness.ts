@@ -231,6 +231,8 @@ export type Options = {
   request?: Record<string, unknown>;
   /** Send the model's earlier thinking back with the history (OpenAI-compatible servers). Without it a thinking model works out the same analysis again at every step. */
   keepThinking?: boolean;
+  /** Keep the tool list the same for the whole session: tools found with tool_search are run through \`call_tool\` (or by name) instead of being added to the list, so the provider's prompt cache (or a local server's prefix cache) survives. Off by default (eval variant \`tools:stable\`). */
+  stableTools?: boolean;
   /** Rescue tool calls the model wrote as text (`<tool_call>…`, `<function=…>`, a JSON object) when it sent no structured call. Default: the model card's `caps.textToolCalls`. Each rescue is a `repair` event. */
   textToolCalls?: boolean;
   /** Rules that allow, force-ask or deny a call before the permission mode is consulted (see `Permissions`). Deny wins; allow skips the prompt. */
@@ -308,6 +310,8 @@ export const DEFAULT_SYSTEM = `You are an autonomous agent. Work until the task 
 - Tool errors are information: read them, fix your call, retry.
 - \`finish(summary)\`: what you did, how you verified, assumptions made.`;
 
+/** The one dispatcher of stable-tools mode: runs a tool found with tool_search without adding it to the tool list. */
+const CALL_TOOL: ToolSpec = { name: "call_tool", description: "Run a tool you found with tool_search: give its name and its arguments.", parameters: { type: "object", required: ["name"], properties: { name: { type: "string", description: "the tool's name" }, args: { type: "object", description: "the tool's arguments, as its schema says" } } } };
 const FINISH: ToolSpec = {
   name: "finish", description: "Declare the task complete. Only call after verifying.",
   parameters: { type: "object", required: ["summary"], properties: { summary: { type: "string" } } },
@@ -438,11 +442,14 @@ export function createHarness(o: Options) {
     name: "tool_search", description: "", schema: { type: "object", required: ["query"], properties: { query: { type: "string" } } },
     run: ({ query }) => {
       const hits = reg.search(query);
+      if (o.stableTools) return hits.length ? "Found. Run one with call_tool({\"name\": ..., \"args\": {...}}):\n" + hits.map((t) => `- ${t.name}: ${t.description}\n  schema: ${JSON.stringify(t.schema)}`).join("\n") : `No match. Tools you can find: ${[...reg.tools.values()].filter((t) => reg.isDeferred(t)).map((t) => t.name).join(", ") || "(none)"}`;
       hits.forEach((t) => reg.loaded.add(t.name));
       return hits.length ? "Loaded (callable from your next turn):\n" + hits.map((t) => `- ${t.name}: ${t.description}\n  schema: ${JSON.stringify(t.schema)}`).join("\n")
         : `No match. Not yet loaded: ${[...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)).map((t) => t.name).join(", ") || "(none)"}`;
     },
   };
+  /** The tool list of a request. In stable mode (`stableTools`) the list never changes in a session: tool_search only describes what it finds and `call_tool` runs it, so loading a tool does not break the prompt cache. */
+  const specsFor = (visible: Tool[], menu: Tool[]): ToolSpec[] => [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: reg.lean?.when() ? "Load more tools by keyword before using them. Not yet loaded: " + menu.map((t) => t.name).join(", ") : "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), ...(menu.length && o.stableTools ? [CALL_TOOL] : []), FINISH];
   const emit = (e: Event) => o.onEvent?.(e);
   /** Run lifecycle hooks, report what they did, and fail open (a broken hook only warns). */
   const hook = async (event: Parameters<NonNullable<Options["hooks"]>["run"]>[0], payload: Record<string, unknown>) => {
@@ -476,7 +483,7 @@ export function createHarness(o: Options) {
    */
   async function warm(msgs: Message[], opts: { signal?: AbortSignal } = {}): Promise<{ prompt: number; cached: number }> {
     const visible = reg.visible({ step: lastStep, messages: msgs }), menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)) : [];
-    const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: reg.lean?.when() ? "Load more tools by keyword before using them. Not yet loaded: " + menu.map((t) => t.name).join(", ") : "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), FINISH];
+    const specs = specsFor(visible, menu);
     const m = await o.model(msgs, specs, { signal: opts.signal, maxTokens: 16 });
     o.budget?.add(m, o.model.card);
     return { prompt: m.usage?.prompt_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0 };
@@ -498,7 +505,7 @@ export function createHarness(o: Options) {
       const cold = lastModelAt === 0 || Date.now() - lastModelAt > (o.cacheTtlMs ?? 300_000);
       if (!cold && sinceRewrite < 3) return 0;                                                       // too soon after the last rewrite: not worth even trying
       const trial = structuredClone(msgs); run(trial);
-      const plan = planRewrite(msgs, trial, { later: requestsLeft(stepNow, max), cachedPrice: o.cachedPrice ?? 0.1, cold, since: sinceRewrite, minGap: 3 });
+      const plan = planRewrite(msgs, trial, { later: requestsLeft(stepNow, max), cachedPrice: o.cachedPrice ?? o.model.card?.cacheFactor ?? 0.1, cold, since: sinceRewrite, minGap: 3 });
       if (trial.length !== msgs.length) { msgs.splice(0, msgs.length, ...trial); sinceRewrite = 0; return before - chars(msgs); }           // whole turns were dropped: not judged here
       if (!plan) return 0;
       for (const i of plan.indexes) Object.assign(msgs[i], trial[i]);
@@ -556,7 +563,7 @@ export function createHarness(o: Options) {
       } else if (over) { emit({ kind: "budget", detail: over }); return end(`stopped: ${over}`, false, step, "budget"); }
       const visible = reg.visible({ step, messages: msgs }), names = new Set(visible.map((t) => t.name));
       const menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)) : [];
-      const specs = [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: reg.lean?.when() ? "Load more tools by keyword before using them. Not yet loaded: " + menu.map((t) => t.name).join(", ") : "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), FINISH];
+      const specs = specsFor(visible, menu);
       const r = o.rollover, size = msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0);
       if (win) {
         // Window-aware: shrink old output before the window fills (cheap, loses little), and hand off only when shrinking is not enough.
@@ -659,14 +666,23 @@ export function createHarness(o: Options) {
       let done: string | undefined;
       emit({ kind: "phase", phase: "tools", step, max, n: m.tool_calls.length });
       const exec = async (c: ToolCall): Promise<string> => {
-        const raw = c.function.arguments; let name = c.function.name;
+        let raw = c.function.arguments, name = c.function.name;
         let args: any; const fixes: string[] = [];
         if (off.has("argfix")) { try { args = JSON.parse(raw || "{}"); } catch (e) { emit({ kind: "repair", detail: `invalid JSON: ${(e as Error).message}` }); return `ERROR: arguments were not valid JSON (${(e as Error).message}). Resend strict JSON.`; } }
         else { const p = parseArgs(raw); if ("error" in p) { emit({ kind: "repair", detail: `invalid JSON: ${p.error}` }); return `ERROR: arguments were not valid JSON (${p.error}). Resend strict JSON.`; } args = p.args; fixes.push(...p.fixes); }
+        // Stable tools: call_tool is only an envelope. Unwrap it before anything else, so permissions, taint, hooks, approvals and the ledger see the real tool and its arguments.
+        if (o.stableTools && name === "call_tool") {
+          let inner: unknown = args?.args ?? {}; const target = typeof args?.name === "string" ? args.name.trim() : "";
+          if (typeof inner === "string") { const p2 = parseArgs(inner); inner = "error" in p2 ? undefined : p2.args; }
+          if (!target || !inner || typeof inner !== "object" || Array.isArray(inner)) { emit({ kind: "repair", detail: "call_tool without a tool name and an arguments object" }); return `ERROR: call_tool needs {"name": "<tool>", "args": {...}}.`; }
+          if (target === "call_tool" || target === "finish") return `ERROR: call ${target} directly, not through call_tool.`;
+          name = target; args = inner; raw = JSON.stringify(inner);
+        }
         let t = name === "tool_search" && menu.length ? searchTool : reg.get(name);
         if (!t && name !== "finish" && !off.has("argfix")) { const sure = exactName(name, [...names, "finish", ...(menu.length ? ["tool_search"] : [])]); if (sure) { fixes.push(`tool name "${name}" → "${sure}"`); name = sure; t = name === "tool_search" && menu.length ? searchTool : reg.get(name); } }
         if (allowNow && !allowNow.has(name)) return `ERROR: ${name} is not allowed in this phase. ${allowNow.size ? `Allowed now: ${[...allowNow].join(", ")}.` : "Do not call any tool yet: answer in text."}`;
-        if (t && name !== "finish" && t !== searchTool && !names.has(name)) {
+        const stableOk = !!t && !!o.stableTools && reg.isDeferred(t) && (!reg.allow || reg.allow.has(name)) && (!t.when || t.when({ step, messages: msgs }));   // a deferred tool runs without being added to the list
+        if (t && name !== "finish" && t !== searchTool && !names.has(name) && !stableOk) {
           if (reg.isDeferred(t) && !reg.loaded.has(name)) { reg.loaded.add(name); return `ERROR: ${name} was not loaded yet; it is now. Retry the call. schema: ${JSON.stringify(t.schema)}`; }
           return `ERROR: tool ${name} is not available right now. Available: ${[...names, "finish"].join(", ")}`;
         }
@@ -772,7 +788,8 @@ export function createHarness(o: Options) {
         emit({ kind: "tool", id: c.id, name, args: raw, result });
         return result;
       };
-      const safe = (c: ToolCall) => { if (off.has("schedule")) return false; const t = reg.get(c.function.name); if (!t) return true; if (t.concurrent) { try { return t.concurrent(JSON.parse(c.function.arguments || "{}")); } catch { return false; } } return t.readOnly === true || t.parallel === true; };
+      const realName = (c: ToolCall) => { if (c.function.name !== "call_tool" || !o.stableTools) return c.function.name; try { return String(JSON.parse(c.function.arguments || "{}").name ?? ""); } catch { return ""; } };
+      const safe = (c: ToolCall) => { if (off.has("schedule")) return false; if (c.function.name === "call_tool" && o.stableTools) { const t = reg.get(realName(c)); return !!t && (t.readOnly === true || t.parallel === true); } const t = reg.get(c.function.name); if (!t) return true; if (t.concurrent) { try { return t.concurrent(JSON.parse(c.function.arguments || "{}")); } catch { return false; } } return t.readOnly === true || t.parallel === true; };
       const results: string[] = [];
       for (let i = 0; i < m.tool_calls.length; ) {
         let j = i; while (j < m.tool_calls.length && safe(m.tool_calls[j]) === safe(m.tool_calls[i])) j++;

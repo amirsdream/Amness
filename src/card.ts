@@ -24,6 +24,8 @@ export type ModelCard = {
   tier?: ModelTier;
   /** "profile" when the tier was set in the model's profile, "guess" when it was guessed from the provider and name. Only a set tier changes the prompt and tools. */
   tierFrom?: "profile" | "guess";
+  /** For a model without token prices (a local server): how long a request with a reused prefix takes, as a share of the same request cold (amness doctor measures it). Used as the "cached price" when deciding whether a rewrite pays: on a local server the cost is time. */
+  cacheFactor?: number;
   caps?: { nativeTools?: boolean; parallelTools?: boolean; textToolCalls?: boolean; toolChoiceRequired?: boolean; vision?: boolean; pricedCache?: boolean };
 };
 

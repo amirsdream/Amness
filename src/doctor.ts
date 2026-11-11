@@ -122,7 +122,7 @@ export async function runDoctor(model: Model, o: { stated?: number; onCheck?: (c
     const filler = Array.from({ length: 300 }, (_, i) => `Fact ${i}: the value of item ${i} is ${(i * 7919) % 1000}.`).join("\n");
     const msgs: Message[] = [{ role: "system", content: `${SYS}\n${filler}` }, { role: "user", content: `Run ${Date.now()}: reply with OK only.` }];
     const a = await ask(msgs, [], { maxTokens: 16 }), b = await ask(msgs, [], { maxTokens: 16 });
-    cacheFactor = a.ms ? Math.round((b.ms / a.ms) * 100) / 100 : undefined;
+    cacheFactor = a.ms >= 200 ? Math.round((b.ms / a.ms) * 100) / 100 : undefined;   // too fast to tell apart from noise below that
     return { pass: true, detail: `cold ${a.ms} ms, repeat ${b.ms} ms${cacheFactor !== undefined ? ` (×${cacheFactor})` : ""}`, ms: a.ms };
   });
 
@@ -135,6 +135,7 @@ export async function runDoctor(model: Model, o: { stated?: number; onCheck?: (c
   const req = checks.find((c) => c.id === "required");
   if (req?.pass && typedTries > 1) suggest.toolChoice = "required";
   if (!chainOk || !recoverOk) suggest.tier = "local";
+  if (cacheFactor !== undefined && cacheFactor > 0 && cacheFactor < 1) suggest.cacheFactor = Math.max(0.01, cacheFactor);
   return { checks, qualified, notFor, suggest, textCalls: textSeen && !nativeSeen, cacheFactor, tokens };
 }
 

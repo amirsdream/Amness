@@ -137,6 +137,8 @@ const DEFS: Def[] = [
   { group: "advanced", id: "prompt", label: "System prompt", help: "Your own system prompt from .amness/prompts/<id>.md, or the built-in one.", kind: "choice",
     read: (a) => ({ value: a.cfg.prompt ?? "built-in", options: [{ value: "built-in", label: "built-in" }, ...loadPrompts(a.cwd).map((x) => ({ value: x.id, label: x.id }))] }), write: (_, v) => `/prompt ${v === "built-in" ? "off" : v}` },
   { group: "advanced", id: "keepWarm", label: "Keep the cache warm", help: "While you are away, keep the prompt cache alive (a few cache reads).", kind: "toggle", read: (a) => ({ value: !!a.cfg.keepWarm }), write: (_, v) => `/keepwarm ${onoff(v)}` },
+  { group: "advanced", id: "stableTools", label: "Fixed tool list", help: "Tools found with tool_search are run through call_tool instead of being added to the tool list, so the list never changes and the prompt cache (or a local server's prefix cache) survives. Not measured yet.", kind: "toggle", read: (a) => ({ value: !!a.cfg.stableTools }),
+    write: (_, v) => (a: App) => { a.cfg.stableTools = v === true || v === "on" || undefined; a.saveConfig(); a.buildAgent(); return `fixed tool list ${a.cfg.stableTools ? "on" : "off"}`; } },
   { group: "advanced", id: "plans", label: "Plan cache", help: "Offer the plan of a similar finished task as a starting point.", kind: "toggle", read: (a) => ({ value: !!a.cfg.plans }), write: (_, v) => `/plans ${onoff(v)}` },
   // terminal only
   { group: "terminal", id: "theme", label: "Colour theme", help: "The terminal app's colours.", kind: "choice", only: "terminal", read: (a) => ({ value: a.cfg.theme ?? "", options: themeNames().map((x) => ({ value: x, label: x })) }), write: (_, v) => `/theme ${v}` },

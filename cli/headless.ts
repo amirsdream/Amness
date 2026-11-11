@@ -47,6 +47,7 @@ export const HELP = `usage: amness run [flags] "task"
   --explore-model <ref> --compact-model <ref> --review-model <ref> --cheap-model <ref> --approve-model <ref> --quarantine-model <ref>
                        a model for one role: a bare id (main provider), provider:model (anthropic:claude-haiku-5-5), or server:<name>[/model]; default from config "models"
   --local-weight <0-1> how much a token of a local-tier model counts against --max-tokens (default 1); 0.1 lets free local workers read a lot
+  --stable-tools       keep the tool list the same all run: tools found with tool_search run through call_tool, so the prompt cache survives
   --explore-ranges     the explorer answers with file ranges that are checked against the files (ANSWER / FILES), not prose
   --subagents          offer the task tool (explorer and custom subagents); on by itself when --explore-model or models.explore is set
   --fallback <ref>     answer from this model when the main one is overloaded or unreachable      --router   route exploration steps to --cheap-model when it pays off
@@ -57,7 +58,7 @@ exit code: 0 finished, 1 not finished, 2 usage/config error`;
 /** The options of `amness run` (keep in step with HELP). Anything else in the arguments is the task. */
 const VALUE_FLAGS = new Set(["--cwd", "--verify", "--check", "--bundle", "--export", "--trace", "--sandbox", "--sandbox-engine", "--provider", "--model", "--base-url", "--effort", "--api", "--best-of", "--parts", "--image", "--max-tokens",
   "--server", "--add-dir", "--max-steps", "--context-window", "--max-time", "--off", "--plugin", "--tool-choice", "--thinking-budget", "--request", "--local-weight", "--explore-model", "--compact-model", "--review-model", "--cheap-model", "--approve-model", "--quarantine-model", "--fallback"]);   // --live takes an optional port: it is read on its own, before the task
-const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking", "--router", "--subagents", "--explore-ranges"]);
+const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking", "--router", "--subagents", "--explore-ranges", "--stable-tools"]);
 
 export async function runHeadless(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(HELP); return 0; }       // asking for help must never start a model run
@@ -177,7 +178,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
       maxSteps: maxSteps ?? 40, maxTime: maxTime || null, maxTokens, off, toolChoice: toolChoice ?? "auto", textToolCalls: !!wired.model.card?.caps?.textToolCalls, thinkingBudget: thinkingBudget ?? null, keepThinking: !!keepThinking, subagents, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
       sandbox: sandbox ?? null, sandboxEngine: cfg.sandboxEngine ?? null, quarantine: !!(bool("--quarantine") || cfg.quarantine), verify: verify ?? null, review: bool("--review"), approvalReviewer: bool("--approval-reviewer"), trace: !!tracer, memory: !noMemory }) }));
   const agent = createCodeAgent({
-    subagents, exploreRanges: bool("--explore-ranges") || cfg.exploreRanges || undefined,
+    subagents, exploreRanges: bool("--explore-ranges") || cfg.exploreRanges || undefined, stableTools: bool("--stable-tools") || cfg.stableTools || undefined,
     dirs: addDirs.length ? () => addDirs : undefined,
     plans: bool("--plans") || cfg.plans || undefined,
     contextWindow,

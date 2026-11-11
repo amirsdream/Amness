@@ -10,6 +10,7 @@ export type Profile = { off?: Guard[]; stagnationTurns?: number; maxSteps?: numb
   /** cap on thinking tokens per model request, for OpenAI-compatible servers that support it (llama.cpp: `thinking_budget_tokens`); 0 = no thinking */ thinkingBudget?: number;
   /** send the model's earlier thinking back with the history (OpenAI-compatible servers; Qwen and similar templates) */ keepThinking?: boolean;
   /** extra fields merged into every model request (sampling such as `temperature`, `chat_template_kwargs`, …): whatever the server accepts */ request?: Record<string, unknown>;
+  /** a local server's measured time for a repeated prefix as a share of a cold one (written by amness doctor); prices rewrites in time */ cacheFactor?: number;
   /** what `amness doctor` found: the jobs this model qualified for, when, and with which version */ qualified?: { roles: string[]; at: string; by: string };
   /** the only tools offered to this model (finish is always kept), for a model that does better with fewer tools */ tools?: string[];
   /** a system prompt id from .amness/prompts for this model (see /prompt) */ prompt?: string;
@@ -30,6 +31,7 @@ function check(file: string, j: ProfileFile): ProfileFile {
     if (p.textToolCalls !== undefined && typeof p.textToolCalls !== "boolean") throw bad(`${name}: "textToolCalls" must be true or false`);
     if (p.tier !== undefined && p.tier !== "local" && p.tier !== "mid" && p.tier !== "frontier") throw bad(`${name}: "tier" must be "local", "mid" or "frontier"`);
     if (p.request !== undefined && (typeof p.request !== "object" || p.request === null || Array.isArray(p.request))) throw bad(`${name}: "request" must be an object of request fields`);
+    if (p.cacheFactor !== undefined && !(typeof p.cacheFactor === "number" && p.cacheFactor > 0 && p.cacheFactor <= 1.5)) throw bad(`${name}: "cacheFactor" must be a number above 0 (a share of the cold time)`);
     for (const k of ["stagnationTurns", "maxSteps", "contextBudget", "thinkingBudget"] as const) if (p[k] !== undefined && (typeof p[k] !== "number" || p[k]! < 0)) throw bad(`${name}: "${k}" must be a non-negative number`);
   };
   if (j.default) one("default", j.default); for (const [m, p] of Object.entries(j.models ?? {})) one(m, p);
