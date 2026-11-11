@@ -9,7 +9,8 @@ import { GUARD_NAMES, type Guard } from "./harness.ts";
 export type Profile = { off?: Guard[]; stagnationTurns?: number; maxSteps?: number; contextBudget?: number; review?: boolean; note?: string; /** task runs: "required" makes the model call a tool every step (for models that drift into prose or malformed calls) */ toolChoice?: "auto" | "required";
   /** cap on thinking tokens per model request, for OpenAI-compatible servers that support it (llama.cpp: `thinking_budget_tokens`); 0 = no thinking */ thinkingBudget?: number;
   /** send the model's earlier thinking back with the history (OpenAI-compatible servers; Qwen and similar templates) */ keepThinking?: boolean;
-  /** extra fields merged into every model request (sampling such as `temperature`, `chat_template_kwargs`, …): whatever the server accepts */ request?: Record<string, unknown> };
+  /** extra fields merged into every model request (sampling such as `temperature`, `chat_template_kwargs`, …): whatever the server accepts */ request?: Record<string, unknown>;
+  /** where the model sits: local (a small or open model on your own server), mid, or frontier; decides the prompt and tool set (see docs/features.md) */ tier?: "local" | "mid" | "frontier" };
 export type ProfileFile = { default?: Profile; models?: Record<string, Profile> };
 const GUARDS = GUARD_NAMES;
 
@@ -19,6 +20,7 @@ function check(file: string, j: ProfileFile): ProfileFile {
     if (p.off !== undefined && (!Array.isArray(p.off) || p.off.some((g) => !GUARDS.includes(g)))) throw bad(`${name}: "off" must be a list of guards (${GUARDS.join(", ")})`);
     if (p.toolChoice !== undefined && p.toolChoice !== "auto" && p.toolChoice !== "required") throw bad(`${name}: "toolChoice" must be "auto" or "required"`);
     if (p.keepThinking !== undefined && typeof p.keepThinking !== "boolean") throw bad(`${name}: "keepThinking" must be true or false`);
+    if (p.tier !== undefined && p.tier !== "local" && p.tier !== "mid" && p.tier !== "frontier") throw bad(`${name}: "tier" must be "local", "mid" or "frontier"`);
     if (p.request !== undefined && (typeof p.request !== "object" || p.request === null || Array.isArray(p.request))) throw bad(`${name}: "request" must be an object of request fields`);
     for (const k of ["stagnationTurns", "maxSteps", "contextBudget", "thinkingBudget"] as const) if (p[k] !== undefined && (typeof p[k] !== "number" || p[k]! < 0)) throw bad(`${name}: "${k}" must be a non-negative number`);
   };

@@ -109,7 +109,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   for (const r of ["explore", "compact", "review", "cheap", "approve", "quarantine"] as const) { const v = val(`--${r}-model`); if (v) cfg.models = { ...cfg.models, [r]: v }; }
   { const f = val("--fallback"); if (f) cfg.fallback = f; if (bool("--router")) cfg.router = true; }
   if (cfg.router && !cfg.models?.cheap) { console.error("--router needs a cheap model (--cheap-model <ref>, or models.cheap in the config)"); return 2; }
-  let wired: Wired; try { wired = wireModels(cfg, make(cfg), make, { onFallback: () => console.error(`${cfg.model} is unavailable; answering from ${cfg.fallback}`) }); } catch (e) { console.error((e as Error).message); return 2; }
+  let wired: Wired; try { wired = wireModels(cfg, make(cfg), make, { cwd, onFallback: () => console.error(`${cfg.model} is unavailable; answering from ${cfg.fallback}`) }); } catch (e) { console.error((e as Error).message); return 2; }
   const model = wired.model;
   const loadedPlugins = await loadPlugins(cwd, { trustProject: trustHooks });
   for (const f of (val("--plugin") ?? "").split(",").filter(Boolean)) { const r = await importPlugins(resolve(f)); for (const w of r.warnings) console.error("plugin: " + w); loadedPlugins.plugins.push(...r.plugins); }   // named on the command line: you chose them, so no trust prompt
@@ -140,13 +140,15 @@ export async function runHeadless(argv: string[]): Promise<number> {
   // The model's profile (~/.amness/profile.json, then the project's .amness/profile.json): settings tuned per model, as in the chat app; flags win.
   let prof: Profile = {}, profSources: string[] = []; try { const lp = loadProfile(cwd, cfg.model); prof = lp.profile; profSources = lp.sources; } catch (e) { console.error(`profile ignored: ${(e as Error).message}`); }
   const off = [...new Set([...(prof.off ?? []), ...(val("--off") ?? "").split(",").map((x) => x.trim()).filter(Boolean)])] as Guard[];
-  const toolChoice = (val("--tool-choice") ?? prof.toolChoice) as "auto" | "required" | undefined;
+  // Per-call settings: the flags are passed to the loop; the profile's own values travel on each model's card (src/card.ts), so a role model on another server keeps its own.
+  const toolChoiceFlag = val("--tool-choice") as "auto" | "required" | undefined, toolChoice = toolChoiceFlag ?? prof.toolChoice;
   if (toolChoice && toolChoice !== "auto" && toolChoice !== "required") { console.error(`--tool-choice must be auto or required, not ${toolChoice}`); return 2; }
-  const tb = val("--thinking-budget"), thinkingBudget = tb !== undefined ? Number(tb) : prof.thinkingBudget;
+  const tb = val("--thinking-budget"), thinkingBudgetFlag = tb !== undefined ? Number(tb) : undefined, thinkingBudget = thinkingBudgetFlag ?? prof.thinkingBudget;
   if (thinkingBudget !== undefined && !(Number.isInteger(thinkingBudget) && thinkingBudget >= 0)) { console.error(`--thinking-budget must be a whole number of tokens (0 or more), not ${tb}`); return 2; }
-  const keepThinking = bool("--keep-thinking") || prof.keepThinking || undefined;
-  let request = prof.request; const rq = val("--request");
-  if (rq !== undefined) { try { const j = JSON.parse(rq); if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("not an object"); request = { ...request, ...j }; } catch (e) { console.error(`--request must be a JSON object: ${(e as Error).message}`); return 2; } }
+  const keepThinkingFlag = bool("--keep-thinking") || undefined, keepThinking = keepThinkingFlag || prof.keepThinking || undefined;
+  let requestFlag: Record<string, unknown> | undefined; const rq = val("--request");
+  if (rq !== undefined) { try { const j = JSON.parse(rq); if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("not an object"); requestFlag = j; } catch (e) { console.error(`--request must be a JSON object: ${(e as Error).message}`); return 2; } }
+  const request = prof.request || requestFlag ? { ...prof.request, ...requestFlag } : undefined;
   { const bad = off.filter((g) => !GUARD_NAMES.includes(g)); if (bad.length) { console.error(`unknown guard ${bad.join(", ")} (guards: ${GUARD_NAMES.join(", ")})`); return 2; } }
   for (const w of loadedPlugins.warnings) console.error("plugin: " + w);
   if (loadedPlugins.untrusted) console.error(`note: ${loadedPlugins.untrusted.count} project plugin file(s) in .amness/plugins were not loaded; pass --trust-project to run them`);
@@ -165,13 +167,13 @@ export async function runHeadless(argv: string[]): Promise<number> {
   if (json) console.log(JSON.stringify({ kind: "config", version: VERSION, provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl ?? null, effort: cfg.effort ?? null, contextWindow: contextWindow ?? null,
     maxSteps: maxSteps ?? 40, maxTime: maxTime || null, guardsOff: off, guardsOn: GUARD_NAMES.filter((g) => !off.includes(g)), toolChoice: toolChoice ?? "auto", thinkingBudget: thinkingBudget ?? null, keepThinking: !!keepThinking, request: request ?? null,
     profile: { sources: profSources, stagnationTurns: prof.stagnationTurns ?? null, contextBudget: prof.contextBudget ?? null }, sandbox: sandbox ?? null, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
-    roles: wired.labels, router: !!cfg.router, subagents, verify: verify ?? null, memory: !noMemory, quarantine: !!(bool("--quarantine") || cfg.quarantine) }));
+    roles: wired.labels, tier: wired.model.card?.tier ?? null, router: !!cfg.router, subagents, verify: verify ?? null, memory: !noMemory, quarantine: !!(bool("--quarantine") || cfg.quarantine) }));
   const agent = createCodeAgent({
     subagents,
     dirs: addDirs.length ? () => addDirs : undefined,
     plans: bool("--plans") || cfg.plans || undefined,
     contextWindow,
-    maxSteps, off: off.length ? off : undefined, toolChoice, thinkingBudget, request, keepThinking, quarantine: bool("--quarantine") || cfg.quarantine ? (wired.quarantine ? quarantineReader(wired.quarantine) : true) : undefined, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
+    maxSteps, off: off.length ? off : undefined, toolChoice: toolChoiceFlag, thinkingBudget: thinkingBudgetFlag, request: requestFlag, keepThinking: keepThinkingFlag, quarantine: bool("--quarantine") || cfg.quarantine ? (wired.quarantine ? quarantineReader(wired.quarantine) : true) : undefined, stagnationTurns: prof.stagnationTurns, contextBudget: prof.contextBudget, signal: stop.signal, inbox: () => steer.splice(0),
     model, models: wired.roles, modelById: (id) => wired.byRef(id), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") ? (wired.approve ? { model: wired.approve } : true) : undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e: Event) => { if (e.kind === "turn") { usage.prompt += e.prompt; usage.completion += e.completion; usage.cached += e.cached; usage.requests++; } live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });

@@ -1,6 +1,7 @@
 // Per-step model routing that prices the prompt cache. Exploring (reading files, searching) rarely needs the strongest model; planning, editing and recovering from failures do.
 // But every model has its OWN prompt cache, so switching costs a cold read of the whole conversation on the new model. A router that ignores that can spend more than it saves:
 // it only moves to the cheap model when the exploration streak is long enough (or the cheap cache is still warm) that the cheaper steps repay the cold read.
+import { windowOf } from "./card.ts";
 import type { Message, Model, ModelOpts, ToolSpec } from "./harness.ts";
 
 export type Tier = "strong" | "cheap";
@@ -57,7 +58,10 @@ export function routedModel(o: RouterOptions): Model {
   let current: Tier = "strong"; let cheapWarmUntil = 0; const owner = new WeakMap<object, Tier>();
   const m: Model = async (messages: Message[], tools: ToolSpec[], opts?: ModelOpts) => {
     const tail = tailShape(messages), promptTokens = tokensOf(messages);
-    const d = decide({ tail, promptTokens, current, cheapWarm: now() < cheapWarmUntil, prices });
+    let d = decide({ tail, promptTokens, current, cheapWarm: now() < cheapWarmUntil, prices });
+    // The cheap tier shares the transcript: when its own window cannot hold it (a small local model), it cannot take the step.
+    const cw = windowOf(o.cheap);
+    if (d.tier === "cheap" && cw && promptTokens > cw * 0.8) d = { tier: "strong", reason: `the conversation (~${promptTokens} tokens) does not fit the cheap model's window (${cw})` };
     // reasoning blobs only make sense to the model that produced them: drop the other tier's
     const clean = messages.map((x) => (x.role === "assistant" && x.raw !== undefined && owner.get(x.raw as object) !== d.tier ? { ...x, raw: undefined } : x));
     const switched = d.tier !== current; current = d.tier; o.onRoute?.({ ...d, switched, promptTokens });
@@ -76,7 +80,9 @@ export function routedModel(o: RouterOptions): Model {
     if (r.raw !== undefined && typeof r.raw === "object" && r.raw) owner.set(r.raw as object, d.tier);
     return r;
   };
-  m.appendOnly = o.strong.appendOnly || o.cheap.appendOnly;
+  // History may be rewritten only while the tier in use allows it (a local cheap tier does, Claude does not); the card is the strong model's (its window governs the session).
+  Object.defineProperty(m, "appendOnly", { get: () => (current === "cheap" ? o.cheap.appendOnly : o.strong.appendOnly), enumerable: true, configurable: true });
+  Object.defineProperty(m, "card", { get: () => o.strong.card, enumerable: true, configurable: true });
   if (o.strong.api) m.api = o.strong.api;
   return m;
 }

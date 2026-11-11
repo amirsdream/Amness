@@ -4,9 +4,9 @@
 //   anthropic/claude-haiku-5-5   (the same, in the form `amness tune --models` and the Harbor adapter use)
 //   server:lab   server:lab/qwen3-8b   lab   (a saved server and its saved model, or another model on it)
 //   gpt-6-luna   (a bare id: the main provider and server)
-import type { Model, Roles } from "../src/index.ts";
-import { routedModel, withFallback } from "../src/index.ts";
-import { PROVIDERS, keyFor, serverKey, type Config, type ProviderId } from "./config.ts";
+import type { Model, ModelCard, Roles, ModelTier } from "../src/index.ts";
+import { loadProfile, routedModel, withCard, withFallback } from "../src/index.ts";
+import { PROVIDERS, keyFor, serverKey, windowFor, type Config, type ProviderId } from "./config.ts";
 import { priceOf } from "./tui/pricing.ts";
 
 export const ROLE_NAMES = ["explore", "compact", "review", "cheap", "approve", "quarantine", "advisor"] as const;
@@ -33,7 +33,23 @@ export function resolveConfig(ref: string, cfg: Config): { config: Config; name:
     const config: Config = { ...cfg, provider: p, baseUrl: PROVIDERS[p].baseUrl, model, server: undefined, apiKey: keyFor(p).key, contextWindow: undefined };
     return { config, name: model, label: `${p}:${model}` };
   }
-  return { config: { ...cfg, model: r }, name: r, label: r };
+  // Another model on the main provider: the main model's own window setting does not apply to it (its learned window, if any, still does).
+  return { config: r === cfg.model ? cfg : { ...cfg, model: r, contextWindow: undefined }, name: r, label: r };
+}
+
+/** A first guess at a model's tier when no profile says: models on your own servers are local, small hosted families mid, the rest frontier. */
+export function guessTier(c: Pick<Config, "provider" | "model" | "baseUrl">): ModelTier {
+  const official = /api\.(openai|anthropic)\.com|openrouter\.ai/.test(c.baseUrl);
+  if (c.provider === "ollama" || (c.provider === "custom" && !official)) return "local";
+  if (/haiku|mini|nano|luna|flash|small|lite/i.test(c.model)) return "mid";
+  return "frontier";
+}
+
+/** The card for a model built from a config: its own id, window and profile (the profile file is read for this model id, not the main one). */
+export function cardFor(c: Config, cwd: string): ModelCard {
+  let profile: ModelCard["profile"] = {}, tier: ModelTier | undefined;
+  try { const p = loadProfile(cwd, c.model).profile; tier = p.tier; profile = { toolChoice: p.toolChoice, thinkingBudget: p.thinkingBudget, keepThinking: p.keepThinking, request: p.request, off: p.off, stagnationTurns: p.stagnationTurns, maxSteps: p.maxSteps, contextBudget: p.contextBudget }; } catch { /* a broken profile is reported by the caller for the main model */ }
+  return { id: c.model, provider: c.server ? `server:${c.server}` : c.provider, window: () => windowFor(c), profile, tier: tier ?? guessTier(c) };
 }
 
 /** What can be named, for error messages and completion. */
@@ -69,8 +85,10 @@ export type Wired = {
  * Build the main model and every role from the config. `make` turns a config into a model (the caller adds caching, spinners, cache keys).
  * Fallback: retryable errors on the main model answer from `cfg.fallback`. Router: exploration steps go to `models.cheap` when that pays off.
  */
-export function wireModels(cfg: Config, main: Model, make: (c: Config) => Model, hooks: { onFallback?: () => void; onRoute?: (d: { tier: "strong" | "cheap"; switched: boolean; reason: string }, label: string) => void } = {}): Wired {
+export function wireModels(cfg: Config, mainRaw: Model, makeRaw: (c: Config) => Model, hooks: { onFallback?: () => void; onRoute?: (d: { tier: "strong" | "cheap"; switched: boolean; reason: string }, label: string) => void; /** attach model cards (each model's own window and profile) read from this project */ cwd?: string } = {}): Wired {
   const cache = new Map<string, Model>(), labels: Wired["labels"] = {};
+  const carded = (m: Model, c: Config) => (hooks.cwd ? withCard(m, cardFor(c, hooks.cwd)) : m);
+  const main = carded(mainRaw, cfg), make = (c: Config) => carded(makeRaw(c), c);
   const byRef = (ref: string): Model => {
     const r = resolveConfig(ref, cfg);
     if (sameModel(r.config, cfg)) return main;

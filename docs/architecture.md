@@ -104,6 +104,8 @@ The table lists every file in `src/` and `cli/`. The text comes from the first c
 | `src/openai.ts` | Adapter for OpenAI and OpenAI-compatible servers (Responses and Chat Completions APIs). |
 | `src/anthropic.ts` | Adapter for Claude through the official Anthropic SDK. |
 | `src/route.ts` | Roles that use different models (explore, compact, review) and a fallback chain when a provider is overloaded. |
+| `src/card.ts` | The model card: each model carries its id, window, profile and tier. `withCard()` applies the profile's per-call settings; wrappers (fallback, router) show the card of the model that answers. |
+| `cli/roles.ts` | Model references (`provider:model`, `server:<name>`), and the wiring of the main model and the roles, shared by the chat app and `amness run`. |
 | `src/router.ts` | Per-step routing between a strong and a cheap model, with the prompt-cache cost in the decision. |
 | `src/ratelimit.ts` | A shared gate that keeps requests under the provider's per-minute limits. See [Budgets](budgets.md#rate-limits-requests-and-tokens-per-minute). |
 | `src/ledger.ts` | The claims ledger: records edits and commands and checks the final summary. |

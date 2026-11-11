@@ -4,8 +4,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { createSessionWorktree, isRepo, removeWorktree, worktreeIsUntouched, caseFromWorkspace, formatMining, formatReplay, replayFile, Budget, MemoryStore, effortsFor, type RunResult, codeVariants, createCodeAgent, createDeepAgent, evaluate, loadMcp, readBundle, startLive, type Approve, type Event, type Model } from "../src/index.ts";
+import { withCard, createSessionWorktree, isRepo, removeWorktree, worktreeIsUntouched, caseFromWorkspace, formatMining, formatReplay, replayFile, Budget, MemoryStore, effortsFor, type RunResult, codeVariants, createCodeAgent, createDeepAgent, evaluate, loadMcp, readBundle, startLive, type Approve, type Event, type Model } from "../src/index.ts";
 import { createModel } from "./model.ts";
+import { cardFor, resolveConfig } from "./roles.ts";
 import { detectVerify } from "./detect.ts";
 import { HELP, runHeadless } from "./headless.ts";
 import { App } from "./tui/app.ts";
@@ -44,12 +45,10 @@ const statusLine = () => `working… ${Math.round((Date.now() - status.t0) / 100
 const withSpinner = (m: Model): Model => async (msgs, tools, o) => { const stop = spin(statusLine); try { return await m(msgs, tools, o); } finally { stop(); } };
 const rawModel = (retries?: number): Model => createModel(cfg, retries);
 /** A model for `amness tune --models`: a saved server's name, `provider/model`, or a model id of the current provider. Each uses its own key. */
-function tuneModelFor(spec: string): { model: Model; name: string } {
-  const server = cfg.servers?.find((x) => x.name === spec || `server:${x.name}` === spec);
-  if (server) { const c: Config = { ...cfg }; useServer(c, server); return { model: createModel(c), name: server.model }; }
-  const [p, ...rest] = spec.split("/"), m = rest.join("/");
-  if (m && p in PROVIDERS) { const id = p as ProviderId; return { model: createModel({ ...cfg, provider: id, baseUrl: PROVIDERS[id].baseUrl, model: m, server: undefined, apiKey: keyFor(id).key }), name: m }; }
-  return { model: createModel({ ...cfg, model: spec }), name: spec };
+/** A model by reference (an id, provider:model, provider/model, server:<name>[/model] or a saved server's name; see cli/roles.ts), with its own key and card. For tune --models and eval model:<ref>. */
+function modelByRef(spec: string): { model: Model; name: string } {
+  const r = resolveConfig(spec, cfg);
+  return { model: withCard(createModel(r.config), cardFor(r.config, process.cwd())), name: r.name };
 }
 // keep appendOnly (Claude) visible through the spinner wrapper
 const makeModel = (): Model => { const m = rawModel(), w = withSpinner(m); w.appendOnly = m.appendOnly; return w; };
@@ -466,13 +465,13 @@ async function main() {
   const screens: Record<string, () => Promise<unknown>> = { code: codeScreen, memory: memoryScreen, import: importScreen, research: researchScreen, eval: evalScreen, demo: demoScreen, settings };
   if (quick === "--version" || quick === "-v") return void console.log(VERSION);
   if (quick === "--help" || quick === "-h" || quick === "help") return void console.log(TOP_HELP);
-  if (quick === "eval" && argv.length > 1) { process.exitCode = await runEval(argv.slice(1), { model: makeModel, modelName: cfg.model, modelFor: (id) => createModel({ ...cfg, model: id }), maxTokens: cfg.maxTokens, confirm }); return; }
+  if (quick === "eval" && argv.length > 1) { process.exitCode = await runEval(argv.slice(1), { model: makeModel, modelName: cfg.model, modelFor: (id) => modelByRef(id).model, maxTokens: cfg.maxTokens, confirm }); return; }
   if (quick === "bench") { process.exitCode = await runBench(argv.slice(1), { confirm, amnessCli: fileURLToPath(import.meta.url) }); return; }
   if (quick === "skills") { process.exitCode = await runSkills(argv.slice(1), { confirm: (q) => confirm(q, false) }); return; }
   if (quick === "plugin") { process.exitCode = await runPlugin(argv.slice(1)); return; }
   if (quick === "schedule") { process.exitCode = runSchedule(argv.slice(1)); return; }
   if (quick === "acp") { if (argv.includes("--help")) return void console.log(ACP_HELP); process.exitCode = await runAcp({ model: rawModel, version: VERSION, maxTokens: cfg.maxTokens }); return; }
-  if (quick === "tune") { process.exitCode = await runTune(argv.slice(1), { model: makeModel, modelName: cfg.model, maxTokens: cfg.maxTokens, confirm, modelFor: tuneModelFor }); return; }
+  if (quick === "tune") { process.exitCode = await runTune(argv.slice(1), { model: makeModel, modelName: cfg.model, maxTokens: cfg.maxTokens, confirm, modelFor: modelByRef }); return; }
   if (quick === "traces") { process.exitCode = traces(argv.slice(1)); return; }
   if (quick === "replay") { process.exitCode = await runReplay(argv.slice(1)); return; }
   if (quick === "desktop") { const { runDesktop } = await import("./desktop.ts"); process.exitCode = await runDesktop(argv.slice(1)); return; }

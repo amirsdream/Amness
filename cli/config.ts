@@ -41,7 +41,7 @@ export const windowFor = (c: Pick<Config, "model" | "contextWindow" | "windows">
   const n = Number(process.env.AMNESS_CONTEXT_WINDOW) || c.contextWindow || c.windows?.[c.model]; return n && n >= 512 ? Math.floor(n) : undefined;
 };
 /** Remember a window learned from a provider error, so the next session starts with it. */
-export const rememberWindow = (c: Config, tokens: number) => { c.windows = { ...c.windows, [c.model]: tokens }; try { saveConfig(c); } catch { /* read-only home: the next session learns it again */ } };
+export const rememberWindow = (c: Config, tokens: number, model = c.model) => { c.windows = { ...c.windows, [model]: tokens }; try { saveConfig(c); } catch { /* read-only home: the next session learns it again */ } };
 export const home = () => process.env.AMNESS_HOME ?? join(homedir(), ".amness");
 const file = () => join(home(), "config.json");
 

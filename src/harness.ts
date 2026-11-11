@@ -1,3 +1,5 @@
+import type { ModelCard } from "./card.ts";
+import { windowOf } from "./card.ts";
 import { type Schema, validate, parseLooseJson, parseArgs, coerce } from "./schema.ts";
 
 import { ProgressTracker, type TurnFacts } from "./progress.ts";
@@ -20,6 +22,8 @@ export type Model = ((messages: Message[], tools: ToolSpec[], opts?: ModelOpts) 
   appendOnly?: boolean;
   /** Which wire API the adapter is using right now (e.g. "responses" / "chat"); adapters may change it at runtime. */
   api?: () => string;
+  /** What this model is and how it wants to be called (its id, window, profile, tier, capabilities); see src/card.ts. Wrappers show the card of the model that answers. */
+  card?: ModelCard;
 };
 
 export type ToolCtx = { registry: Registry; step: number; /** id of this tool call (subagent events carry it as `parent` so a UI can nest them under their card) */ callId?: string; /** Aborted when the run is interrupted; long-running tools should honour it. */ signal?: AbortSignal; /** Publish a custom event (e.g. a live file diff) to `onEvent`. */ emit?: (e: Event) => void };
@@ -174,7 +178,7 @@ export type Options = {
    *  writes a handoff note before it overflows, and recovers from a "context too long" error instead of failing. A window stated in such an error replaces this value. */
   contextWindow?: number | (() => number | undefined);
   /** Called when the window size was learned from a provider error, so it can be remembered. */
-  onWindow?: (tokens: number) => void;
+  onWindow?: (tokens: number, modelId?: string) => void;
   budget?: Budget;
   /** Asked before any `risky` tool call. Return true to allow, or false / a string (shown to the model) to deny. No handler = deny. */
   approve?: Approve;
@@ -424,7 +428,8 @@ export function createHarness(o: Options) {
     else if (r.context) emit({ kind: "hook", event, detail: "added context", blocked: false });
     return r;
   };
-  const off = new Set(o.off ?? []);
+  const card = o.model.card?.profile ?? {};
+  const off = new Set(o.off ?? card.off ?? []);
   const tcache = o.toolCache === false || off.has("toolcache") ? undefined : o.toolCache ?? new ToolCache();
   const rledger = off.has("readdelta") ? undefined : new ReadLedger();
   let sinceRewrite = 99, lastModelAt = 0;                                                            // per harness, not per run: in a chat the cache stays warm from one turn to the next                              // a later read of a file sends only the lines not already above
@@ -460,7 +465,7 @@ export function createHarness(o: Options) {
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     world++;            // files may have changed since the last run
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, coverageRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
-    const max = o.maxSteps ?? 30;
+    const max = o.maxSteps ?? card.maxSteps ?? 30;
     /** Rewrite old messages with `run` only where that pays (src/rewrite.ts). `force` is for when the window needs the room whatever it costs. Returns the characters saved. */
     const rewrite = (stepNow: number, force: boolean, run: (xs: Message[]) => void): number => {
       const chars = (xs: Message[]) => xs.reduce((n, x) => n + (x.content?.length ?? 0) + (x.tool_calls ?? []).reduce((k, c) => k + c.function.arguments.length, 0), 0), before = chars(msgs);
@@ -474,19 +479,22 @@ export function createHarness(o: Options) {
       for (const i of plan.indexes) Object.assign(msgs[i], trial[i]);
       sinceRewrite = 0; return before - chars(msgs);
     };
-    let allowNow: Set<string> | undefined, thenNext: string | undefined, budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false, win = typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow, recoveries = 0, calib = 1;
+    let allowNow: Set<string> | undefined, thenNext: string | undefined, budgetTier = 0, readStreak = 0, lastCost = 0, stepCost = 0, sent: PrefixSig | undefined, ingress = 0, nudges = 0, tokens = 0, shown = "", lastPrompt = 0, failStreak = 0, warned = false, reflected = false, win = (typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow) ?? windowOf(o.model), recoveries = 0, calib = 1;
     const end = (text: string, finished: boolean, steps: number, stopped?: RunResult["stopped"]): RunResult => ({ text, finished, steps, messages: msgs, stopped, tokens });
 
     /** Tokens a request may use: the window minus room for the reply. */
-    const usable = () => { const w = Math.min(win ?? 0, 150_000); return w - Math.min(Math.round(w * 0.15), 2048); };   // a 1M window is not a reason to carry 800k tokens: long contexts cost money and blur the model
+    const usableOf = (n: number) => { const w = Math.min(n, 150_000); return w - Math.min(Math.round(w * 0.15), 2048); };
+    const usable = () => usableOf(win ?? 0);   // a 1M window is not a reason to carry 800k tokens: long contexts cost money and blur the model
     /** Size cap for one tool result entering the transcript: a small window cannot afford 6000 characters per call. */
     const entryCap = () => (win ? Math.max(1200, Math.min(12_000, Math.round(win * 0.07 * 3.5))) : 6000);   // 12,000 characters from a 49k window up: a 6 KB file with line numbers is not cut
     /** Replace the conversation by a handoff note. The request that asks for the note must itself fit, so it is made from a shrunk copy. */
     const roll = async (specs: ToolSpec[]) => {
       let note = "";
+      // The note is written by the compact model when there is one: size the request for its window if that is smaller (a local compactor behind a large hosted model).
+      const cw = o.compactModel ? windowOf(o.compactModel) : undefined, hw = cw && win ? Math.min(cw, win) : cw ?? win;
       for (let tries = 0; ; tries++) {
-        const req = win ? msgs.map((x) => ({ ...x })) : msgs;
-        if (win) fit(req, specs, Math.max(256, (usable() - estimateTokens([{ role: "user", content: HANDOFF_PROMPT }]) * calib - Math.round(win * 0.12)) / calib / 2 ** tries), Math.round((win * 0.1) / calib / 2 ** tries), true);
+        const req = hw ? msgs.map((x) => ({ ...x })) : msgs;
+        if (hw) fit(req, specs, Math.max(256, (usableOf(hw) - estimateTokens([{ role: "user", content: HANDOFF_PROMPT }]) * calib - Math.round(hw * 0.12)) / calib / 2 ** tries), Math.round((hw * 0.1) / calib / 2 ** tries), true);
         try { note = await makeHandoff(o.compactModel ?? o.model, specs, req, o.budget); break; }
         catch (e) { if (!isOverflow(e) || sig()?.aborted) throw e; if (tries >= 2) { note = mechanicalNote(msgs); break; } }   // the request for the note was itself too big: ask again with less, then write the note ourselves
       }
@@ -543,9 +551,9 @@ export function createHarness(o: Options) {
       emit({ kind: "phase", phase: "compact", step, max });
       // Editing old messages breaks the provider's prompt-cache prefix from that point on, and cached input is ~10x cheaper than fresh input,
       // so history is only rewritten when the window needs it, and then all stages at once (one break), cutting well below the budget (hysteresis).
-      if (!win && !off.has("compact") && !o.model.appendOnly && msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) > (o.contextBudget ?? 60_000)) {
+      if (!win && !off.has("compact") && !o.model.appendOnly && msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) > (o.contextBudget ?? card.contextBudget ?? 60_000)) {
         const veto = (await hook("PreCompact", { chars: msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) }))?.block;
-        const s = veto ? 0 : rewrite(step, msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) > 2 * (o.contextBudget ?? 60_000), (xs) => { supersede(xs, 6, (n) => reg.get(n)?.readOnly === true); compact(xs, o.contextBudget); });
+        const s = veto ? 0 : rewrite(step, msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0) > 2 * (o.contextBudget ?? card.contextBudget ?? 60_000), (xs) => { supersede(xs, 6, (n) => reg.get(n)?.readOnly === true); compact(xs, o.contextBudget ?? card.contextBudget); });
         if (s > 0) emit({ kind: "trim", saved: s, what: "stale tool output" });
       }
       repairMarkers(msgs); repairPointers(msgs);                                                                                      // a "same as before" pointer must not outlive the output it points to
@@ -570,7 +578,7 @@ export function createHarness(o: Options) {
           recoveries++;
           const asked = requestedFromError(e); if (asked) calib = calibration(asked, estimateTokens(msgs, specs));
           const stated = windowFromError(e), was = win; win = stated ?? Math.max(1024, Math.floor(Math.min(win ?? Infinity, estimateTokens(msgs, specs) * calib) * 0.8));
-          if (win !== was) o.onWindow?.(win);
+          if (win !== was) o.onWindow?.(win, o.model.card?.id);
           const res = fit(msgs, specs, (usable() * 0.5) / calib, (usable() * 0.12) / calib);
           emit({ kind: "trim", saved: Math.round(res.saved * 3.5), what: `overflow recovery (window ${win} tokens)` });
           if (!res.fits) await roll(specs);
@@ -734,7 +742,7 @@ export function createHarness(o: Options) {
         }
       }
       // Stagnation: the loop keeps acting but nothing measurable improves (the model's own confidence says nothing about this).
-      { const facts = { calls: turnCalls, edits: turnEdits }; turnCalls = []; turnEdits = []; const K = o.stagnationTurns ?? 8;
+      { const facts = { calls: turnCalls, edits: turnEdits }; turnCalls = []; turnEdits = []; const K = o.stagnationTurns ?? card.stagnationTurns ?? 8;
         if (K > 0 && !off.has("stagnation")) {
           const why = progress.observe(facts); if (why.length) stagnationWarned = false;
           if (progress.stale >= K && !stagnationWarned) {

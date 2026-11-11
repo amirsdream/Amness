@@ -16,11 +16,14 @@ export function isRetryable(e: unknown): boolean {
  * The fallback model sees the same messages; adapters ignore reasoning blobs that belong to another provider.
  */
 export function withFallback(primary: Model, fallback: Model, onFallback?: (e: unknown) => void): Model {
+  let active: Model = primary;
   const m: Model = async (messages: Message[], tools: ToolSpec[], opts?: ModelOpts) => {
-    try { return await primary(messages, tools, opts); }
-    catch (e) { if (!isRetryable(e) || opts?.signal?.aborted) throw e; onFallback?.(e); return fallback(messages, tools, opts); }
+    try { const r = await primary(messages, tools, opts); active = primary; return r; }
+    catch (e) { if (!isRetryable(e) || opts?.signal?.aborted) throw e; onFallback?.(e); const r = await fallback(messages, tools, opts); active = fallback; return r; }
   };
-  m.appendOnly = primary.appendOnly || fallback.appendOnly;      // if either may be Claude, history must not be rewritten
+  // appendOnly and the card follow the model that answered last: a local fallback's turns may rewrite history, Claude's may not.
+  Object.defineProperty(m, "appendOnly", { get: () => active.appendOnly, enumerable: true, configurable: true });
+  Object.defineProperty(m, "card", { get: () => active.card, enumerable: true, configurable: true });
   if (primary.api) m.api = primary.api;
   return m;
 }
