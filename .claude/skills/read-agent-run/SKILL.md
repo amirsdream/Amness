@@ -21,7 +21,7 @@ For a local run, use the file you passed to `--trace`, or the `--json` output.
 ## 2. Read it in order
 
 1. **The config line.** Did the run use what you think: `version`, `guardsOff`, `maxTime`, `thinkingBudget`, `toolChoice`, the profile sources? Many "failures" are a wrong setup.
-2. **The result line.** `stopped` says why it ended: `time` (the time limit), `stuck` (the stagnation or stuck guard), `budget`, `maxSteps`, `aborted`, or `blocked` (a hook). No `stopped` and `finished: false` means the model ended with plain text and never called `finish`. `finished: false` with `stopped: time` is a limit, not a model error.
+2. **The result line.** `stopped` says why it ended: `time` (the time limit, set by `amness run`), or one of the values of `stopped` in the result type in `src/harness.ts` (on 2026-11-12: `stuck` for the stagnation or stuck guard, `budget`, `maxSteps`, `aborted`, `blocked` for a hook). No `stopped` and `finished: false` means the model ended with plain text and never called `finish`. `finished: false` with `stopped: time` is a limit, not a model error.
 3. **The tests.** What exactly failed? "file not found" means the agent never produced the deliverable; a wrong value means it tried and got it wrong.
 4. **The steps.** Print them:
 
@@ -36,7 +36,7 @@ For a local run, use the file you passed to `--trace`, or the `--json` output.
 
 | What you see | Likely cause | Where to look |
 |---|---|---|
-| `stopped: stuck` after many turns with no edit, while the agent ran new shell commands | the stagnation guard counts only `read_file`, `grep` and `list_files` as new reads | `src/progress.ts` (`observe`) |
+| `stopped: stuck` after many turns with no edit, while the agent ran new shell commands | the stagnation guard may not count that work as progress: read what `observe` counts (on 2026-11-12, new shell output did not count) | `src/progress.ts` (`observe`) |
 | the same call blocked again and again | the loop guard | `canonicalCall`, `findCycle` in `src/harness.ts` |
 | `repair` lines, or calls refused as invalid JSON | malformed tool calls; is `argfix` on, does the model need `textToolCalls`? | `src/schema.ts`, `src/rescue.ts` |
 | an edit refused as a placeholder | the hollow guard | `src/hollow.ts` |

@@ -29,3 +29,14 @@ Copied the same day, then removed because they repeated what Amness already does
 Why few: studies of agent skills found that a skill helps on some tasks and models and not others, and that every skill makes the prompt longer ([arXiv 2610.04832](https://arxiv.org/html/2610.04832v1), [arXiv 2608.23067](https://arxiv.org/abs/2608.23067); abstracts and snippets only). Skills written from a project's own knowledge are kept over general ones.
 
 Local only, not in git: `excalidraw-diagram` (its source has no licence) and `run-studio-campaign` (it names the home lab).
+
+## Keeping skills true (no drift)
+
+A skill that names something the code no longer has gives wrong instructions, and nobody notices. These rules prevent that.
+
+1. **The test checks every name.** `test/skill-hygiene.test.ts` runs in CI. For our own skills it fails when a skill names a repo path, an npm script, an `amness` subcommand or flag, a guard, a function (written as "`fn` in `src/file.ts`" or "`src/file.ts` (`fn`)") or another skill that does not exist. Write such names in that form so the test can see them.
+2. **Fix the skill in the same commit as the code.** When the test fails after a rename, update the skill, not the test.
+3. **Point to the code; do not restate it.** Name the file and function and say what to read there. When a skill must state a behaviour or a number that can change (a threshold, a list of values, a known bug), date it: "on 2026-11-12, new shell output did not count". A dated fact is history; an undated one becomes a lie after the next fix.
+4. **Never edit a copied skill.** Each copy records its upstream commit and the sha256 of its `SKILL.md` in `SOURCE.md`; the test fails if the file changes. To change one, write our own skill instead, or copy the newer upstream version and record its hash. Links inside a copy to skills we do not have (for example `context-degradation` in `context-compression`) are expected and ignored.
+5. **One job per skill.** Before adding a skill, check that no skill here covers the job. Two skills that say the same thing drift apart.
+6. **Local skills are checked too, on the machine that has them.** They are not in git, so CI never sees them; facts about machines in them (addresses, paths on a server) can only be checked by using them, so they say how to check first.

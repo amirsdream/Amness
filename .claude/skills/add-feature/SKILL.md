@@ -15,3 +15,4 @@ Each item is one commit with code, tests, a doc update, and a README or ROADMAP 
 4. Run the `check` skill.
 5. Update the docs page for the feature (follow the `write-docs` skill), tick the box in `ROADMAP.md`, add a line to the Done log, and add a `CHANGELOG.md` line if users will notice.
 6. Commit with a short imperative subject. Do not push or tag unless asked.
+- If you rename or remove a file, flag, guard, npm script or function that a skill in `.claude/skills/` names, `test/skill-hygiene.test.ts` fails: update the skill in the same commit.
