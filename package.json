@@ -66,6 +66,7 @@
   "files": [
     "dist",
     "docs",
+    "!docs/diagrams/*.excalidraw",
     "README.md",
     "LICENSE"
   ],
