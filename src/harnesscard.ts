@@ -10,7 +10,7 @@ export type HarnessCardInput = {
   roles?: Record<string, string>;
   router?: boolean; fallback?: string;
   maxSteps?: number; maxTime?: number | null; maxTokens?: number;
-  off?: Guard[]; toolChoice?: string; thinkingBudget?: number | null; keepThinking?: boolean;
+  off?: Guard[]; toolChoice?: string; textToolCalls?: boolean; thinkingBudget?: number | null; keepThinking?: boolean;
   tools?: string[]; subagents?: boolean; plugins?: string[]; mcp?: number;
   sandbox?: string | null; sandboxEngine?: string | null; quarantine?: boolean; taint?: string;
   verify?: string | null; review?: boolean; approvalReviewer?: boolean;
@@ -20,7 +20,7 @@ export type HarnessCardInput = {
 export type HarnessCard = {
   version: string;
   execution: { model: string; provider: string; tier: string | null; roles: Record<string, string>; router: boolean; fallback: string | null; maxSteps: number; maxTime: number | null; maxTokens: number | null };
-  tools: { offered: string[] | null; subagents: boolean; plugins: string[]; mcpServers: number; toolChoice: string; argumentRepair: boolean };
+  tools: { offered: string[] | null; subagents: boolean; plugins: string[]; mcpServers: number; toolChoice: string; argumentRepair: boolean; textToolCalls: boolean };
   context: { window: number | null; compaction: boolean; condense: boolean; pinRules: boolean; keepThinking: boolean; thinkingBudget: number | null; memory: boolean };
   scheduling: { parallelReads: boolean; loopGuard: boolean; stuck: boolean; stagnation: boolean; wrapup: boolean; nudge: boolean };
   observability: { trace: boolean; events: "jsonl" };
@@ -34,7 +34,7 @@ export function harnessCard(i: HarnessCardInput): HarnessCard {
   return {
     version: i.version,
     execution: { model: i.model.id, provider: i.model.provider, tier: i.model.tier ?? null, roles: i.roles ?? {}, router: !!i.router, fallback: i.fallback ?? null, maxSteps: i.maxSteps ?? 40, maxTime: i.maxTime ?? null, maxTokens: i.maxTokens ?? null },
-    tools: { offered: i.tools ?? null, subagents: !!i.subagents, plugins: i.plugins ?? [], mcpServers: i.mcp ?? 0, toolChoice: i.toolChoice ?? "auto", argumentRepair: on("argfix") },
+    tools: { offered: i.tools ?? null, subagents: !!i.subagents, plugins: i.plugins ?? [], mcpServers: i.mcp ?? 0, toolChoice: i.toolChoice ?? "auto", argumentRepair: on("argfix"), textToolCalls: !!i.textToolCalls },
     context: { window: i.model.window ?? null, compaction: on("compact"), condense: on("condense"), pinRules: on("pin"), keepThinking: !!i.keepThinking, thinkingBudget: i.thinkingBudget ?? null, memory: i.memory !== false },
     scheduling: { parallelReads: on("schedule"), loopGuard: on("loop"), stuck: on("stuck"), stagnation: on("stagnation"), wrapup: on("wrapup"), nudge: on("nudge") },
     observability: { trace: !!i.trace, events: "jsonl" },

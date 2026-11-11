@@ -169,7 +169,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
     profile: { sources: profSources, stagnationTurns: prof.stagnationTurns ?? null, contextBudget: prof.contextBudget ?? null }, sandbox: sandbox ?? null, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
     roles: wired.labels, tier: wired.model.card?.tier ?? null, router: !!cfg.router, subagents, verify: verify ?? null, memory: !noMemory, quarantine: !!(bool("--quarantine") || cfg.quarantine),
     harnessCard: harnessCard({ version: VERSION, model: { provider: cfg.server ? `server:${cfg.server}` : cfg.provider, id: cfg.model, tier: wired.model.card?.tier, window: contextWindow ?? null, profileSources: profSources }, roles: wired.labels, router: !!cfg.router, fallback: wired.labels.fallback,
-      maxSteps: maxSteps ?? 40, maxTime: maxTime || null, maxTokens, off, toolChoice: toolChoice ?? "auto", thinkingBudget: thinkingBudget ?? null, keepThinking: !!keepThinking, subagents, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
+      maxSteps: maxSteps ?? 40, maxTime: maxTime || null, maxTokens, off, toolChoice: toolChoice ?? "auto", textToolCalls: !!wired.model.card?.caps?.textToolCalls, thinkingBudget: thinkingBudget ?? null, keepThinking: !!keepThinking, subagents, plugins: loadedPlugins.plugins.map((p) => p.name ?? "plugin"),
       sandbox: sandbox ?? null, sandboxEngine: cfg.sandboxEngine ?? null, quarantine: !!(bool("--quarantine") || cfg.quarantine), verify: verify ?? null, review: bool("--review"), approvalReviewer: bool("--approval-reviewer"), trace: !!tracer, memory: !noMemory }) }));
   const agent = createCodeAgent({
     subagents,

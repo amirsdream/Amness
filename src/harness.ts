@@ -1,5 +1,6 @@
 import type { ModelCard } from "./card.ts";
 import { windowOf } from "./card.ts";
+import { findTextCalls, withoutCalls, type TextCall } from "./rescue.ts";
 import { type Schema, validate, parseLooseJson, parseArgs, coerce } from "./schema.ts";
 
 import { ProgressTracker, type TurnFacts } from "./progress.ts";
@@ -220,6 +221,8 @@ export type Options = {
   request?: Record<string, unknown>;
   /** Send the model's earlier thinking back with the history (OpenAI-compatible servers). Without it a thinking model works out the same analysis again at every step. */
   keepThinking?: boolean;
+  /** Rescue tool calls the model wrote as text (`<tool_call>…`, `<function=…>`, a JSON object) when it sent no structured call. Default: the model card's `caps.textToolCalls`. Each rescue is a `repair` event. */
+  textToolCalls?: boolean;
   /** Rules that allow, force-ask or deny a call before the permission mode is consulted (see `Permissions`). Deny wins; allow skips the prompt. */
   permissions?: { check(tool: string, args: Record<string, any>): { action: "allow" | "ask" | "deny" | "none"; rule?: string; reason?: string; floor?: boolean } };
   /** Turns without any objective improvement (failing-test count, new files edited, new code) before the loop reflects, then stops. Default 8; 0 switches it off. */
@@ -595,6 +598,21 @@ export function createHarness(o: Options) {
           const res = fit(msgs, specs, (usable() * 0.5) / calib, (usable() * 0.12) / calib);
           emit({ kind: "trim", saved: Math.round(res.saved * 3.5), what: `overflow recovery (window ${win} tokens)` });
           if (!res.fits) await roll(specs);
+        }
+      }
+      if (!m.tool_calls?.length && m.raw === undefined && (o.textToolCalls ?? o.model.card?.caps?.textToolCalls)) {
+        // A call written as text is taken only when it names a visible tool and its arguments validate (after the argfix repairs); prose that just mentions a tool runs nothing.
+        const names = specs.map((x) => x.name), fromText = findTextCalls(m.content ?? ""), cands = fromText.length ? fromText : findTextCalls(m.thinking ?? ""), ok: TextCall[] = [], calls: ToolCall[] = [];
+        for (const c of cands) {
+          const name = names.includes(c.name) ? c.name : exactName(c.name, names); if (!name) continue;
+          const p = parseArgs(c.args); if ("error" in p) continue;
+          const schema = name === "finish" ? FINISH.parameters : (name === "tool_search" && menu.length ? searchTool : reg.get(name))?.schema;
+          let args: unknown = p.args; if (schema && validate(args, schema).length) { const cz = coerce(args, schema); if (validate(cz.value, schema).length) continue; args = cz.value; }
+          ok.push(c); calls.push({ id: `text-${step}-${calls.length}`, function: { name, arguments: JSON.stringify(args) } });
+        }
+        if (calls.length) {
+          m.tool_calls = calls; if (fromText.length) m.content = withoutCalls(m.content ?? "", ok) || null;
+          emit({ kind: "repair", detail: `rescued ${calls.length} tool call${calls.length === 1 ? "" : "s"} written as text (${[...new Set(ok.map((c) => c.shape))].join(", ")}): ${calls.map((c) => c.function.name).join(", ")}`, fixed: true });
         }
       }
       ensureUsage(m, msgs); void hook("PostModel", { step, text: (m.content ?? "").slice(0, 4000), tools: (m.tool_calls ?? []).map((c) => c.function.name), usage: m.usage });
