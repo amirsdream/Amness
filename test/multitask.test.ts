@@ -27,13 +27,14 @@ test("two windows saving the config each keep the other's change (only changed k
   assert.equal(disk2.provider, "ollama"); assert.equal(disk2.theme, "daylight");
 });
 
-test("background tasks: each runs in its own worktree; apply brings its change into the working tree; drop removes it; outside git it is refused", async () => {
+test("background tasks: each runs in its own worktree; apply brings its change into the working tree; drop removes it; outside git it is refused", async (t) => {
   const d = repo(), ended: number[] = [];
   const g = gate();
+  t.after(() => g.open());   // a failed check must not leave the tasks waiting (on Windows the file then hung until the CI timeout)
   const bg = new BackgroundTasks({ cwd: d, maxTokens: () => 100000, onEnd: (t) => ended.push(t.id),
     run: async ({ dir, task }) => { await g.p; writeFileSync(join(dir, "a.txt"), `${task}\n`); return { text: `did ${task}`, finished: true, steps: 2 }; } });
   const t1 = await bg.start("two"), t2 = await bg.start("three");
-  assert.notEqual(t1.dir, t2.dir); assert.match(t1.dir, /\.amness\/worktrees\/bg-1-/);
+  assert.notEqual(t1.dir, t2.dir); assert.match(t1.dir, /\.amness[\\/]worktrees[\\/]bg-1-/);
   assert.equal(readFileSync(join(d, "a.txt"), "utf8"), "one\n", "your files are untouched while they run");
   assert.match(await bg.apply(1), /still running/);
   g.open(); assert.ok(await until(() => ended.length === 2));
@@ -43,9 +44,10 @@ test("background tasks: each runs in its own worktree; apply brings its change i
   await assert.rejects(new BackgroundTasks({ cwd: mkdtempSync(join(tmpdir(), "amness-nogit-")), maxTokens: () => 1, run: async () => ({ text: "", finished: true, steps: 0 }) }).start("x"), /need a git repository/);
 });
 
-test("/bg in the app: a task runs in the background while the chat stays free, and its end is announced", async () => {
+test("/bg in the app: a task runs in the background while the chat stays free, and its end is announced", async (ctx) => {
   const g = gate();
-  const route = async (m: Message[]) => { if ((m[0].content ?? "").includes("worktrees/bg-")) { await g.p; return call("finish", { summary: "background work done" }); } return say("here, still free"); };
+  ctx.after(() => g.open());
+  const route = async (m: Message[]) => { if (/worktrees[\\/]bg-/.test(m[0].content ?? "")) { await g.p; return call("finish", { summary: "background work done" }); } return say("here, still free"); };
   const t = rig(Array(20).fill(route)); git(t.dir, "init", "-q"); writeFileSync(join(t.dir, ".gitignore"), ".amness/\n"); git(t.dir, "add", "."); git(t.dir, "commit", "-qm", "init");
   await t.start();
   await t.submit("/bg tidy the readme"); assert.ok(await until(() => t.has(/started background task 1/)));
@@ -55,18 +57,20 @@ test("/bg in the app: a task runs in the background while the chat stays free, a
   await t.submit("/bg drop 1"); assert.ok(await until(() => t.has("dropped task 1")));
 });
 
-test("desktop: a new chat while one works keeps the first alive, in its own worktree; the first one's end is announced; it can be brought back", async () => {
+test("desktop: a new chat while one works keeps the first alive, in its own worktree; the first one's end is announced; it can be brought back", async (t) => {
   process.env.AMNESS_HOME = mkdtempSync(join(tmpdir(), "amness-home-"));
   const d = repo(), g = gate(), events: ServerEvent[] = [];
   writeFileSync(join(process.env.AMNESS_HOME, "state.json"), JSON.stringify({ verifyByDir: {}, tasks: [], trustedDirs: [d] }));
   const model: Model = async (m) => { const u = [...m].reverse().find((x) => x.role === "user")?.content ?? ""; if (/slow job/.test(u)) { await g.p; return say("slow job done"); } return say("quick answer"); };
-  const b = new DesktopBridge({ cfg: { provider: "custom", baseUrl: "http://x/v1", model: "test-model", maxTokens: 100000 } as any, cwd: d, version: "0", persist: false, makeModel: () => model, emit: (e) => events.push(e) });
+  let b: DesktopBridge | undefined;
+  t.after(() => { g.open(); b?.close(); });
+  b = new DesktopBridge({ cfg: { provider: "custom", baseUrl: "http://x/v1", model: "test-model", maxTokens: 100000 } as any, cwd: d, version: "0", persist: false, makeModel: () => model, emit: (e) => events.push(e) });
   await sleep(80);
   b.send("please do the slow job"); assert.ok(await until(() => b.app.running));
   const first = b.app, firstId = first.session.id;
   await b.newConversation();
   assert.notEqual(b.app, first); assert.ok(first.running, "the first chat keeps working");
-  assert.match(b.app.cwd, /\.amness\/worktrees\/chat-1-/);
+  assert.match(b.app.cwd, /\.amness[\\/]worktrees[\\/]chat-1-/);
   const live = b.state().live; assert.equal(live.length, 2); assert.ok(live.some((l) => l.id === firstId && l.running && !l.current));
   b.send("a quick question"); assert.ok(await until(() => b.app.blocks.blocks.some((x: any) => x.kind === "assistant" && /quick answer/.test(x.text ?? ""))));
   g.open(); assert.ok(await until(() => events.some((e) => e.type === "toast" && /finished/.test(e.text))));
