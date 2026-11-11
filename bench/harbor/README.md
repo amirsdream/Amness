@@ -55,6 +55,12 @@ By default the adapter packs **this working tree** (`npm run build` and `npm pac
 | `--ak runtime=off` | Install Node and Amness in every container (by default they are installed once on the host into a cached bundle that each container unpacks). |
 | `--ak api=chat` | The OpenAI wire API (`auto`, `responses`, `chat`). |
 | `--ak verify="pytest -q"` | A command that must pass before Amness may finish. |
+| `--ak explore_model=server:lab` | A model for one job (Amness 0.8.0+): `explore_model`, `compact_model`, `review_model`, `cheap_model`, `approve_model`, `quarantine_model`, `advisor_model`, `fallback`. A model is an id on the main provider, `provider:model` or `server:<name>`. |
+| `--ak servers=lab=http://192.168.1.20:8000/v1` | Save servers in the container, so `server:<name>` works there. Give `name=url` pairs, or JSON (`[{"name":"lab","baseUrl":"…","model":"…"}]`). Without a model, the server uses the main model. |
+| `--ak ladder=server:lab,openai:gpt-6-luna` | The recovery ladder: models, cheapest first (`ladder_start` picks the first one). |
+| `--ak stable_tools=true` | The fixed tool list. Also `router`, `subagents` and `explore_ranges` (each `true`). |
+| `--ak tier=local` | The model's tier (`local`, `mid`, `frontier`). With `text_tool_calls=true`, tool calls the model writes as text are taken. `profile='{…}'` sets any profile field. |
+| `--ak local_weight=0.1` | How much a token of a local model counts against the token cap (0 to 1). |
 | `--ak max_time=600` | A time limit in seconds. By default the adapter reads the task's own limit and gives Amness that minus a margin, so Amness wraps up and reports before Harbor stops it. |
 
 Harbor's own options choose the tasks: `-i <glob>` and `-x <glob>` include and exclude task names, `-l <n>` limits the number, `-n <n>` sets how many run at once, `-k <n>` runs each task several times.
