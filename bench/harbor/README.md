@@ -59,7 +59,7 @@ By default the adapter packs **this working tree** (`npm run build` and `npm pac
 | `--ak servers=lab=http://192.168.1.20:8000/v1` | Save servers in the container, so `server:<name>` works there. Give `name=url` pairs, or JSON (`[{"name":"lab","baseUrl":"…","model":"…"}]`). Without a model, the server uses the main model. |
 | `--ak ladder=server:lab,openai:gpt-6-luna` | The recovery ladder: models, cheapest first (`ladder_start` picks the first one). |
 | `--ak stable_tools=true` | The fixed tool list. Also `router`, `subagents` and `explore_ranges` (each `true`). |
-| `--ak tier=local` | The model's tier (`local`, `mid`, `frontier`). With `text_tool_calls=true`, tool calls the model writes as text are taken. `profile='{…}'` sets any profile field. |
+| `--ak tier=local` | The model's tier (`local`, `mid`, `frontier`). With `text_tool_calls=true`, tool calls the model writes as text are taken. `profile='{…}'` sets any profile field of the main model (jobs on other models keep their own). |
 | `--ak local_weight=0.1` | How much a token of a local model counts against the token cap (0 to 1). |
 | `--ak max_time=600` | A time limit in seconds. By default the adapter reads the task's own limit and gives Amness that minus a margin, so Amness wraps up and reports before Harbor stops it. |
 
