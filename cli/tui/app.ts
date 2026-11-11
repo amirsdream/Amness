@@ -839,7 +839,7 @@ export class App {
     this.warmTimer.unref?.();
   }
   /** Project hooks run commands on this machine, so a cloned repo's hooks only run after the user approves this exact file. */
-  policyLog: string[] = []; hooks!: Hooks; rules!: Permissions; roles: Roles = {}; wired?: Wired; lastRoute = "";
+  policyLog: string[] = []; hooks!: Hooks; rules!: Permissions; roles: Roles = {}; wired?: Wired; lastRoute = ""; warnedPlanFirst = false;
   loadHooks() {
     const fp = projectConfigFingerprint(this.cwd), trusted = !!fp && loadState().hookTrust?.[this.cwd] === fp;
     try { this.hooks = Hooks.load(this.cwd, { trustProject: trusted }); } catch (e) { this.hooks = Hooks.load(this.cwd, { trustProject: false }); this.note(`hooks ignored: ${(e as Error).message}`); }
@@ -858,6 +858,9 @@ export class App {
   activePlugins(): Plugin[] {
     const extra: Plugin[] = []; const s = this.cfg.strategy && STRATEGIES[this.cfg.strategy]; if (s) extra.push(s());
     if (this.cfg.prompt) { try { extra.push(promptPlugin(this.cwd, this.cfg.prompt)); } catch (e) { this.note(`prompt ignored: ${(e as Error).message}`); this.cfg.prompt = undefined; } }
+    else { const pid = this.profile?.profile.prompt; if (pid) { try { extra.push(promptPlugin(this.cwd, pid)); } catch (e) { this.note(`the model profile's prompt "${pid}" is ignored: ${(e as Error).message}`); } } }   // the model's own prompt, unless you chose one with /prompt
+    const tier = this.model?.card?.tierFrom === "profile" ? this.model.card.tier : undefined;
+    if (this.cfg.strategy === "plan-first" && tier === "local" && !this.warnedPlanFirst) { this.warnedPlanFirst = true; this.note("plan-first with a local-tier model: in one study a plan/execute phase prompt made all four small models it was tried on worse. Consider /strategy off."); }
     return extra.length ? [...this.plugins, ...extra] : this.plugins;
   }
   /** Load plugins: yours always, the project's only once you approved exactly these files. */

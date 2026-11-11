@@ -10,6 +10,8 @@ export type Profile = { off?: Guard[]; stagnationTurns?: number; maxSteps?: numb
   /** cap on thinking tokens per model request, for OpenAI-compatible servers that support it (llama.cpp: `thinking_budget_tokens`); 0 = no thinking */ thinkingBudget?: number;
   /** send the model's earlier thinking back with the history (OpenAI-compatible servers; Qwen and similar templates) */ keepThinking?: boolean;
   /** extra fields merged into every model request (sampling such as `temperature`, `chat_template_kwargs`, …): whatever the server accepts */ request?: Record<string, unknown>;
+  /** the only tools offered to this model (finish is always kept), for a model that does better with fewer tools */ tools?: string[];
+  /** a system prompt id from .amness/prompts for this model (see /prompt) */ prompt?: string;
   /** take tool calls the model writes as text (`<tool_call>…</tool_call>`, `<function=…>`, a JSON object) when it sends no structured call; for models whose server template does not turn them into calls */ textToolCalls?: boolean;
   /** where the model sits: local (a small or open model on your own server), mid, or frontier; decides the prompt and tool set (see docs/features.md) */ tier?: "local" | "mid" | "frontier" };
 export type ProfileFile = { default?: Profile; models?: Record<string, Profile> };
@@ -21,6 +23,8 @@ function check(file: string, j: ProfileFile): ProfileFile {
     if (p.off !== undefined && (!Array.isArray(p.off) || p.off.some((g) => !GUARDS.includes(g)))) throw bad(`${name}: "off" must be a list of guards (${GUARDS.join(", ")})`);
     if (p.toolChoice !== undefined && p.toolChoice !== "auto" && p.toolChoice !== "required") throw bad(`${name}: "toolChoice" must be "auto" or "required"`);
     if (p.keepThinking !== undefined && typeof p.keepThinking !== "boolean") throw bad(`${name}: "keepThinking" must be true or false`);
+    if (p.tools !== undefined && (!Array.isArray(p.tools) || p.tools.some((t) => typeof t !== "string"))) throw bad(`${name}: "tools" must be a list of tool names`);
+    if (p.prompt !== undefined && typeof p.prompt !== "string") throw bad(`${name}: "prompt" must be a prompt id`);
     if (p.textToolCalls !== undefined && typeof p.textToolCalls !== "boolean") throw bad(`${name}: "textToolCalls" must be true or false`);
     if (p.tier !== undefined && p.tier !== "local" && p.tier !== "mid" && p.tier !== "frontier") throw bad(`${name}: "tier" must be "local", "mid" or "frontier"`);
     if (p.request !== undefined && (typeof p.request !== "object" || p.request === null || Array.isArray(p.request))) throw bad(`${name}: "request" must be an object of request fields`);

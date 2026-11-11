@@ -11,6 +11,7 @@ export type ModelTier = "local" | "mid" | "frontier";
 export type CardProfile = {
   toolChoice?: "auto" | "required"; thinkingBudget?: number; keepThinking?: boolean; request?: Record<string, unknown>;
   off?: Guard[]; stagnationTurns?: number; maxSteps?: number; contextBudget?: number;
+  /** the only tools this model is offered (finish is always kept) */ tools?: string[];
 };
 
 export type ModelCard = {
@@ -21,6 +22,8 @@ export type ModelCard = {
   window?: () => number | undefined;
   profile?: CardProfile;
   tier?: ModelTier;
+  /** "profile" when the tier was set in the model's profile, "guess" when it was guessed from the provider and name. Only a set tier changes the prompt and tools. */
+  tierFrom?: "profile" | "guess";
   caps?: { nativeTools?: boolean; parallelTools?: boolean; textToolCalls?: boolean; toolChoiceRequired?: boolean; vision?: boolean; pricedCache?: boolean };
 };
 

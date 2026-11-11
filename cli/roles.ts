@@ -48,8 +48,8 @@ export function guessTier(c: Pick<Config, "provider" | "model" | "baseUrl">): Mo
 /** The card for a model built from a config: its own id, window and profile (the profile file is read for this model id, not the main one). */
 export function cardFor(c: Config, cwd: string): ModelCard {
   let profile: ModelCard["profile"] = {}, tier: ModelTier | undefined, textCalls: boolean | undefined;
-  try { const p = loadProfile(cwd, c.model).profile; tier = p.tier; textCalls = p.textToolCalls; profile = { toolChoice: p.toolChoice, thinkingBudget: p.thinkingBudget, keepThinking: p.keepThinking, request: p.request, off: p.off, stagnationTurns: p.stagnationTurns, maxSteps: p.maxSteps, contextBudget: p.contextBudget }; } catch { /* a broken profile is reported by the caller for the main model */ }
-  return { id: c.model, provider: c.server ? `server:${c.server}` : c.provider, window: () => windowFor(c), profile, tier: tier ?? guessTier(c), ...(textCalls !== undefined && { caps: { textToolCalls: textCalls } }) };
+  try { const p = loadProfile(cwd, c.model).profile; tier = p.tier; textCalls = p.textToolCalls; profile = { toolChoice: p.toolChoice, thinkingBudget: p.thinkingBudget, keepThinking: p.keepThinking, request: p.request, off: p.off, stagnationTurns: p.stagnationTurns, maxSteps: p.maxSteps, contextBudget: p.contextBudget, tools: p.tools }; } catch { /* a broken profile is reported by the caller for the main model */ }
+  return { id: c.model, provider: c.server ? `server:${c.server}` : c.provider, window: () => windowFor(c), profile, tier: tier ?? guessTier(c), tierFrom: tier ? "profile" : "guess", ...(textCalls !== undefined && { caps: { textToolCalls: textCalls } }) };
 }
 
 /** What can be named, for error messages and completion. */

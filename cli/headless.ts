@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const VERSION: string = (() => { for (const rel of ["../package.json", "../../package.json"]) { try { return JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8")).version; } catch { /* the built copy sits one folder deeper */ } } return "0.0.0"; })();
 import { join, resolve } from "node:path";
 import { cachedModel } from "../src/respcache.ts";
-import { harnessCard, quarantineReader, Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
+import { promptPlugin, harnessCard, quarantineReader, Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { PROVIDERS, keyFor, loadConfig, ready, useServer, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
 import { wireModels, type Wired } from "./roles.ts";
@@ -150,6 +150,7 @@ export async function runHeadless(argv: string[]): Promise<number> {
   if (rq !== undefined) { try { const j = JSON.parse(rq); if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("not an object"); requestFlag = j; } catch (e) { console.error(`--request must be a JSON object: ${(e as Error).message}`); return 2; } }
   const request = prof.request || requestFlag ? { ...prof.request, ...requestFlag } : undefined;
   { const bad = off.filter((g) => !GUARD_NAMES.includes(g)); if (bad.length) { console.error(`unknown guard ${bad.join(", ")} (guards: ${GUARD_NAMES.join(", ")})`); return 2; } }
+  if (prof.prompt) { try { loadedPlugins.plugins.push(promptPlugin(cwd, prof.prompt)); } catch (e) { console.error(`the model profile's prompt "${prof.prompt}" is ignored: ${(e as Error).message}`); } }
   for (const w of loadedPlugins.warnings) console.error("plugin: " + w);
   if (loadedPlugins.untrusted) console.error(`note: ${loadedPlugins.untrusted.count} project plugin file(s) in .amness/plugins were not loaded; pass --trust-project to run them`);
   // --max-time: a wall-clock limit (benchmarks kill an agent at theirs). Near the end the agent is told to wrap up; at the limit it stops cleanly, so the result line is still written.

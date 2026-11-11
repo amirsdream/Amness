@@ -23,6 +23,7 @@ import { Ledger } from "./ledger.ts";
 import { relatedFiles, CodeIndex, indexTools } from "./codeindex.ts";
 import { AGENT_TOOLS, WRITE_TOOLS, isWriter, loadAgents, type AgentDef } from "./agents.ts";
 import type { Roles } from "./route.ts";
+import { windowOf, type ModelTier } from "./card.ts";
 import { applyDiff, createWorktree, isRepo, removeWorktree, worktreeDiff, type Worktree } from "./worktree.ts";
 import { loadSkills, skillsBlock, skillTool, type Skill } from "./skills.ts";
 import { SkillState, draftSkill, rankSkills } from "./skillmgr.ts";
@@ -220,6 +221,19 @@ MEMORY: notes from earlier sessions may appear below the task; treat them as hin
 Never invent file contents or command output. Don't ask the user questions; choose sensible defaults. Some commands need human approval; if denied, use another route.`;
 
 /** Conversational variant of the prompt: answers questions directly, plans, delegates exploration, works within permission modes. */
+/**
+ * For models of the local tier (small or open models on your own server), whatever their window: short, plain, imperative, and always
+ * ending with `finish`. Small models need fewer tools and plainer instructions (arXiv 2607.08938, read); a plan/execute/submit phase
+ * prompt made four small models worse (arXiv 2605.00334, read), so there is no phase structure here.
+ */
+export const LOCAL_SYSTEM = `You are a software engineer working in the user's repository. Work in small steps.
+- A greeting or thanks gets a short reply, no tools.
+- Look first: list_files, grep, read_file (read part of a big file with start/end). Never guess what a file says or what a command printed.
+- To change code, use edit_file (the exact old text and the new text) or write_file for a new file. Change only what the task needs.
+- After a change, run the tests or the build with sh and read the output. If it fails, fix the cause and run it again.
+- Each reply that is not your final answer must call a tool. Do not say what you will do: do it.
+- When the task is done and checked, call finish with a short summary: what you changed and how you checked it.
+- Other tools (memory, skills, repo_map, background shells, subagents) are found with tool_search.`;
 /** For small context windows: the same rules as CHAT_SYSTEM and CODE_SYSTEM in about a third of the words. */
 export const COMPACT_SYSTEM = `You are a software engineer working in the user's repository. Be concise; cite files as path:line.
 - A greeting or thanks gets a short reply, no tools.
@@ -245,6 +259,10 @@ const EXPLORE_SYSTEM = `You are a read-only code explorer working for another en
 export type CodeAgentOptions = {
   /** Conversational mode (the TUI): chat prompt, plus todo_write, task (read-only explorer subagent) and exit_plan_mode tools. */
   chat?: boolean;
+  /** The model's tier. "local" uses the short local prompt, the lean tool set and compact tool specs whatever the window. Default: the model card's tier when its profile sets one. */
+  tier?: ModelTier;
+  /** Only these tools (and finish) are offered. Default: the model card's profile `tools`. */
+  toolAllow?: string[];
   /** Offer the `task` tool (explorer and custom subagents). Default: on in chat mode only. */
   subagents?: boolean;
   /** Live permission mode. When given, edits and shell commands ask for approval per the mode (see PermMode); omit for the autonomous behaviour. */
@@ -356,8 +374,11 @@ export function createCodeAgent(o: CodeAgentOptions) {
   if (plugins.length) o = { ...o, model: routers.length && o.modelById ? routedByFunction(o.model, o.modelById, (i) => { for (const p of routers) { const r = p.route!(i); if (r) return r; } }) : o.model, hooks: composeHooks(o.hooks, plugins, o.cwd), tools: [...(o.tools ?? []), ...plugins.flatMap((p) => p.tools ?? [])] };
   const policyFn = plugins.some((p) => p.policy) ? (c: { tool: string; args: Record<string, unknown> }) => checkPolicies(plugins, { ...c, cwd: o.cwd }) : undefined;
   /** A small context window (16k tokens or less, like a local 30B model on 8k): a shorter system prompt, compact skills and memory blocks, and the rarely used tools out of the prompt. A request for "hi" then costs about 1.5k tokens instead of 3.4k. */
-  const small = () => { const w = typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow; return !!w && w <= 16_384; };
-  const SYS = (chat: boolean | undefined) => applySystem(plugins, (small() ? COMPACT_SYSTEM : chat ? CHAT_SYSTEM : CODE_SYSTEM) + "\n" + shellNote() + ` Working directory: ${slash(resolve(o.cwd))} (commands and relative paths start there).`, o.cwd);   // without it a model guesses (\`cd /home/user\`) and loses steps
+  const small = () => { const w = (typeof o.contextWindow === "function" ? o.contextWindow() : o.contextWindow) ?? windowOf(o.model); return !!w && w <= 16_384; };
+  // The model's tier, separate from its window: only a tier that was set (the option, or the model's profile) changes the prompt and tools; a guessed one does not, until measured.
+  const localTier = () => (o.tier ?? (o.model.card?.tierFrom === "profile" ? o.model.card.tier : undefined)) === "local";
+  const lean = () => small() || localTier();
+  const SYS = (chat: boolean | undefined) => applySystem(plugins, (small() ? COMPACT_SYSTEM : localTier() ? LOCAL_SYSTEM : chat ? CHAT_SYSTEM : CODE_SYSTEM) + "\n" + shellNote() + ` Working directory: ${slash(resolve(o.cwd))} (commands and relative paths start there).`, o.cwd);   // without it a model guesses (\`cd /home/user\`) and loses steps
   const toolsFile = resolve(o.cwd, ".amness/tools.json");
   const touched = new Set<string>(), created = new Set<string>();
   const guidance = o.guidance === false ? undefined : new Guidance(o.cwd);
@@ -394,7 +415,8 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const shown = new Set<string>();   // memory notes already in this conversation
   const rescanIndex = () => { if (codeIndex && !registry.get("repo_map") && codeIndex.list().length >= indexMin) registry.add(...indexTools(codeIndex)); };
   rescan(); rescanIndex();
-  registry.lean = { when: small, names: new Set(["memory_save", "memory_search", "memory_forget", "todo_write", "skill", "task", "repo_map", "impact", "find_refs", "sh_start", "sh_read", "sh_stop", "sh_list", "apply_patch"]) };
+  registry.lean = { when: lean, names: new Set(["memory_save", "memory_search", "memory_forget", "todo_write", "skill", "task", "repo_map", "impact", "find_refs", "sh_start", "sh_read", "sh_stop", "sh_list", "apply_patch"]) };
+  { const allow = o.toolAllow ?? o.model.card?.profile?.tools; if (allow?.length) registry.allow = new Set([...allow, "finish", "tool_search"]); }
   let todos: { content: string; status: "pending" | "in_progress" | "done" }[] = [];
   if (o.chat) {
     registry.add(
@@ -489,7 +511,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   const sessionFile = resolve(o.cwd, ".amness/handoff.md");
   let task = "";
   const h = createHarness({
-    model: o.model, toolCache, finishChecks: [coverageCheck, auditCheck(o.cwd, () => codeIndex, () => [...created])], compactSpecs: () => o.compactSchemas ?? small(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
+    model: o.model, toolCache, finishChecks: [coverageCheck, auditCheck(o.cwd, () => codeIndex, () => [...created])], compactSpecs: () => o.compactSchemas ?? lean(), compactModel: o.models?.compact, system: SYS(o.chat), tools: registry, maxSteps: o.maxSteps ?? (o.chat ? 60 : 40), inbox: o.inbox,
     budget: o.budget, approve, policy: policyFn, context: plugins.some((p) => p.context) ? async (m, info) => { let cur = m, changed = false; for (const p of plugins) if (p.context) { const r = await p.context(cur, info); if (Array.isArray(r) && r.length) { cur = r; changed = true; } } return changed ? cur : undefined; } : undefined, off: o.off, onEvent: o.onEvent, signal: o.signal, record: o.record, governRewrites: o.governRewrites, cachedPrice: o.cachedPrice, cacheTtlMs: o.cacheTtlMs, contextBudget: o.contextBudget, redact: o.redact !== false, taint: o.taint ?? "ask", hooks: o.hooks, toolChoice: o.chat ? "auto" : o.toolChoice, thinkingBudget: o.thinkingBudget, request: o.request, keepThinking: o.keepThinking, quarantine: o.quarantine ? plugins.find((p) => p.quarantine)?.quarantine ?? (typeof o.quarantine === "function" ? o.quarantine : quarantineReader(o.models?.cheap ?? o.model)) : undefined, stagnationTurns: o.stagnationTurns, ledger, reviewer: o.review ? (ctx) => reviewWork({ model: reviewModel, cwd: o.cwd, task: ctx.task, contract, summary: ctx.summary, diffs: ledger.diffs(), commands: ledger.recentCommands(), verify: o.verify, budget: o.budget, signal: typeof o.signal === "function" ? o.signal() : o.signal }) : undefined, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, o.cwd),
     rollover: o.rollover === false ? undefined : o.rollover ?? { afterTokens: 120_000, afterChars: 500_000 }, contextWindow: o.contextWindow, onWindow: o.onWindow,
     onHandoff: (note) => { mkdirSync(dirname(sessionFile), { recursive: true }); writeFileSync(sessionFile, `# Handoff

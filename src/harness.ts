@@ -65,18 +65,20 @@ export class Registry {
   constructor(ts: Tool[] = []) { this.add(...ts); }
   /** Tools that stay out of the prompt (found through `tool_search`) while `when()` is true, as well as any tool marked `deferred`. For a small context window: the rarely used tools move out, and come back when the model asks. */
   lean?: { when: () => boolean; names: Set<string> };
+  /** When set, only these tools (and finish) are offered at all, even through tool_search: a per-model tool set from the profile (`tools`). */
+  allow?: Set<string>;
   isDeferred(t: Tool) { return !!t.deferred || (!!this.lean && this.lean.names.has(t.name) && this.lean.when()); }
   add(...ts: Tool[]) { for (const t of ts) this.tools.set(t.name, t); return this; }
   remove(name: string) { this.loaded.delete(name); return this.tools.delete(name); }
   get(name: string) { return this.tools.get(name); }
   hasDeferred() { return [...this.tools.values()].some((t) => this.isDeferred(t)); }
   visible(s: { step: number; messages: Message[] }) {
-    return [...this.tools.values()].filter((t) => (!this.isDeferred(t) || this.loaded.has(t.name)) && (!t.when || t.when(s)));
+    return [...this.tools.values()].filter((t) => (!this.allow || this.allow.has(t.name)) && (!this.isDeferred(t) || this.loaded.has(t.name)) && (!t.when || t.when(s)));
   }
   /** Keyword-rank the not-yet-loaded deferred tools by name + description. */
   search(q: string, n = 5) {
     const words = q.toLowerCase().split(/\W+/).filter((w) => w.length > 1);
-    return [...this.tools.values()].filter((t) => this.isDeferred(t) && !this.loaded.has(t.name))
+    return [...this.tools.values()].filter((t) => this.isDeferred(t) && !this.loaded.has(t.name) && (!this.allow || this.allow.has(t.name)))
       .map((t) => ({ t, score: words.filter((w) => `${t.name} ${t.description}`.toLowerCase().includes(w)).length }))
       .filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.t.name.localeCompare(b.t.name)).slice(0, n).map((x) => x.t);
   }
