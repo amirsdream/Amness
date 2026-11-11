@@ -60,3 +60,12 @@ test("harness: a finish that overclaims is rejected with specifics, can be fixed
   const q3 = [call("finish", { summary: "Tests pass." })];
   assert.ok((await createHarness({ model: async () => q3.shift()!, tools: [sh], ledger: new Ledger(), off: ["ledger"] }).run("x")).finished);   // ablation switch
 });
+
+test("ledger: a direct compiler run counts as a build (coqc, gcc, g++, clang, javac, rustc, cobc, pdflatex), so 'it compiles' after one is not refused", () => {
+  for (const cmd of ["cd /workspace && coqc plus_comm.v", "gcc -O2 -o main main.c", "g++ -std=c++17 a.cpp -o a", "clang++ x.cc", "javac Main.java", "rustc main.rs", "cobc -x -o prog src/program.cbl", "pdflatex -interaction=nonstopmode main.tex", "cmake --build build", "dotnet build"]) {
+    const l = L(); edit(l, "src/a"); l.onCommand(cmd, "exit=0\n");
+    assert.deepEqual(l.check("The proof compiles successfully."), [], cmd);
+  }
+  const l = L(); edit(l, "src/a"); l.onCommand("echo compiled", "exit=0\n");
+  assert.match(l.check("The build is clean.")[0], /no such command succeeded/);
+});

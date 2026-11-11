@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed:** the claims ledger refused a finish that said "it compiles" after a direct compiler run, because it knew only build tools such as `tsc`, `cargo` and `make`. Compilers count now too (`gcc`, `g++`, `clang`, `javac`, `rustc`, `coqc`, `cobc`, `pdflatex`, `cmake --build` and others). Found on a Terminal-Bench task, where the refusal cost two extra steps.
+
 ## 0.8.0 (2026-11-11)
 
 - **Work on several things at once.** `/bg <task>` (terminal and desktop) runs a task in the background, in its own git worktree, while you keep working; you are told when it ends, and `/bg apply <n>` takes its changes. The desktop app keeps a chat working when you open another one or start a new one: the chat list shows which ones work or wait for you, each chat keeps its own provider and model, and a second chat on the same project gets its own worktree. `amness run --background` starts a run that keeps going after the command returns; `amness tasks` lists, shows, applies and drops them.

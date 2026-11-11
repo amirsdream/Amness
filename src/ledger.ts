@@ -5,7 +5,8 @@ export type LedgerCmd = { cmd: string; code: number | null; test: boolean; build
 export type Audit = { changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] };
 
 export const TEST_CMD = /\b(npm\s+(run\s+)?t(est)?\b|yarn\s+test|pnpm\s+(run\s+)?test|npx\s+(jest|vitest|mocha|ava|tap)|jest|vitest|mocha|pytest|python3?\s+-m\s+(pytest|unittest)|go\s+test|cargo\s+(test|nextest)|mvn\s+(-\S+\s+)*test|gradle\w*\s+test|dotnet\s+test|make\s+(test|check)|rspec|phpunit|node\s+(--test\b|\S*test\S*\.[cm]?js)|bun\s+test|deno\s+test|ctest|swift\s+test)\b/i;
-export const BUILD_CMD = /\b(tsc\b|npm\s+run\s+(build|typecheck|lint|check)|yarn\s+(build|lint)|cargo\s+(build|check|clippy)|go\s+(build|vet)|make\b|mvn\s+(-\S+\s+)*(compile|package)|gradle\w*\s+build|eslint|ruff|mypy|pyright|next\s+build|vite\s+build|webpack)\b/i;
+// Compilers count too: Terminal-Bench tasks build with coqc, gcc, javac, cobc or pdflatex, and a claim "it compiles" after one was refused.
+export const BUILD_CMD = /\b(tsc\b|npm\s+run\s+(build|typecheck|lint|check)|yarn\s+(build|lint)|cargo\s+(build|check|clippy)|go\s+(build|vet)|make\b|mvn\s+(-\S+\s+)*(compile|package)|gradle\w*\s+build|eslint|ruff|mypy|pyright|next\s+build|vite\s+build|webpack|gcc|clang|cc|rustc|javac|kotlinc|scalac|ghc|coqc|ocamlc|ocamlopt|dune\s+build|cobc|gfortran|nvcc|swiftc|zig\s+build|dotnet\s+build|cmake\s+--build|ninja|bazel\s+build|pdflatex|xelatex|lualatex|latexmk)\b|(?:^|[\s;&|(])(?:g|clang)\+\+(?=\s|$)/i;
 const FAIL_OUTPUT = /(?:^|\n)\s*(?:FAIL\b|✖|not ok\b)|\b[1-9]\d*\s+(?:tests?\s+)?(?:failed|failing)\b|\b(?:failed|failing):\s*[1-9]|Tests:\s+\d+\s+failed|AssertionError|[1-9]\d*\s+errors?\b/i;
 const SHELL_WRITE = /\bsed\s+-i|>\s*[\w./~-]|\btee\b|\bmv\b|\bcp\b|\bgit\s+(apply|checkout|restore|stash|reset|mv)\b|\bpatch\b|\bperl\s+-p?i|\btouch\b|\bmkdir\b/;
 const NEG = /\b(?:not|n't|no|never|without|fail\w*|broken|still)\b[^.\n]{0,25}$/i;
