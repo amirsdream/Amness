@@ -686,3 +686,17 @@ test("/models takes references to other providers and saved servers, refuses unk
     for (const r of ["explore", "compact", "review", "cheap", "approve", "quarantine"]) assert.ok(ids.includes(`models.${r}`), `${front}: models.${r}`);
   }
 });
+
+test("/models warns when amness doctor did not qualify the model for that job, and suggests /doctor when it never ran", async () => {
+  const t = rig([], { cols: 180, cfg: { servers: [{ name: "lab", provider: "custom", baseUrl: "http://10.0.0.5:8000/v1", model: "qwen-35b" }, { name: "box", provider: "custom", baseUrl: "http://10.0.0.6:8000/v1", model: "gemma" }] } });
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(join(t.dir, ".amness"), { recursive: true });
+  writeFileSync(join(t.dir, ".amness", "profile.json"), JSON.stringify({ models: { "qwen-35b": { qualified: { roles: ["compact", "quarantine"], at: "2026-11-11", by: "amness doctor" } } } }));
+  await t.start();
+  await t.submit("/models explore server:lab"); await t.settle();
+  assert.ok(t.has(/did not qualify server:lab\/qwen-35b for explore \(it qualified for: compact, quarantine\)/));
+  await t.submit("/models compact server:lab"); await t.settle();
+  assert.ok(!t.has(/did not qualify server:lab\/qwen-35b for compact/));
+  await t.submit("/models review server:box"); await t.settle();
+  assert.ok(t.has("/doctor server:box checks how this model uses tools"));
+});

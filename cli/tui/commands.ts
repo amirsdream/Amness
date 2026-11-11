@@ -1,5 +1,6 @@
 // Slash commands. Each gets the running App and the raw argument string.
 import { ROLE_NAMES, resolveConfig } from "../roles.ts";
+import { formatDoctor, loadProfile, runDoctor, writeProfile } from "../../src/index.ts";
 import { previewLines, relatives } from "./session.ts";
 import { GUARDS, harnessView } from "./harnessinfo.ts";
 import { applySettings, settingsView, showValue, type SettingChange, type SettingItem, type SettingValue } from "./settings.ts";
@@ -552,6 +553,23 @@ export function buildCommands(): Cmd[] {
       let label = id; if (id !== "off") { try { label = resolveConfig(id, a.cfg).label; } catch (e) { return void a.say((e as Error).message, red); } }
       if (role === "fallback") a.cfg.fallback = id === "off" ? undefined : id; else a.cfg.models = { ...(a.cfg.models ?? {}), [role]: id === "off" ? undefined : id };
       a.saveConfig(); a.buildAgent(); a.say(`${role} → ${id === "off" ? "main model" : label}`, dim);
+      if (id !== "off" && role !== "fallback") {
+        // A model that `amness doctor` checked carries its verdict in its profile: say so when it did not qualify for this job.
+        const need = role === "cheap" ? "explore" : role, rid = resolveConfig(id, a.cfg).name;
+        let q: { roles: string[] } | undefined; try { q = loadProfile(a.cwd, rid).profile.qualified; } catch { /* a broken profile is reported elsewhere */ }
+        if (q && !q.roles.includes(need)) a.say(`  note: amness doctor did not qualify ${label} for ${need} (it qualified for: ${q.roles.join(", ") || "nothing"})`, yellow);
+        else if (!q) a.say(`  tip: /doctor ${id} checks how this model uses tools`, dim);
+      }
+    } },
+    { name: "doctor", help: "check how a model uses tools and which jobs it can take: /doctor [model] [write]", args: "[model] [write]", run: async (a, arg) => {
+      const words = arg.split(/\s+/).filter(Boolean), write = words.includes("write"), ref = words.find((w) => w !== "write") ?? a.cfg.model;
+      let r; try { r = resolveConfig(ref, a.cfg); } catch (e) { return void a.say((e as Error).message, red); }
+      const m = a.wired?.byRef(ref) ?? a.model;
+      a.say(`checking ${r.label}: about ten short requests…`, dim);
+      let rep; try { rep = await runDoctor(m, { stated: a.window }); } catch (e) { return void a.say(`doctor failed: ${(e as Error).message}`, red); }
+      a.commit(["", ...formatDoctor(r.label, rep).split("\n").map((l) => "  " + l)]);
+      if (write) { const at = new Date().toISOString().slice(0, 10); writeProfile(join(a.cwd, ".amness", "profile.json"), r.name, { ...rep.suggest, qualified: { roles: rep.qualified, at, by: "amness doctor" } }, `checked with amness doctor on ${at}`); a.say(`  saved in .amness/profile.json (${r.name})`, dim); a.buildAgent(); }
+      else a.say("  /doctor " + ref + " write saves this in .amness/profile.json", dim);
     } },
     { name: "policy", help: "why recent actions were allowed, asked about or refused (rules, the safety floor, untrusted-text checks)", live: true, run: (a) => {
       a.commit(["", bold("  Recent policy decisions"), ...(a.policyLog.length ? a.policyLog.map((l) => "  " + (l.startsWith("deny") ? red(l.slice(0, 5)) : l.startsWith("ask") ? yellow(l.slice(0, 5)) : green(l.slice(0, 5))) + l.slice(5)) : [dim("  none yet: every call so far went through the permission mode alone")]),

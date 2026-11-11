@@ -402,6 +402,7 @@ const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
   amness schedule <cmd>        recurring headless runs through cron (amness schedule --help)
   amness acp                   serve the Agent Client Protocol on stdio for editors (Zed, JetBrains)
   amness tune [flags]          find guard settings that hold up on unseen tasks (amness tune --help)
+  amness doctor [model]        check how a model uses tools and which jobs it can take (amness doctor --help)
   amness demo                  guided demo, no API key needed
 
   inside the chat: /help for commands · @file to mention files · shift+tab to change permissions`;
@@ -471,6 +472,7 @@ async function main() {
   if (quick === "plugin") { process.exitCode = await runPlugin(argv.slice(1)); return; }
   if (quick === "schedule") { process.exitCode = runSchedule(argv.slice(1)); return; }
   if (quick === "acp") { if (argv.includes("--help")) return void console.log(ACP_HELP); process.exitCode = await runAcp({ model: rawModel, version: VERSION, maxTokens: cfg.maxTokens }); return; }
+  if (quick === "doctor") { const { runDoctorCli } = await import("./doctorcli.ts"); process.exitCode = await runDoctorCli(argv.slice(1), { cfg, confirm, version: VERSION }); return; }
   if (quick === "tune") { process.exitCode = await runTune(argv.slice(1), { model: makeModel, modelName: cfg.model, maxTokens: cfg.maxTokens, confirm, modelFor: modelByRef }); return; }
   if (quick === "traces") { process.exitCode = traces(argv.slice(1)); return; }
   if (quick === "replay") { process.exitCode = await runReplay(argv.slice(1)); return; }

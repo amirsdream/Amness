@@ -71,10 +71,10 @@ export async function tune(o: TuneOptions): Promise<TuneResult> {
 }
 
 /** Merge a tuned profile into `model`'s entry of a profile file, keeping every other model and field (an earlier version replaced the whole file). */
-export function writeProfile(file: string, model: string, p: Profile) {
+export function writeProfile(file: string, model: string, p: Profile, note = "tuned with a held-out check (amness tune)") {
   let j: { default?: Profile; models?: Record<string, Profile> } = {};
   try { if (existsSync(file)) j = JSON.parse(readFileSync(file, "utf8")); } catch { /* unreadable: start a new one */ }
-  j.models = { ...(j.models ?? {}), [model]: { ...(j.models?.[model] ?? {}), ...p, note: "tuned with a held-out check (amness tune)" } };
+  j.models = { ...(j.models ?? {}), [model]: { ...(j.models?.[model] ?? {}), ...p, note } };
   mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
 }
 

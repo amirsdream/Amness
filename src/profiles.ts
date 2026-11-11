@@ -10,6 +10,7 @@ export type Profile = { off?: Guard[]; stagnationTurns?: number; maxSteps?: numb
   /** cap on thinking tokens per model request, for OpenAI-compatible servers that support it (llama.cpp: `thinking_budget_tokens`); 0 = no thinking */ thinkingBudget?: number;
   /** send the model's earlier thinking back with the history (OpenAI-compatible servers; Qwen and similar templates) */ keepThinking?: boolean;
   /** extra fields merged into every model request (sampling such as `temperature`, `chat_template_kwargs`, …): whatever the server accepts */ request?: Record<string, unknown>;
+  /** what `amness doctor` found: the jobs this model qualified for, when, and with which version */ qualified?: { roles: string[]; at: string; by: string };
   /** the only tools offered to this model (finish is always kept), for a model that does better with fewer tools */ tools?: string[];
   /** a system prompt id from .amness/prompts for this model (see /prompt) */ prompt?: string;
   /** take tool calls the model writes as text (`<tool_call>…</tool_call>`, `<function=…>`, a JSON object) when it sends no structured call; for models whose server template does not turn them into calls */ textToolCalls?: boolean;
@@ -23,6 +24,7 @@ function check(file: string, j: ProfileFile): ProfileFile {
     if (p.off !== undefined && (!Array.isArray(p.off) || p.off.some((g) => !GUARDS.includes(g)))) throw bad(`${name}: "off" must be a list of guards (${GUARDS.join(", ")})`);
     if (p.toolChoice !== undefined && p.toolChoice !== "auto" && p.toolChoice !== "required") throw bad(`${name}: "toolChoice" must be "auto" or "required"`);
     if (p.keepThinking !== undefined && typeof p.keepThinking !== "boolean") throw bad(`${name}: "keepThinking" must be true or false`);
+    if (p.qualified !== undefined && (typeof p.qualified !== "object" || !Array.isArray(p.qualified.roles))) throw bad(`${name}: "qualified" must be { "roles": [...], "at": "...", "by": "..." } (written by amness doctor)`);
     if (p.tools !== undefined && (!Array.isArray(p.tools) || p.tools.some((t) => typeof t !== "string"))) throw bad(`${name}: "tools" must be a list of tool names`);
     if (p.prompt !== undefined && typeof p.prompt !== "string") throw bad(`${name}: "prompt" must be a prompt id`);
     if (p.textToolCalls !== undefined && typeof p.textToolCalls !== "boolean") throw bad(`${name}: "textToolCalls" must be true or false`);
