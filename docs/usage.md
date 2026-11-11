@@ -320,7 +320,7 @@ Type `/` in the input box to see the popup. It lists **every** command, grouped 
 |---|---|
 | `/mode ` | `default`, `acceptEdits`, `plan`, `yolo` |
 | `/model ` | the known models with their hints, then every other model your provider reports (OpenAI, Claude, OpenRouter, Ollama and other OpenAI-compatible servers). Amness asks the provider once and remembers the answer for ten minutes. If the provider cannot be reached, you still see the known models. |
-| `/models ` | the roles (`explore`, `compact`, `review`, `cheap`, `fallback`), then the models |
+| `/models ` | the roles (`explore`, `compact`, `review`, `cheap`, `approve`, `quarantine`, `advisor`, `fallback`), then the models, your saved servers and connected providers |
 | `/effort `, `/api `, `/theme `, `/shell `, `/strategy `, `/prompt `, `/sandbox `, `/diffmode `, `/ui ` | their choices |
 | `/keepwarm `, `/plans `, `/lsp `, `/approver `, `/reviewer `, `/router `, `/mouse ` | `on`, `off` |
 | `/branch ` | your turns, numbered, with the first words of each |
@@ -340,7 +340,8 @@ Type `/` in the input box to see the popup. It lists **every** command, grouped 
 | `/connect` (alias `/keys`) | Opens the key manager. See which providers are connected, add a key for any of them, replace or remove one, or switch to it. Add as many as you want. |
 | `/effort [level]` | Sets the reasoning effort. Levels depend on the model. `default` lets the model decide. |
 | `/api [auto\|responses\|chat]` | Chooses the OpenAI wire API. It does not apply to Claude. |
-| `/models [role model]` | Uses another model for `explore`, `compact`, `review` or `cheap`. `/models fallback <model>` sets a model for when the main one is overloaded or not reachable. Use `off` to clear a role. |
+| `/models [role model]` | Uses another model for one job: `explore`, `compact`, `review`, `cheap`, `approve`, `quarantine` or `advisor`. The model can be on another provider or a saved server (`anthropic:claude-haiku-5-5`, `server:lab`). `/models fallback <model>` sets a model for when the main one is overloaded or not reachable. Use `off` to remove one. See [Models per job](features.md#models-per-job-and-a-fallback). |
+| `/doctor [model] [write]` | Checks how a model uses tools (about ten short requests) and lists the jobs it can take. `write` saves the result in `.amness/profile.json`. |
 | `/router [on\|off]` | Sends read-only exploration steps to the `cheap` model when this pays off. You must set a cheap model first with `/models cheap <id>`. |
 | `/keepwarm [on\|off]` | Keeps the Claude prompt cache alive while you are away. It affects Claude only. |
 

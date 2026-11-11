@@ -163,6 +163,18 @@ const local = openai({ baseUrl: "http://localhost:11434/v1", model: "qwen2.5-cod
 const claude = anthropic({ model: "claude-opus-5-5" });   // needs @anthropic-ai/sdk
 ```
 
+**Mix models.** Any `Model` can do a job: pass `models: { explore, compact, review, cheap }`, `advisor` (a stronger model to consult) or `ladder` (`ladderModel([...])`, cheapest first). Give each model a card with `withCard(model, { id, window, profile, tier })`, so it is called with its own window and settings:
+
+```ts
+import { createCodeAgent, ladderModel, openai, anthropic, withCard } from "amness";
+
+const qwen = withCard(openai({ baseUrl: "http://localhost:8000/v1", model: "qwen" }), { id: "qwen", window: () => 131072, tier: "local", profile: { thinkingBudget: 0 } });
+const opus = anthropic({ model: "claude-opus-5-5" });
+const agent = createCodeAgent({ model: opus, models: { explore: qwen }, subagents: true, cwd: process.cwd() });
+const lad = ladderModel([{ model: qwen, label: "qwen" }, { model: opus, label: "opus" }]);
+const cheapFirst = createCodeAgent({ model: lad, ladder: lad, cwd: process.cwd() });
+```
+
 To add another provider, write one function that returns a `Message` (`{ role: "assistant", content, tool_calls? }`) and, if you can, `usage`. If the provider gives no token counts, Amness estimates them (about 4 characters per token).
 
 ## Continue, stop and resume a run

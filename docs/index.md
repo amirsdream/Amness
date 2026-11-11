@@ -15,7 +15,7 @@ These pages explain how to install, use, extend and trust Amness. Start with "Ge
 | [Budgets and subagents](budgets.md) | Why runs ran out of budget, what vendors and papers say, and what Amness does about it |
 | [The agent loop](agent-loop.md) | Staged compaction, guards, the claims ledger, cache behavior and sources |
 | [Architecture](architecture.md) | The layers, the files, and how the full-screen interface draws |
-| [Providers and models](providers.md) | OpenAI, Claude, and local models (Ollama, LM Studio, vLLM), and how requests are made |
+| [Providers and models](providers.md) | OpenAI, Claude, and local models (Ollama, LM Studio, vLLM); `amness doctor`; models per job; how requests are made |
 | [Headless and CI](headless.md) | `amness run`, flags, JSON events, exit codes and Docker |
 | [Use it as a library](library.md) | Use `createCodeAgent`, `createHarness`, tools and models in your own TypeScript code |
 | [Safety and privacy](safety.md) | What leaves your machine, what protects you, and what does not |

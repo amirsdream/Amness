@@ -541,7 +541,7 @@ Use an id that your provider accepts. Amness turns the id into a model with `mod
 
 **Limits.**
 
-- The id must belong to the **same provider** as the current model.
+- The id is a model reference: an id on the main provider, `provider:model`, or `server:<name>[/model]` (see [Models per job](features.md#models-per-job-and-a-fallback)). Each one uses its own key.
 - Routing works only where `modelById` exists. When you use `createCodeAgent` as a library, pass `modelById` yourself, or `route` is ignored.
 - If `route` throws, Amness uses the default model.
 - Tested with scripted models. Not measured: whether any routing rule saves money or keeps quality.

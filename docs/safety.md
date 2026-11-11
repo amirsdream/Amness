@@ -25,7 +25,9 @@ Amness is a terminal coding agent. A *model provider* is the company or server t
 | Search queries | `https://api.tavily.com` if `TAVILY_API_KEY` is set, otherwise `https://html.duckduckgo.com` | Only in the research agent (`createDeepAgent`) |
 | Page requests | The web page you or the research agent fetch (`fetch_url`). It refuses local and private addresses | Only in the research agent |
 | A trace of loop events | The URL in `AMNESS_OTLP` | Only when you set that variable. Secrets are masked first |
-| A second model call that reads a risky command | The same provider (or the model you name) | Only when `approvalReviewer` is on |
+| A second model call that reads a risky command | The same provider (or the model you name with `/models approve`) | Only when `approvalReviewer` is on |
+| The work of a job you give another model (explorer, compaction, reviewer, router, ladder): its messages, the files it reads, command output | The provider or saved server of that model, with that model's own key | Only when you set a model for that job (`/models`, `ladder`) |
+| A short summary of your task and work (the task, your rules, the files changed, the diff, the last failure) | The advisor's provider | Only when `/models advisor` is set. With Claude advising Claude, the advisor sees the whole conversation inside Anthropic's API |
 | Tool calls and tool results | An MCP server you start with `/mcp <command>`. It runs on your machine as a child process | Only when you attach one. The server can contact other hosts. Amness cannot see that |
 
 Notes about the provider:

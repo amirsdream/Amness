@@ -1,6 +1,6 @@
 # Roadmap
 
-Two tracks. **Track A (G1 to G22)** closes the gaps found by comparing Amness with the main coding-agent harnesses. **Track B (L1 to L14)** is the plan to get ahead of them, drawn from recent papers (see [Sources](#sources) and each item's evidence note). Work through them in order; tick a box when the item is done **and** its acceptance check passes. Each item gets its own commit, tests, and a README line.
+Four tracks. **Track A (G1 to G22, later G23 to G44)** closes the gaps found by comparing Amness with the main coding-agent harnesses. **Track C (C0 to C14)** makes every part of the harness programmable. **[Track M (M0 to M19)](#track-m-one-harness-for-claude-cheaper-models-and-local-models)** lets Claude, cheaper models and local models work together in one session. **Track B (L1 to L14)** is the plan to get ahead of them, drawn from recent papers (see [Sources](#sources) and each item's evidence note). Work through them in order; tick a box when the item is done **and** its acceptance check passes. Each item gets its own commit, tests, and a README line.
 
 ## Strategy: how Amness gets ahead
 
@@ -107,7 +107,7 @@ New measurement items: **E14** a stronger injection suite (models resisted all t
 | G25 | Budget visibility in the UI: show % of budget used in the sidebar and status line, mark estimated usage, show each subagent's slice and spend, and a `/budget` command to raise or lower the cap mid-session. | P1 | S–M | [~] |
 | G26 | **Explore block UI is still suspect**: confirm that the "Explore" group closes (✓/✗) for every outcome including subagent budget stops, aborts and unknown-agent fallback; add a VTerm test for each. | P1 | S | [x] |
 | G27 | Config surface for the new options: `lsp`, `approvalReviewer`, `taskBudget`, `review` in `/settings` and `docs/usage.md` (today they are only in `config.json` and headless flags). | P1 | S | [~] |
-| G28 | Exploration subagent that returns only file paths and line ranges (the "FastContext" idea from a blog; **unverified, find the paper first**), measured against the current prose summary. | P2 | M | [ ] |
+| G28 | Exploration subagent that returns only file paths and line ranges (the "FastContext" idea from a blog; **unverified, find the paper first**), measured against the current prose summary. Built as `exploreRanges` (M11); not measured (`full+ranges`). | P2 | M | [~] |
 | G29 | Read-count cap in the tool layer (after N reads the read tool asks for a plan). Only if E9 shows the nudge is not enough. | P3 | S | [ ] |
 | G30 | `/branches` should swap file state too (store a tree snapshot per branch tip using the existing snapshot machinery). | P2 | M | [ ] |
 | G31 | Clipboard image paste (macOS `pbpaste`/osascript, Linux `wl-paste`/`xclip`) in the TUI. | P3 | S–M | [ ] |
@@ -380,9 +380,641 @@ Items marked *read* rest on a page or abstract I fetched. Items marked *snippet*
 
 Several of these sources are blogs and disagree on details; verify against each tool's official docs before copying a behaviour.
 
+---
+
+# Track M: one harness for Claude, cheaper models and local models
+
+Goal: run a strong Claude model, cheaper hosted models and local models together in one session, each doing the work it is reliable enough for, and make that measurable with `amness eval` and `amness tune`. Items use the id prefix **M**; measurements continue the **E** series from E17. The Track B rule holds: nothing new ships as a default until the eval runner shows it helps, so new behaviour sits behind a profile field, a config key or an eval variant. Evidence marks as above (*read*, *abstract*); every figure is the papers' own.
+
+**State (2026-11-11):** every item is built and tested with scripted models; none is measured on a real model yet. Three defaults wait for E24: argument repair (`argfix`) and the `hollow` guard are on, and a local server gets one request at a time.
+
+## Track M: Target architecture
+
+#### 1.1 Tiers
+
+| Tier | Example | Strength | Cost profile |
+|---|---|---|---|
+| T3 frontier | Claude Opus / Fable class | planning, hard edits, judging | high price, long window, paid prompt cache |
+| T2 mid | Claude Sonnet / Haiku class, mid hosted models | most edits, exploration, review | lower price, paid prompt cache |
+| T1 local | Qwen-class 4B to 35B on llama.cpp, vLLM, Ollama, LM Studio | reads, searches, mechanical steps, short notes | no token price; cost is latency and a small window; a prefix (KV) cache that is lost on any prefix change |
+
+#### 1.2 Three ways tiers work together
+
+Recent work treats these as different problems, and Amness should support all three with separate, measurable switches.
+
+- **Delegate down.** A stronger model stays in charge and hands fresh-context jobs to a weaker one: exploration, compaction notes, review, reading untrusted content. Amness already has the hooks (`models.explore|compact|review`, the `task` tool, `quarantine`, `approvalReviewer`).
+- **Advise up.** A weaker model stays in charge and asks a stronger one for a plan or a correction at a few key moments. Anthropic ships this as the advisor tool for Claude executors. Amness has nothing like it yet.
+- **Recover up (and back down).** When a weaker model fails, the harness chooses the cheapest useful next step: reflect, replan in a fresh context, or escalate. Amness has a two-tier router (`src/router.ts`) and a fallback for outages, but no failure-driven ladder.
+
+#### 1.3 What must be true underneath
+
+Every model call must carry **its own** identity, window, profile and capabilities. Today those belong to the session's main model. Fixing that (Phase 1) is the foundation for everything else.
+
+## Track M: What already existed
+
+| Capability | Where |
+|---|---|
+| Loop with guards, each switchable (`off`) | `src/harness.ts` (`GUARD_NAMES`) |
+| Window-aware context ladder: mask old output, shrink arguments, drop oldest turns, handoff note, overflow recovery, calibration from provider counts | `src/context.ts`, `roll()` and the overflow loop in `src/harness.ts` |
+| Tool-result cache, "unchanged since call" pointers, re-read deltas | `src/cache.ts`, `ReadLedger` |
+| Cache-break detection and cost-aware rewrites | `prefixSignature`, `firstCacheBreak`, `src/rewrite.ts` |
+| Small-window profile (window of 16,384 or less): `COMPACT_SYSTEM`, compact tool specs, lean tool set with `tool_search` | `small()` and `registry.lean` in `src/code.ts`, `compactSpec` in `src/context.ts` |
+| Per-model profile: guards off, `toolChoice`, `thinkingBudget`, `keepThinking`, raw `request` fields | `src/profiles.ts` |
+| Roles (`explore`, `compact`, `review`, `cheap`), outage fallback, cache-aware two-tier router, plugin routing | `src/route.ts`, `src/router.ts`, `buildAgent()` in `cli/tui/app.ts` |
+| Saved servers with their own keys; window detection for vLLM, LM Studio, llama.cpp, Ollama | `cli/config.ts`, `detectWindow` in `cli/models.ts` |
+| A cross-provider model resolver, used only by `amness tune --models` | `tuneModelFor` in `cli/amness.ts` |
+| Adapters: OpenAI Responses and Chat (self-correcting), Claude (adaptive thinking, automatic caching, task budget, server-side fallback) | `src/openai.ts`, `src/anthropic.ts` |
+| Subagents, custom agents, worktree isolation, best-of-n, reviewer, approval reviewer, dual-LLM quarantine | `src/code.ts`, `src/agents.ts`, `src/parallel.ts`, `src/review.ts`, `src/approver.ts`, `src/quarantine.ts` |
+| Eval runner with statistics, ablations, `model:<id>` variants, `full+route`, tune with held-out gate, replay, failure mining, Harbor adapter for Terminal-Bench 2.0 | `src/evals.ts`, `src/tune.ts`, `src/replay.ts`, `src/mining.ts`, `bench/harbor/` |
+| `amness run --json` starts with a config event (version, guards, limits, profile sources) | `cli/headless.ts` (0.7.3) |
+
+## Track M: Findings from the code review
+
+Found by reading the code at 0.7.4. Each was confirmed against the code before it was fixed; the item that fixes it is named in the item list (F1 to F9: M1, M2; F10 to F13: M4, M5; F14: M8; F15: M0; F16 to F19: M14; F20, F21: M15; F22, F23: M12).
+
+#### 3.1 The model layer assumes one provider and one model's settings
+
+- **F1. Roles are locked to the main provider.** `buildAgent()` in `cli/tui/app.ts` builds every role with `make({ ...this.cfg, model: id })`, so `explore`, `compact`, `review`, `cheap` and `fallback` inherit the main provider, base URL and key. `modelById` (used by the plugin `route` hook, documented in `src/plugins.ts` as "same provider") has the same limit. The config comment says it too: `models` are "model ids (same provider)".
+- **F2. A cross-provider resolver already exists but is private to tune.** `tuneModelFor` in `cli/amness.ts` accepts a saved server name, `provider/model`, or a bare id, and uses each one's own key.
+- **F3. `amness run` has no roles at all.** `cli/headless.ts` passes `model` and `modelById` to `createCodeAgent` but no `models`, no router and no fallback, so `cfg.models`, `cfg.router` and `cfg.fallback` only take effect in the chat UI. Verify.
+- **F4. A custom agent's `model:` key is never resolved by the CLI.** `src/agents.ts` documents `model: fast` as a key of the `agentModels` option, and `src/code.ts` reads `o.agentModels?.[d.model]`, but nothing under `cli/` passes `agentModels`. Verify.
+- **F5. Profile and window belong to the session.** `loadProfile(cwd, cfg.model)` and `windowFor(cfg)` are evaluated for the main model only (`cli/tui/app.ts`, `cli/headless.ts`). A role model never gets its own `toolChoice`, `keepThinking`, `thinkingBudget`, `request`, guard set or window.
+- **F6. The explorer subagent ignores the window.** `runTaskInner` in `src/code.ts` creates the explorer with `contextBudget: 120_000` (characters) and no `contextWindow`, `compactSpecs`, `toolChoice` or profile. A 16k or 32k local explorer will overflow or be truncated.
+- **F7. The handoff note is sized for the wrong model.** `roll()` in `src/harness.ts` fits the request to the main model's window (`usable()`), then calls `makeHandoff(o.compactModel ?? o.model, ...)`. A compact model with a smaller window gets a request it cannot hold.
+- **F8. "Small" means small window, not weak model.** `small()` in `src/code.ts` is true only when the window is 16,384 or less. A weak model served with a 64k window gets the full system prompt, all tools and full tool descriptions.
+- **F9. `appendOnly` spreads to the whole pair.** `withFallback` and `routedModel` set `appendOnly` when either model has it, so pairing Claude with a local model disables history rewriting (the cheap context ladder) for the local model too.
+
+#### 3.2 Robustness gaps that hit weak and local models
+
+- **F10. Tool arguments are parsed strictly.** `exec` in `src/harness.ts` uses `JSON.parse(raw || "{}")` and returns an error on failure. `parseLooseJson` exists in `src/schema.ts` but is not used here. `validate` does no type coercion.
+- **F11. Malformed-JSON arguments are not counted.** That error path returns without emitting a `repair` event, so traces and eval `events` under-count malformed calls. Verify.
+- **F12. Tool calls written as text are lost.** `readChatStream` and the non-stream path of `viaChat` in `src/openai.ts` read only structured `tool_calls`. A call that arrives in `content` (for example `<tool_call>{...}</tool_call>` or a fenced JSON block) is treated as prose, and the `nudge` guard fires.
+- **F13. A wrong tool name costs a round trip.** `closestName` in `src/context.ts` is used only to suggest ("Did you mean ...?"). An unambiguous near-miss could be corrected in place.
+- **F14. The Ollama window is probably read wrong.** `detectWindow` in `cli/models.ts` reads `model_info["*.context_length"]` from `/api/show`, which is the model's maximum, not the context the server loaded. Ollama's documented default depends on VRAM (4k under 24 GiB, 32k for 24 to 48 GiB, 256k above), and it recommends at least 64,000 for agents and coding tools ([Ollama docs](https://docs.ollama.com/context-length), *read*). The docs do not say what happens to a longer prompt; silent truncation is widely reported but **unverified here**. If it truncates, the overflow learning (`isOverflow`, `windowFromError`) never fires.
+- **F15. Bug: `mechanicalNote` never lists commands.** `src/context.ts` collects `a.command`, but the `sh` tool's argument is `cmd`. The fallback handoff note, used when the window is too small to ask the model for one, always says `COMMANDS: none`.
+
+#### 3.3 Routing and cost
+
+- **F16. The cheap tier receives the whole transcript.** `routedModel` in `src/router.ts` sends the same messages to the cheap model. That is affordable between two hosted models with large windows and unworkable for a local model with a small one.
+- **F17. Discarded cheap replies are paid twice.** When the cheap model answers with an edit, a command or a final answer, the reply is dropped and the strong model redoes the step.
+- **F18. The cheap tier can spawn subagents.** `READ_ONLY` in `src/router.ts` includes `task`.
+- **F19. The switch decision only prices paid tokens.** `decide()` compares cached-read prices. A local model has no token price; its costs are latency and the loss of its prefix cache.
+- **F20. Loading a deferred tool changes the tool list.** `tool_search` adds tools to `reg.loaded`, which changes the `specs` sent on the next request. `firstCacheBreak` reports this as "the tool list changed ... invalidates the whole cache". On a paid provider this is a full cold read; on a local server it is a full prompt re-evaluation.
+- **F21. Cache keep-alive is Claude-only** (`cli/tui/app.ts`), which is correct for paid caches, but nothing protects a local server's prefix cache from avoidable changes.
+
+#### 3.4 Claude adapter
+
+- **F22. Only client tools are sent.** `toTool` in `src/anthropic.ts` maps every `ToolSpec` to a custom tool. Server tools such as the advisor tool cannot be declared.
+- **F23. `pause_turn` is not handled** in `fromAnthropic`, and `usage.iterations` is not read, so advisor tokens would be invisible to `Budget`.
+- **F24. `toolChoice: "required"` is skipped while thinking is on** (correct for Claude), so a profile shared across models must not assume it applies everywhere.
+
+## Track M: What recent work says
+
+Only findings that change a design decision are listed. The Track M sources below have the links.
+
+#### 4.1 The harness matters more than the model gap, and it must be per model
+
+- A controlled 3 models by 3 harnesses study on a 100-task SWE-bench Verified subset found harness changes moved pass@1 by 8.5 to 13.0 points at a fixed model, model changes moved it by 2.5 to 5.0 points at a fixed harness, and six of nine model-pair rankings reversed across harnesses. The authors ask for a "Harness Card" (execution, tools, context, scheduling, observability, verification, governance) with every reported score (*Stop Comparing LLM Agents Without Disclosing the Harness*, *read*).
+- An automated per-model harness search reported that optimized harnesses significantly improved 16 of 21 task and small-model pairs, with the best small model recovering about 89% of a frontier model's performance at about 4% of the cost. Successful adaptations mostly added context (86%), created tools (43%) and managed tools (29%); one cut 40+ tools to seven. Sub-agent adaptations did not succeed, harnesses were model-specific, and diverse tasks were harder to adapt (*Better Harnesses, Smaller Models*, *read*).
+- A local-first harness for 2B to 35B models reported completing 0.821 of its self-built benchmark at the 2B tier against 0.017 to 0.271 for three other harnesses with the same model. Its directional ablation put the finish gate first (re-inject the original task text and require a self-check before accepting completion), then verification feedback, then the anti-loop monitor. It rescues malformed tool calls from prose in preference to strict rejection. All of this is from one machine, single trials, and an author-built benchmark, with intervals that cross zero (*Mingbird*, *read*).
+
+#### 4.2 Where small models are adequate
+
+- A six-tier tool-use ladder over 16 open-weight models from 0.27B to 32B found small models reliable for instruction following and single tool calls, usable for two-step chains, and unreliable from branching upward; no model, including the frontier reference, was reliable on long-horizon planning. A plan/execute/submit phase prompt **regressed** all four models it was tried on (the worst by 33 points); an explicit "call the submission tool" instruction helped one model and was neutral on the others; doubling the step budget rarely helped (*AgentFloor*, *read*).
+- A practitioner report with Claude Opus as the parent and local workers found delegation to a quantized Qwen3-Coder 30B passed 12/15 and 14/15 against 15/15 for direct coding, another worker passed 12/45 with 11 parent takeovers, and a third passed 0/45. In both studies with a direct arm, **direct coding had the lower frontier cost per verified success**. It also observed that tool-call formatting, turn control and cache reuse differ across models behind nominally compatible endpoints, and a median time to first token of about 69.4 s for cold-prefix requests against 2.8 s for high-reuse requests (*Beyond Benchmarks*, *abstract*).
+
+Consequences: assign roles by measured tier, not by model size; do not assume delegation saves money; count the parent's tokens; and treat a local prefix cache as a first-class cost.
+
+#### 4.3 Tool-call reliability
+
+- Constrained decoding raised schema validity to 100% for five models from 0.6B to 4B. It fully fixed type-coercion errors (numbers emitted as strings). It did not fix semantic errors: missing calls that a loose schema allowed, and "hollow" values (a required string filled with list numbering). XGrammar's overhead was small (*Constrained Decoding Eliminates Structural Failures in Small LLMs*, *read*).
+- Combining tools with a JSON-schema output constraint drove the tool invocation rate to 0% on every open-weight model tested on vLLM and SGLang, and `tool_choice="required"` did not fix it. Running tools first and constraining the final answer in a second pass restored 100% (*Constraint Tax in Open-Weight LLMs*, *read*).
+
+Consequences: repair and coerce on the client, because that is the fixable class; never send a response schema together with tools to an open-weight server; do not treat schema-valid as correct; test each model and server combination.
+
+#### 4.4 Routing, escalation and advice
+
+- After a cheap model fails, choosing among reflect, replan and escalate beat a binary cascade: about 28% of recoverable failures were cheap-only, 45% escalation-only and 27% either. A calibrated router beat always-escalate's solve rate at about 35% of its cost (single-step, competitive-programming style tasks) (*CodeRescue*, *read*).
+- For mid-trajectory handoff, cumulative trajectory risk predicted better than the latest step's signal (AUC 0.774 against 0.691 in simulation), and task features plus risk were complementary. The authors warn that a permanent one-way handoff can be worse than brief strong help followed by a return to the cheap model. Context handoff and cache cost were not modelled (*TACIT-Switch*, *read*).
+- A step-level escalation router on a terminal benchmark reached 93.3% with strong-model calls on 33.9% of steps; a heuristic router reached 95.0% at 66.0%; the small model alone 81.1%. Its verifier was near chance on terminal tasks, and it needed training (*R2V-Agent*, *read*).
+- Anthropic's advisor tool (beta, `advisor_20260301`, header `advisor-tool-2026-03-01`) lets a Claude executor consult a stronger Claude model inside one request. The advisor sees the full transcript, has no tools, and typically returns 400 to 700 text tokens. Guidance: call it before substantive work (after orientation), when stuck, and before declaring done; cap output at 2048 tokens; a plain nudge raised pass rates for Haiku executors by about 7 points and slightly lowered them for Opus. Changing or removing the tool edits `tools`, which can invalidate thinking blocks and the cache; `max_uses` is per turn, so a conversation cap is the client's job; advisor tokens appear in `usage.iterations`, not in top-level `usage` ([Advisor tool docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool), *read*).
+
+Consequences: build a recovery ladder with three actions, driven by accumulated signals; allow a return to the cheaper tier; hand over a note, not the transcript; add the advisor pattern both natively (Claude to Claude) and generically (local to Claude).
+
+#### 4.5 Editing
+
+- Splitting viewing and editing into clean-context subagents raised SWE-bench Verified resolve rate by 2.1 points and cut cost 17.9%, and a trained 8B editor matched a small hosted model downstream. An adaptive choice between find-replace and whole-file rewrite mattered (*SWE-Edit*, *abstract*).
+- A large model writing an edit sketch with a small model applying it improved one pairing (+11.1% Pass@2, about 19% lower cost) and roughly matched another. Untuned small appliers degraded sharply on long files, tuned ones still over-edited 5.2% and under-edited 2.1% of the time, and at deployable sizes there were no real latency or cost savings (*Cascaded Code Editing*, *read*).
+
+Consequence: keep edits on the stronger tier by default; an editor subagent is a P3 experiment that needs measuring before any use.
+
+#### 4.6 Context
+
+- Masking old observations matched LLM summarization on solve rate and halved cost against the raw agent on SWE-bench Verified; a hybrid saved a little more (*The Complexity Trap*, *abstract*). Amness already masks first and summarises last, which this supports.
+- Compression can raise interaction cost before completion drops: retrieval calls nearly tripled while completion was unchanged, and a fact-preserving summary kept both near baseline where a sliding window did not (synthetic environment) (*What Does Context Compression Cost an Agent?*, *read*). Consequence: when measuring the small-window ladder, count re-reads, not only passes.
+
+## Track M: Items
+
+Legend as above: **P1** first, **P2** next, **P3** later. Effort: S (hours), M (a day or two), L (several days). Each item lists what it depends on.
+
+#### Status
+
+| Id | Item | Priority | Effort | Depends on | Done |
+|
+
+---|---|---|---|---|
+| M0 | Three small fixes: `mechanicalNote` commands, uncounted malformed JSON, roles in `amness run` | P1 | S | - |
+| M1 | Model references and one shared resolver (cross-provider roles) | P1 | M | - |
+| M2 | Model card: every `Model` carries its id, window, profile and capabilities | P1 | M | M1 |
+| M3 | Capability probe: `amness doctor` qualifies a model and writes its profile | P1 | M | M2 |
+| M4 | Tolerant argument pipeline: loose parse, coercion, name correction | P1 | S | - |
+| M5 | Rescue of tool calls written as text | P1 | S-M | M4 |
+| M6 | Constrained output done safely: probe for suppression, never schema plus tools | P2 | S | M3 |
+| M7 | Hollow-argument check (placeholders and elisions in edits) | P2 | S | - |
+| M8 | Truncation-aware window (Ollama and others) | P1 | S-M | M2 |
+| M9 | Model tier separate from window size (prompt and tool set per tier) | P1 | M | M2 |
+| M10 | Task re-read finish check for weak models | P2 | S | M9 |
+| M11 | Delegate down: role workers with their own settings, takeover and contracts | P1 | M | M1, M2 |
+| M12 | Advise up: native Claude advisor tool, and a generic advisor for any executor | P2 | M-L | M1, M2 |
+| M13 | Recovery ladder: reflect, replan, escalate, and step back down | P2 | L | M1, M2, M11 |
+| M14 | Handoff packet for tier switches; fix the router's double pay | P2 | M | M13 |
+| M15 | Stable tool list and local prefix-cache economics | P2 | M | M2 |
+| M16 | Editor subagent and adaptive edit format (experiment) | P3 | M | M11 |
+| M17 | Eval dimensions: role matrix, cost per verified success across tiers, harness card | P1 | M | M1 |
+| M18 | Qualification ladder suite: which tier of task a model clears | P2 | M | M17 |
+| M19 | `amness tune` searches role assignment and per-tier prompt and tool set | P3 | L | M17, M18 |
+
+---
+
+#### Phase 0: fixes
+
+##### M0. Three small fixes
+
+**Build.**
+- `mechanicalNote` in `src/context.ts`: read `a.cmd ?? a.command`.
+- `exec` in `src/harness.ts`: emit a `repair` event on the invalid-JSON path so it is counted like schema errors.
+- `cli/headless.ts`: honour `cfg.models`, `cfg.router` and `cfg.fallback` the way `buildAgent()` does, and add flags `--explore-model`, `--compact-model`, `--review-model`, `--cheap-model`, `--fallback`. Move the shared wiring into one function used by both the chat UI and `amness run` so they cannot drift again.
+
+**Accept.** Tests: a handoff written by `mechanicalNote` lists a `sh` command (`test/context.test.ts`); a malformed-JSON call produces one `repair` event (`test/harness.test.ts`); `amness run` with a role flag calls a scripted second model for exploration (`test/headless.test.ts`). The `--json` config event names each role's model.
+
+---
+
+#### Phase 1: the model layer
+
+##### M1. Model references and one shared resolver
+
+**Why.** F1, F2, F3, F4. Without this, mixed tiers cannot be configured at all.
+
+**Build.**
+- Define a **model reference**: `anthropic:claude-haiku-5-5`, `openai:<id>`, `openrouter:<id>`, `server:<name>` (a saved server and its saved model), `server:<name>/<model>`, or a bare id meaning "the main provider". Also accept the `provider/model` form that `tuneModelFor` and the Harbor adapter already use.
+- Promote `tuneModelFor` into `resolveModel(ref, cfg): { model, name, config }` in `cli/model.ts`. Use it for roles, `fallback`, `modelById`, `agentModels` (so a custom agent's `model:` key works: accept a reference or a named alias from `cfg.models`), eval `model:<ref>` variants, `--cheap-model`, and `tune --models`.
+- Each resolved model keeps its own key (the saved-server and per-provider key storage already supports this) and its own rate-limit gate (`gateFor` in `cli/model.ts` is already keyed by endpoint).
+- UI: `/models <role> <ref>` with completion over connected providers and saved servers; `/status` and the sidebar show each role's provider and model.
+- Never send one provider's key to another endpoint. Note the existing behaviour that `OPENAI_API_KEY` counts as the key for every Ollama and custom server (`docs/providers.md`); with cross-provider roles this needs an explicit rule: a role that points at a saved server uses that server's saved key only.
+
+**Accept.** Tests: a config with a Claude main model and `explore: "server:lab"` builds two models with different base URLs and keys (`test/tui-app.test.ts`, `test/keystore.test.ts`); an unknown reference gives a clear error listing what is connected; a custom agent with `model:` set runs on the referenced model (`test/agents.test.ts`); `amness run --explore-model server:lab` works headless. Docs: `docs/providers.md` and `docs/usage.md`.
+
+##### M2. Model card
+
+**Why.** F5 to F9. Settings must travel with the model that is being called.
+
+**Build.**
+- Extend the `Model` type in `src/harness.ts` with optional metadata, all read lazily:
+
+  ```ts
+  type ModelCard = {
+    id?: string; provider?: string;
+    window?: () => number | undefined;
+    profile?: Profile;                       // toolChoice, keepThinking, thinkingBudget, request, off, ...
+    tier?: "local" | "mid" | "frontier";      // see M9
+    caps?: { nativeTools?: boolean; parallelTools?: boolean; textToolCalls?: boolean;
+             toolChoiceRequired?: boolean; vision?: boolean; pricedCache?: boolean };
+  };
+  type Model = ((messages, tools, opts?) => Promise<Message>) & { appendOnly?: boolean; api?: () => string; card?: ModelCard };
+  ```
+
+- `createModel` in `cli/model.ts` attaches the card: window from `windowFor` for **that** model, profile from `loadProfile(cwd, thatModelId)`.
+- `createHarness` falls back to `o.model.card` for `contextWindow`, `toolChoice`, `thinkingBudget`, `keepThinking`, `request`, `off`, `stagnationTurns` and `maxSteps` when the options do not set them. Explicit options still win.
+- Wrappers (`withFallback`, `routedModel`, `choosingModel`, `routedByFunction`, `rateLimited`, `cachedModel`, the spinner wrapper in `cli/amness.ts`) must pass the card of the model that actually answers. Give them a small helper for "the active card" so per-call settings follow the tier in use.
+- Make `appendOnly` a per-call property of the active model, not the union of the pair (F9).
+- `roll()`: size the handoff request for `o.compactModel`'s own window when it has one (F7).
+- `routedModel`: do not route to a cheap model whose window cannot hold the request (until M14 replaces transcript sharing).
+- `onWindow` / `rememberWindow`: remember a learned window under the id of the model that produced the error.
+
+**Accept.** Tests: a harness whose model card says 8,192 keeps requests inside it without any `contextWindow` option; a compact model with a smaller window than the main model receives a handoff request that fits (`test/context.test.ts`, `test/harness.test.ts`); a fallback pair of Claude and a local model rewrites history only on local turns; a role model's profile (`toolChoice: "required"`) is applied to that role's calls only.
+
+##### M3. Capability probe: `amness doctor`
+
+**Why.** Models behind nominally compatible endpoints differ in tool-call formatting, turn control and cache behaviour (*Beyond Benchmarks*); some models stay schema-invalid even after corrective messages and should be excluded from tool roles (*Mingbird*). Today the setup test call only checks that the model replies (`docs/providers.md`).
+
+**Build.** `amness doctor [ref]` (also offered after `/provider` sets up a server). It runs a short scripted battery with a scripted tool set and no workspace access, and writes the result into the model's card and a suggested profile:
+
+1. One required tool call with typed arguments (string, integer, boolean, array, nested object).
+2. Two tool calls in one reply (parallel tool support).
+3. A multi-step chain of three calls with results fed back (turn control: does it stop, narrate, or continue).
+4. `tool_choice: "required"`: accepted, and does the model still produce a valid call.
+5. Whether a call arrives as structured `tool_calls` or as text in `content` (sets `caps.textToolCalls`, see M5).
+6. Recovery: one deliberate error result, check that the next call is corrected.
+7. Window: the server's stated window, then a truncation check (M8).
+8. Latency: time to first token for a cold prompt and for a repeat with the same prefix (sets a local cache factor for M15).
+
+Output: a table, a verdict per role ("qualified for: explore, compact; not for: edit"), and `.amness/profile.json` entries. Keep it cheap: a few thousand tokens.
+
+**Accept.** Tests with scripted models for each failure shape (`test/profiles.test.ts`, a new `test/doctor.test.ts`); the verdict for a model that returns text-embedded calls enables rescue; a model that fails step 1 three times is marked "not qualified for tool roles" and the UI says so when it is assigned one.
+
+---
+
+#### Phase 2: robustness for weak models
+
+##### M4. Tolerant argument pipeline
+
+**Why.** F10, F11, F13. Type coercion is the class of error that is fully fixable outside the model (*Constrained Decoding*). Each avoided error saves a round trip, which is the dominant cost on slow local models.
+
+**Build.** In `exec` (`src/harness.ts`), before `validate`:
+
+1. Parse: `JSON.parse`, then `parseLooseJson`, then a repair pass (trailing commas, single-quoted strings, unescaped newlines inside strings, a doubled JSON string, arguments wrapped as `{"arguments": {...}}` or `{"parameters": {...}}`).
+2. Coerce against the tool schema (new `coerce(args, schema)` in `src/schema.ts`): numeric strings to numbers for `number`/`integer`, `"true"`/`"false"` to booleans, a scalar to a one-item array where the schema wants an array, a JSON string to an object or array where the schema wants one, `null` for an optional property removed.
+3. Name: when the tool name is unknown and `closestName` returns exactly one candidate at distance 1 or a case/separator difference, use it.
+4. Emit one `repair` event describing what was changed, and append a one-line note to the tool result ("note: arguments were corrected: ...") so the model sees the right shape.
+
+Never coerce in a way that changes meaning: no guessing of missing required values, no truncation. Risky tools (`risky`) still show the corrected arguments in the approval preview.
+
+**Accept.** Tests in `test/harness.test.ts` and a new section of `test/args.test.ts`: each repair shape runs the tool once instead of returning an error; a call that is still invalid returns the same error as today; the approval prompt shows corrected arguments. Chaos evals (`src/chaos.ts`, C11) gain a "malformed arguments" injector.
+
+##### M5. Rescue of tool calls written as text
+
+**Why.** F12. Lost calls are a harness defect, not a model limit (*Mingbird* rescues three shapes). The counter-view is that only native calls should count (*AgentFloor* scores text-embedded JSON as zero), so this is opt-in per model and always logged.
+
+**Build.** In `src/openai.ts`, after a reply with no `tool_calls` and when the active card has `textToolCalls` enabled: scan `content` (and `thinking`) for `<tool_call>...</tool_call>`, `<function=name>...</function>`, a fenced `json` block or a bare object shaped `{"name": ..., "arguments": ...}`, and the bracketed forms some templates emit. Accept a candidate only when the name is a visible tool (after M4 name correction) and its arguments validate after M4. Convert to a real tool call with a generated id, remove it from `content`, emit `repair` with kind `rescued`.
+
+Enable by default only when M3's probe saw text-embedded calls for that model, or through the profile field `textToolCalls: true`.
+
+**Accept.** Tests in `test/engine2.test.ts` or a new adapter test: each shape becomes one executed call; prose that merely mentions a tool is not executed; a hosted model with the flag off is unaffected. Eval `events` count rescues per model.
+
+##### M6. Constrained output done safely
+
+**Why.** Schema plus tools suppressed tool calling entirely on open-weight servers, and `tool_choice="required"` did not help (*Constraint Tax*). Amness already offers `toolChoice: "required"` per profile and `extract()` for structured output.
+
+**Build.**
+- Guard: the OpenAI adapter must never send `response_format` (or any schema constraint from a profile's `request`) together with `tools` to a non-official host. If a profile asks for both, warn once and send tools only.
+- Keep `extract()` tool-free (it is today) and document the two-pass pattern: tools first, constrained answer second.
+- M3's probe records whether `tool_choice: "required"` yields a valid call for this model; `amness tune` already tries `toolChoice` and keeps it only when it holds.
+- For llama.cpp, vLLM and SGLang, strict tool-call grammars come from the server's own tool support; do not hand-roll grammars in Amness. Document the server flags that matter in `docs/providers.md`.
+
+**Accept.** Test: a profile with a schema in `request` plus tools sends no schema and emits one warning. Docs updated.
+
+##### M7. Hollow-argument check
+
+**Why.** Schema-valid calls can still be empty or placeholders (*Constrained Decoding*). In coding, the damaging form is a `write_file` or `edit_file` whose content elides code ("... rest unchanged ...", "// existing code here").
+
+**Build.** A new guard `hollow` (switchable like the others): before a write or edit runs, check the new content for elision markers on their own line, a `write_file` that shrinks an existing file by a large fraction while containing such a marker, and required string arguments that are empty or only punctuation or list numbering. Refuse with a specific message naming the line. Keep the pattern list small and tested; false positives are worse than misses, so only fire on unambiguous markers.
+
+**Measure.** Count fires and false fires per model on the eval suites; keep only if it prevents failures on local models without touching frontier runs (`full-hollow` ablation).
+
+**Accept.** Tests for each marker, for a legitimate file that contains the words in a string literal (must pass), and for the ablation switch.
+
+##### M8. Truncation-aware window
+
+**Why.** F14.
+
+**Build.**
+- `detectWindow` (`cli/models.ts`): for Ollama, prefer the context of the **loaded** model (the running-models listing; check the field name against the installed version) and fall back to the model maximum only when nothing is loaded. Show both in `/status` when they differ.
+- Truncation check in `src/harness.ts`: when a reply's `prompt_tokens` is not estimated and is far below the calibrated estimate of what was sent (for example under 60% with an estimate above 3,000 tokens), treat it as silent truncation: set `win` to about the reported count, call `onWindow`, emit a `trim` event that says so, and tell the user once with the fix (raise the server's context length).
+- `docs/providers.md`: state Ollama's VRAM-dependent default and the 64,000 recommendation, and how to set the context length on the server.
+
+**Accept.** Tests: a scripted model that reports 4,096 prompt tokens for a 12,000-token request triggers the lower window and one notice; a normal provider with cached tokens does not trigger it (cached tokens are part of `prompt_tokens` in Amness's `Usage`, verify per adapter).
+
+##### M9. Model tier separate from window size
+
+**Why.** F8. Small models need fewer tools, more task-specific context and plainer instructions regardless of window (*Better Harnesses*; *AgentFloor*). Structured plan/execute prompts regressed small models, so `strategy: plan-first` must not be a default for them.
+
+**Build.**
+- Add `tier` to `Profile` and the model card. Default it from M3's verdict, else from a conservative guess (local server: `local`; known hosted families: `mid` or `frontier`).
+- Replace the single `small()` test in `src/code.ts` with two questions: is the **window** small (keeps today's behaviour), and is the **tier** local. For tier `local` with a large window: use a system prompt variant between `COMPACT_SYSTEM` and `CODE_SYSTEM` (short, imperative, with the explicit instruction to end with `finish`), the lean tool set with `tool_search`, and compact tool specs.
+- Add profile fields `tools` (allow-list) and `prompt` (a prompt id from the existing registry in `src/prompts.ts`) so a per-model tool set and prompt can be chosen without code.
+- Warn when `strategy: plan-first` is combined with tier `local`.
+
+**Measure.** Variants `tier:local` against `full` on a local model with a large window: pass rate, tokens per solved task, repairs and nudges.
+
+**Accept.** Tests: a 64k-window model with tier `local` gets the lean tool list and the short prompt; tier `frontier` with an 8k window still gets the small-window behaviour; profile `tools` filters the registry.
+
+##### M10. Task re-read finish check
+
+**Why.** The largest single delta in *Mingbird*'s (weak) ablation was re-injecting the original task at finish and requiring a self-check. Amness has stronger gates (ledger, coverage, verify, reviewer) but none that simply makes a weak model re-read the request.
+
+**Build.** A finish check (guard name `reread`) for tier `local`, at most once per run: on the first `finish`, reject with the original task text and "check each requirement against what you did; then finish again, listing each requirement and where it is satisfied". Skip it when the reviewer is on.
+
+**Measure.** `full` against `full+reread` on local models; it costs one round trip, so it must raise the pass rate to stay.
+
+**Accept.** Tests: fires once, never twice; off for other tiers by default; ablation switch works.
+
+---
+
+#### Phase 3: collaboration between tiers
+
+##### M11. Delegate down
+
+**Why.** Fresh-context jobs are the natural fit for cheaper models and need no transcript sharing. But delegation can cost more than doing the work directly once parent tokens and failed workers are counted (*Beyond Benchmarks*), and sub-agent adaptations failed in an automated search (*Better Harnesses*). So build it properly and measure it per role.
+
+**Build.**
+- Every role worker is created from its own model card (M2): explorer, custom agents, reviewer, approval reviewer, quarantine reader, compaction. Fix F6: the explorer takes its window, compact specs and profile from its model; give it a short system prompt for local tiers.
+- Give the approval reviewer and the quarantine reader their own roles in config (`models.approve`, `models.quarantine`). Today the quarantine reader uses the `cheap` role (`quarantineReader(o.models?.cheap ?? o.model)` in `src/code.ts`), which ties it to the routing model, and the CLI passes `approvalReviewer` as a boolean, so the main model reviews its own risky calls. The approval reviewer's rule stays: it may approve, never refuse, and a failure escalates to the user.
+- **Structured explorer result** (this is G28): the explorer returns file paths with line ranges plus a short answer; the parent reads the ranges itself. This limits the damage of a weak explorer's wrong prose.
+- **Takeover.** When a worker does not finish cleanly, returns nothing usable, or fails its contract, the parent is told plainly ("the explorer on <model> failed: <reason>; do this part yourself") and the event is counted. After N takeovers in a session for one role and model, stop delegating that role to that model and say so.
+- **Budget.** Workers on unpriced local models should not consume the token budget at the paid rate: track tokens per tier in `Budget` (a `tier` label on `add`) and let the cap be expressed in cost units as well as tokens.
+- Concurrency: a local server usually serves one request at a time; default `maxConcurrent` to 1 for a local endpoint's gate.
+
+**Measure.** E18 and E19 (see the measurement plan): per role, main model alone against main model plus a cheaper or local worker, on cost per verified success **including parent tokens**, wall time, and takeover rate.
+
+**Accept.** Tests: explorer on a small-window model stays inside it; a failing worker produces one takeover note and a counted event; the reviewer and approver run on their configured models; local-tier tokens are reported separately in `/tokens` and the `--json` result.
+
+##### M12. Advise up
+
+**Why.** A cheaper executor with a stronger advisor at a few key moments is the other half of mixed-tier use, and Anthropic documents it with measured guidance. It is also the natural way for a local model to borrow Claude's judgment without sending Claude every step.
+
+**Build, part A: native Claude advisor (Claude executor, Claude advisor).**
+- `src/anthropic.ts`: a new option `advisor?: { model: string; maxUses?: number; maxTokens?: number; caching?: "5m" | "1h" }`. When set, append the server tool `{ type: "advisor_20260301", name: "advisor", model, ... }` to `tools` and add the beta header `advisor-tool-2026-03-01`.
+- Keep the tool entry byte-stable for the whole conversation (changing or removing it edits `tools`, which breaks the cache and can invalidate thinking blocks). Enforce a conversation-level cap on the client by counting `advisor_tool_result` blocks; when the cap is reached, tell the model in a user note instead of removing the tool.
+- Handle `stop_reason: "pause_turn"`: resend with the assistant message unchanged and the tool still present.
+- Round-trip advisor blocks verbatim (the adapter already keeps native blocks in `raw`; check that `server_tool_use` and `advisor_tool_result` survive `toAnthropic`).
+- Read `usage.iterations` and charge `advisor_message` entries to `Budget` at the advisor's rate; show advisor calls in the trace and the sidebar.
+- System prompt lines for when to call the advisor, following Anthropic's guidance: after orientation and before substantive work, when stuck or changing approach, and once before declaring done. For a Haiku executor add the plain nudge if the advisor has not been called by a set turn; do not add it for Opus.
+- Config: `models.advisor`, valid only for supported pairs (the API returns 400 otherwise; show that error plainly).
+
+**Build, part B: generic advisor (any executor, any advisor).**
+- A client tool `advise` available to the executor, plus harness-triggered calls at three points: before the first state-changing call of a task, when the stuck or stagnation guard fires, and before an accepted `finish` when no reviewer is configured.
+- The advisor receives a **packet**, not the transcript: the task, pinned rules, the handoff-style note (`makeHandoff` or `mechanicalNote`), the ledger audit, the current diff and the last failing output, under a size cap. It has no tools. It returns at most a few hundred words: a plan or a correction.
+- Cap calls per request and charge them to the budget at the advisor's rate.
+
+**Measure.** E20: executor alone, executor plus advisor, advisor-tier model alone; cost per verified success and pass rate.
+
+**Accept.** Tests with an injected Anthropic client (`test/anthropic.test.ts`): the tool entry and header are sent; `pause_turn` resumes; iterations are charged; the cap is enforced without changing `tools`. For part B: the packet stays under its cap, triggers fire once each, and a failed advisor call never fails the run.
+
+##### M13. Recovery ladder
+
+**Why.** Three recovery actions beat a binary cascade (*CodeRescue*); accumulated risk predicts better than the last step, and a one-way handoff is not always right (*TACIT-Switch*); a heuristic router was competitive on terminal tasks at a higher escalation rate (*R2V-Agent*). L6 (Track B) already calls for escalation on a failure signal; this item generalises it to more than two tiers and three actions. No training in the first version.
+
+**Build.**
+- A `ladder` of model references in config, cheapest first, for the main loop (for example `["server:lab", "anthropic:claude-haiku-5-5", "anthropic:claude-opus-5-5"]`) and a start position.
+- A **risk score** accumulated per run from signals the harness already emits: `repair` and rescue events, tool errors, `loop` detections, `nudge`, the stuck and stagnation guards, rejected finishes (ledger, verify, reviewer), failed edits. Weights are constants in one table, tunable later by `amness tune`. Score decays on clean progress (a passing verify, a new successful edit).
+- On a trigger, choose the cheapest useful action in order:
+  1. **Reflect** (same model, same context): already exists as the stuck and stagnation prompts.
+  2. **Replan** (same model, fresh context from a handoff note): reuse `roll()`.
+  3. **Escalate** (next tier up, from a handoff packet, M14).
+  Each action is tried once per trigger level before the next.
+- **Step back down** after a set number of clean turns on the higher tier, when the remaining work looks mechanical (read-only streak or passing verify), again through a packet.
+- Hard rules: the first step of a task and anything after a user steer run on the configured start tier or above; safety decisions never move down a tier.
+- Everything is visible: the trace, `/loop` and the sidebar show which tier ran each step and why (extends what `onRoute` reports today).
+- Expose the decision as a pure function with a test table, like `decide()` in `src/router.ts`, and as a plugin point (C4 already generalises routing).
+
+**Measure.** E21: single strong model, single cheap model, binary escalate-on-failure, and the ladder, on tasks the cheap model fails about half the time. Report pass rate, cost per verified success, escalation rate.
+
+**Accept.** Tests: scripted trajectories for each action; no escalation while risk is low; replan before escalate; a return to the lower tier after clean turns; a rejected finish raises risk. `amness run --json` reports steps and tokens per tier.
+
+##### M14. Handoff packet for tier switches; fix the router's double pay
+
+**Why.** F16, F17, F18, F19. A tier switch that re-sends the transcript pays a cold read on the new model every time, cannot work with small windows, and is exactly the cost none of the escalation papers model.
+
+**Build.**
+- **Packet.** One function builds the context a new tier starts from: system prompt for that tier (M9), the task, pinned rules (`pinRules`), a handoff note, the ledger audit (files changed, commands run, whether tests ran after the last edit), the current diff under a cap, and the last failing output. Used by M12 part B, M13 and by `routedModel`'s replacement.
+- **Router.** For hosted pairs with large windows, keep `routedModel` but: remove `task` from the cheap tier's allowed calls; when the cheap model proposes a non-read call, pass the proposal to the strong model as a short note ("the explorer suggested: ...") instead of discarding it silently; and skip the cheap tier when its window cannot hold the request.
+- **Prices.** Extend `Prices` with an optional fixed cost per call and a latency weight, so a local tier can be compared with a paid one in `decide()`.
+
+**Accept.** Tests in `test/router.test.ts`: the cheap tier cannot call `task`; a proposed edit reaches the strong model as a note; a packet for a 150k-token transcript stays under its cap and contains the rules word for word.
+
+##### M15. Stable tool list and local prefix-cache economics
+
+**Why.** F20, F21. On a local server a changed prefix means re-evaluating the whole prompt; one report measured a median of about 69 s to first token on cold prefixes against under 3 s with reuse (*Beyond Benchmarks*). On paid providers a tool-list change is a full cold read.
+
+**Build.**
+- **Stable tools mode.** Instead of adding a found tool to the `tools` array, keep the array fixed and add one generic dispatcher, `call_tool({ name, args })`, alongside `tool_search`. `tool_search` returns the schema as text (it already does); the dispatcher validates against that schema (with M4) and runs the tool. The tool list then never changes during a session. Offer it as an eval variant first (`tools:stable`), default it only where it measures better.
+- **Order of the request.** Keep everything that changes per turn at the end. Check that plan-mode switches and `when()` predicates do not reorder or change the tool list mid-task more than necessary; where they must, batch the change with a compaction that is already breaking the cache.
+- **Local rewrite governance.** `src/rewrite.ts` prices a rewrite in cached versus fresh tokens. For an unpriced local model, price it in time: tokens to re-evaluate from the first edited message, times the measured evaluation speed (from M3's latency probe), against the time saved on later, shorter requests. Turn `governRewrites` on by default for tier `local` only if E22 supports it.
+- **Server hints.** Document, per server, what keeps the prefix cache alive (llama.cpp slot reuse and prompt caching flags, vLLM prefix caching, which `prefixCacheRate` in `cli/models.ts` already reads). Use the profile's `request` field for server-specific options; do not hard-code them.
+- Show a local cache indicator next to the paid "cache" figure: time to first token and, where the server reports it, the reused-prefix share.
+
+**Measure.** E22: time to first token and total wall time per task on a local model, with and without stable tools and with and without governed rewrites.
+
+**Accept.** Tests: with stable tools on, `prefixSignature(...).tools` is identical across a session that loads three deferred tools; the dispatcher refuses unknown names and invalid arguments like a direct call would; permission, taint and approval checks see the real tool name and arguments, not `call_tool`.
+
+##### M16. Editor subagent and adaptive edit format (experiment)
+
+**Why.** Edit reliability drives small-model results; clean-context editing helped in one study and a sketch-plus-applier split gave mixed results with real over-edit and under-edit rates (*SWE-Edit*, *Cascaded Code Editing*). Evidence is not strong enough to build this before measuring.
+
+**Build (behind variants only).**
+- `edit:whole-small`: for tier `local`, steer toward `write_file` for files under a line threshold and `edit_file` above it (the model card decides the threshold).
+- `edit:delegate`: the main model describes the change (path, intent, exact snippets); an editor subagent with a clean context applies it with `edit_file` and returns the diff; the ledger records it as usual. Try both directions: strong main with local editor, and local main with mid editor.
+
+**Measure.** E23: edit success on first attempt, over-edits and under-edits (diff against intent), pass rate, cost.
+
+**Accept.** Variants run under `amness eval`; nothing becomes a default without E23.
+
+---
+
+#### Phase 4: measurement and self-tuning
+
+##### M17. Eval dimensions for mixed tiers
+
+**Why.** Scores are not comparable without the harness and the role assignment (*Stop Comparing LLM Agents*). C13 in Track C already makes the model a variant dimension; mixed tiers add a role matrix.
+
+**Build.**
+- Variant syntax for roles: `roles:explore=server:lab,review=anthropic:claude-haiku-5-5`, composable with existing variants.
+- Row fields: tokens, cost and wall time **per tier**; cost per verified success across all tiers; counts of repairs, rescues, nudges, takeovers, advisor calls, escalations and step-downs (most are already `events`).
+- Latency as a first-class metric next to tokens, since local tiers trade money for time.
+- A **harness card** in the `--json` config event and in eval output: the seven layers named in the paper (execution, tools, context, scheduling, observability, verification, governance), filled from the actual configuration, including each role's model and profile sources. The 0.7.3 config event is the base.
+- Interaction-cost metrics for the context ladder: re-reads and retrieval-style calls after a trim or handoff, not only pass rate (*What Does Context Compression Cost an Agent?*).
+
+**Accept.** Tests: a role variant builds the right models; per-tier numbers add up to the totals; the harness card lists every role. Docs: `docs/evaluation.md`.
+
+##### M18. Qualification ladder suite
+
+**Why.** Which role a model can hold should come from a measured tier, not its size (*AgentFloor*). M3 is a quick probe; this is the eval-grade version.
+
+**Build.** A built-in suite (`--builtin ladder`) in the repo's own tools, graded deterministically: single read; two-step chain (grep then read the right range); branch on a result; reconcile conflicting sources; a constrained multi-step change. Map tiers cleared to roles: compaction and quarantine reading need the lowest, exploration the middle, editing and main-loop work the highest. Record the result in the model's profile with the date and suite version.
+
+**Accept.** The suite self-tests with scripted models at each level; `/models` warns when a model is assigned a role above its measured tier.
+
+##### M19. `amness tune` for roles and per-tier prompt and tools
+
+**Why.** Per-model harness adaptation is where the large reported gains come from, and Amness already has the safe machinery: a bounded search space and a held-out gate (*Better Harnesses*; L12).
+
+**Build.**
+- New change kinds in `src/tune.ts`: move one role one tier down; switch the prompt id for a tier (from the prompt registry); remove one tool from a tier's allow-list; toggle `textToolCalls`, `reread`, `hollow`, stable tools.
+- Keep the existing rules: one change at a time, a stated prediction, accepted only if it holds on training and held-out tasks, written only into the profile of the model it held for. Safety parts stay out of reach.
+- Risk-score weights for M13 as a later, separate search.
+
+**Accept.** Tests with scripted variants as today (`test/tune.test.ts`): a role move that loses passes is dropped; one that keeps passes and lowers cost is kept and written to the right profile.
+
+## Track M: Measurement plan (continues the E series)
+
+Tasks that the model solves every time decide nothing (the note under "Next up"). Use the hard built-in set, a SWE-bench-format slice, and Terminal-Bench 2.0 through the Harbor adapter. Ask before spending on paid models, as today.
+
+| Id | What to run | Decides |
+|---|---|---|
+| E17 | `amness doctor` on each local model and server in use (llama.cpp, vLLM, Ollama), then the ladder suite (M18). | Which models qualify for which roles; whether M5 and M8 fire in practice. |
+| E18 | Main model alone against main model plus a cheaper **hosted** explorer, compactor and reviewer, one role at a time. | Per-role delegation value at tier T2 (M11). |
+| E19 | The same with a **local** worker per role, with takeover on. Count parent tokens and wall time. | Whether local delegation lowers cost per verified success or only moves it (M11). |
+| E20 | Haiku or Sonnet executor alone, with an Opus advisor (native), and Opus alone; then a local executor with a Claude advisor (generic). | M12, both parts. |
+| E21 | Strong only, cheap only, binary escalate-on-failure, ladder (M13) on tasks the cheap model fails about half the time. | M13 and M14. |
+| E22 | Local model: stable tools on and off, governed rewrites on and off; time to first token and wall time. | M15. |
+| E23 | Edit variants (M16) on edit-heavy tasks, local and mid tiers. | Whether M16 goes further. |
+| E24 | Ablations for the new guards on local models: `full-hollow`, `full-reread`, argument repair off, rescue off. | M4, M5, M7, M10 defaults. |
+| E25 | `tier:local` prompt and lean tools against `full` on a local model with a large window. | M9. |
+| E26 | Small-window ladder: passes **and** re-reads after trims and handoffs at 8k, 16k and 32k. | Whether the context ladder's settings need tuning per window. |
+
+Report every result with its harness card (M17), trials, and the detectable effect size, as `docs/evaluation.md` already does.
+
+## Track M: Order of work
+
+| Step | Items | Why here |
+|---|---|---|
+| 1 | M0, M4 | Small, independent, immediately useful on local runs. |
+| 2 | M1, M2 | The foundation; most later items cannot be built or tested without them. |
+| 3 | M17 (role variants, per-tier metrics) | So every later item can be measured as it lands. |
+| 4 | M3, M8, M5, M9 | Make local models reliable enough to be worth assigning roles. Run E17, E24, E25. |
+| 5 | M11 | First real mixed-tier use. Run E18, E19. |
+| 6 | M15 | Removes the largest avoidable local latency cost. Run E22. |
+| 7 | M12 | Advisor pattern. Run E20. |
+| 8 | M13, M14 | Recovery ladder on top of packets. Run E21. |
+| 9 | M6, M7, M10, M18 | Refinements, each gated on its ablation. |
+| 10 | M16, M19 | Experiments and self-tuning once the measurements exist. |
+
+All ten steps are built (2026-11-11); what remains is the measurement plan above, and the `[~]` items.
+
+## Track M: Things to avoid
+
+- Do not make `plan-first` or other phase prompts a default for local tiers; they regressed small models in the one controlled test found.
+- Do not combine a response schema with tools on open-weight servers.
+- Do not count schema-valid as correct, and do not count delegation as cheaper without the parent's tokens.
+- Do not share one transcript across tiers with different windows or caches; hand over a packet.
+- Do not change the tool list mid-session if a stable alternative measures as well.
+- Do not train a router yet. The heuristic ladder with tunable weights is enough to learn where training would pay.
+- Do not let any tier below the main model make a safety decision that the main model or the user would otherwise make.
+
+## Track M: Overlap with Tracks A to C
+
+Items of Tracks A to C that are not ticked `[x]`, as of 2026-11-11 (`[~]` partly done, `[ ]` not started; the Done log says what is left). **Overlap** names the Track M item that absorbs or depends on it: build it as part of that item, not twice. Items with no overlap keep their own id and are worked on after Track M step 10, unless a user asks for one sooner.
+
+#1 Absorbed by Track M
+
+| Id | Item | Status | Overlap |
+|---|---|---|---|
+| G9/L6 | Cache-aware per-step model routing: savings not measured | [~] | M13, M14 (ladder, packets, router fixes), E21 |
+| L8 | Model profiles and scaffold pruning: no model-specific defaults measured | [~] | M2 (profile on the model card), M3 (probe writes profile), M9 (tier) |
+| G20 | LLM approval reviewer: scripted tests only | [~] | M11 (`models.approve` role), E10 |
+| G28 | Explorer that returns only paths and line ranges | [ ] | M11 (structured explorer result) |
+| G42 | Shared rate limiter: tune defaults, slow down before a 429 | [~] | M11 (`maxConcurrent` 1 for local endpoints) |
+| C4/C13 | Multi-model experiments: model as a variant dimension; split view | [~] | M17 (role variants); split view stays open below |
+| C11 | Chaos evals: malformed model output | [~] | M4 (malformed-arguments injector) |
+| L12 | `amness tune`: not run on a real model | [~] | M19 (role and tier changes), E6 |
+| G24 | OpenAI server-side compaction: not measured against our trimming | [~] | M15 (stable prefix), E26 |
+| G39 | Cost per run including subagents and reviewer in the final line | [ ] | M11 (per-tier budget), M17 (per-tier cost) |
+| G25 | Budget visibility: per-subagent slices and estimated-usage markers | [~] | M11 (per-tier tokens in `/tokens`) |
+| E4 | `full` vs `full+route --cheap-model` | not run | E21 |
+| E12 | Image input on a live vision model | not run | M2 (`caps.vision`), M3 probe |
+
+#2 Not covered by Track M (kept as they are)
+
+| Id | Item | Status |
+|---|---|---|
+| G6/G38 | OS sandbox: Linux bubblewrap path confirmed in CI | [~] |
+| G11/G35 | LSP diagnostics: run against a real server; LSP in CI | [~] / [ ] |
+| G16/G32 | Editor integration: ACP `session/load`, editor `fs/*`, real Zed, VS Code extension | [~] / [ ] |
+| G17/G31 | Image input: clipboard paste in the TUI; drop old images after N turns | [~] / [ ] |
+| G18/G30 | Session branching: `/branches` swaps file state | [~] / [ ] |
+| G19/G37 | `amness schedule` on a real crontab, launchd/systemd; Action with a real key | [~] / [ ] |
+| G21/G33 | Windows: remove `continue-on-error`, PTY smoke test, sandbox story | [~] / [ ] |
+| G22/G34 | npm releases: approve staged versions | [~] |
+| G27 | Config surface: `taskBudget` in `/settings` | [~] |
+| G29 | Read-count cap in the tool layer (only if E9 says so) | [ ] |
+| G36 | L13 coordinator that splits a task itself | [ ] |
+| G40 | Docs pass: headless flags for `--best-of`, `--parts`, `--image`, `--approval-reviewer` | [~] |
+| G44 | Spec-check: turn a spec's examples into checks | [~] |
+| L1, L2, L3 | Ledger, stagnation, reviewer: measured on a real model | [~] |
+| L7 | Structural index: benefit on multi-file tasks | [~] |
+| L9 | Taint tracking: attack success on a real model (E5, E14) | [~] |
+| L11 | Best-of-n: not measured (E7) | [~] |
+| L13 | Parallel worktree agents: coordinator, measurement (E8) | [~] |
+| L14 | Benchmark adapters: a full public benchmark run | [~] |
+| C2 | Loop strategies: replacing the turn order | [~] |
+| C3 | Context strategy as plugin point | [~] |
+| C6 | Custom verifiers: judge calibration against labelled traces | [~] |
+| C7 | Eval power tools: pairwise judge, sequential testing, task weights | [~] |
+| C8 | Online evaluation: shadow mode | [~] |
+| C9 | Prompt registry: feeds tune (M19 uses it) | [~] |
+| C12 | Plugin install from npm, worker isolation | [~] |
+| C13 | Split-view model comparison in the TUI | [~] |
+| C14 | "Build your own harness" tutorial | [~] |
+
+#3 Measurements still open
+
+E2 (ablation, 2 trials only), E3 (reviewer, two models), E6, E7, E8, E10, E11, E13, E14, E15, E16. E4 and E12 are folded into E21 and E17 above. As before: ask before any paid run.
+
+## Track M: Sources
+
+Papers and reports (figures are the authors' own; see the evidence note at the top of Track M):
+
+- [Stop Comparing LLM Agents Without Disclosing the Harness](https://arxiv.org/pdf/2605.23950) (*read*): harness against model variance; the Harness Card.
+- [Better Harnesses, Smaller Models: Building 90% Cheaper Agents via Automated Harness Adaptation](https://arxiv.org/html/2607.08938v1) (*read*): per-model harness search; what adaptations worked.
+- [Mingbird: A Local-First Agent Harness Enabling Small Open Models to Complete Real Tasks](https://arxiv.org/html/2610.02001v1) (*read*): mechanisms for 2B to 35B models; finish gate; malformed-call rescue. Self-built benchmark, single trials.
+- [AgentFloor: How Far Up the Tool Use Ladder Can Small Open-Weight Models Go?](https://arxiv.org/html/2605.00334v1) (*read*): tiers of tool use; prompt interventions that helped and hurt.
+- [Beyond Benchmarks: Can Small Open-Weight Models Get Real Coding Work Done?](https://arxiv.org/abs/2610.34241) (*abstract*): Claude parent with local workers; cost per verified success; cold-prefix latency.
+- [Constrained Decoding Eliminates Structural Failures in Small LLMs but Reveals a Scale-Dependent Semantic Gap](https://arxiv.org/pdf/2609.23742) (*read*): what constrained decoding fixes and does not.
+- [Constraint Tax in Open-Weight LLMs](https://arxiv.org/pdf/2606.25605) (*read*): tool suppression under schema constraints; two-pass fix.
+- [CodeRescue: Budget-Calibrated Recovery Routing for Coding Agents](https://arxiv.org/html/2607.19338) (*read*): reflect, replan or escalate.
+- [TACIT-Switch: Cost-Aware Model Escalation for LLM Agents from Censored Supervision](https://arxiv.org/pdf/2608.27911) (*read*): cumulative risk; limits of one-way handoff.
+- [R2V Agent: Teaching SLMs When to Ask for Help](https://arxiv.org/pdf/2605.16604) (*read*): step-level escalation; heuristic baseline.
+- [SWE-Edit: Rethinking Code Editing for Efficient SWE-Agent](https://arxiv.org/abs/2604.26102) (*abstract*): viewer and editor subagents; adaptive edit format.
+- [Cascaded Code Editing: Large-Small Model Collaboration](https://arxiv.org/pdf/2604.19201) (*read*): edit sketch plus small applier; failure modes.
+- [The Complexity Trap: Simple Observation Masking Is as Efficient as LLM Summarization](https://arxiv.org/abs/2508.21433) (*abstract*): masking against summarization.
+- [What Does Context Compression Cost an Agent?](https://arxiv.org/pdf/2608.16370) (*read*): interaction cost of compression. Synthetic environment.
+- [How a Small Open Model Beat a Frontier LLM: the Rise of Harness-Maxxing](https://msukhareva.substack.com/p/how-a-small-open-model-beat-a-frontier) (*read*, a blog): same-model, different-harness gaps on public leaderboards; uncontrolled comparisons.
+
+Vendor documentation:
+
+- [Advisor tool, Claude Platform Docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) (*read*).
+- [Context length, Ollama docs](https://docs.ollama.com/context-length) (*read*).
+
+Already cited in Track B and relied on here: AgentRouter (per-step routing), the eleven-system source-code study, the empirical harness-design study, and Anthropic's long-running-harness write-up.
+
+Not found or not verified: a controlled study of prefix-cache behaviour across local servers; a measurement of Ollama's behaviour on over-long prompts; any study that prices the cache cost of switching models mid-trajectory. These are gaps Amness's own measurements could fill.
+
 ## Done log
 
 Newest first. When an item is finished, tick it above and add one line here with the commit.
+
+- **M19** [~] (2026-11-11): `tune` change kinds `textToolCalls = true`, `tier = local`, `prompt = <id>`, `tools without <name>` (from `toolSet`), and the guards `argfix`, `hollow`, `reread` in the default candidates; predictions per kind; flags `--text-tool-calls`, `--tier-local`, `--prompts`, `--tools`. Eval variants now honour the profile's `tier`, `tools`, `prompt`, `textToolCalls`. Test in `test/tune.test.ts`. Not done: "move one role one tier down" (it changes the config, not a profile; needs a config writer and a rule for whose config), and the M13 risk-weight search.
+- **M16** [x] (2026-11-11): variants `edit:whole-small` (a system rule) and `edit:delegate` (built-in `editor` agent through `extraAgents`, a system rule that the main model delegates every edit; `@edit=<model>` puts the editor elsewhere; `Roles.edit`). Found on the way: a writing subagent defaulted to permission mode "default" when the parent had none (evals, library), so its edits were denied; it now inherits the parent's mode. Tests: `test/editvariants.test.ts`.
+
+- **M18** [x] (2026-11-11): `src/laddercases.ts` (`ladder-1`: L1 single read, L2 search then read, L3 branch on a result, L4 reconcile sources, L5 constrained change with a hidden "test untouched, withTax kept" check), `ladderVerdict` (cleared = all trials of the level and below), `LEVEL_ROLES`; `amness eval --builtin ladder` prints the verdict per variant and `--write-profile` writes `qualified` (by `ladder-1`). Tests: `test/laddersuite.test.ts` (selftest of all five, verdict table).
+- **M10** [x] (2026-11-11): guard `reread`; harness option `reread`, set by the code agent only for a set local tier without the reviewer; once per run, with the task text. Test in `test/hollow.test.ts`.
+- **M7** [x] (2026-11-11): `src/hollow.ts` (`elisionMarker`, `hollowWhy` for write_file, edit_file incl. edits lists, apply_patch added lines, blank paths); guard `hollow` (on by default, like `audit`; **default to decide with E24**), harness option `hollow` supplied by the code agent; refused before PreToolUse. Tests: `test/hollow.test.ts`.
+- **M6** [x] (2026-11-11): Chat adapter strips `SCHEMA_KEYS` (response_format, json_schema, guided_*, structured_outputs, grammar) when tools are sent to a non-official host, one warning per process via `onAdapterWarning` (the chat app shows it as a note). `extract()` was already tool-free. Test: `test/constraint.test.ts`. Not done: server flags for grammar-constrained tool calls in docs/providers.md.
+
+- **M14** [x] (2026-11-11): `src/packet.ts` `buildPacket` (why, question, task, pinned rules word for word, work note, files changed, diff, last failure; capped; the generic advisor uses it). Router: `CHEAP_MAY` without `task` (F18; `tailShape` still counts `task` as exploration); a redone cheap proposal reaches the strong model as a trailing note (F17); the discarded cheap reply's usage rides along as `usage.side` (with tier) so `Budget` charges it (it was invisible before); `Prices.perCall` in `decide()` (F19). The skip-when-window-too-small rule came with M2. Ladder handoffs use `roll()` (handoff seed = task + note + pinned rules), not `buildPacket`, so the switching tier keeps the existing note machinery. Tests: `test/ladder.test.ts`.
+- **M13** [x] (2026-11-11): `src/ladder.ts`: `ladderModel` (tiers cheapest first; card/appendOnly/api follow the tier), `RiskMeter` (weights in `RISK_WEIGHTS`, relief in `RISK_RELIEF`, from harness events), `ladderDecide` (pure; reflect ≥ 5, replan ≥ 9 after reflect, escalate ≥ 13 after replan; down after 4 clean turns with a read-only streak; never on step 0, never below start). Harness option `ladder`: every emitted event feeds the meter; each run starts at the start tier; a steer lifts to the start tier; escalate/down write the handoff note on the outgoing tier first (found by the test: otherwise the new tier was sent the full transcript), then switch. `ladder` event in both front ends. Config `ladder`/`ladderStart` (replaces fallback and router), `--ladder`, `--ladder-start`, eval `ladder:<a>+<b>`. Not done: the decision as a plugin point (C4), `/loop` showing the tier per step (the notes and `byModel` show it).
+
+- **M12** [x] (2026-11-11): details re-checked in the Claude API reference first (tool fields `type`/`name`/`model`, optional `max_uses` per request, `max_tokens`, `caching: {type, ttl}`; header `advisor-tool-2026-03-01`; `advisor_tool_result.content` is a union: `advisor_result` text, `advisor_redacted_result` encrypted (Opus 5.5, Haiku 5.5 and other current advisors), `advisor_tool_result_error`; replay the full content; changing or removing the tool invalidates thinking; pairing table, e.g. Opus 5.5 executor accepts only Fable/Mythos/Opus 5.5/Opus 5 advisors). Part A in `src/anthropic.ts`: `advisor` option, tool entry built once, beta path, `pause_turn` resumed up to 5 times with the same tools and the blocks merged into one turn, `usage.iterations` advisor entries become `usage.side` (**the iterations entry shape is not in the reference; read defensively**) and `Budget.add` charges them to the advisor model; conversation cap by `advisorCalls` and a note placed deterministically after the cap-th call. `nativeAdvisor(cfg)` (cli/model.ts) only for Claude+Claude; role configs from `resolveConfig` drop `models`/`fallback`/`router`. Prompt lines for when to call it. Part B in `src/code.ts`: `advisor: Model` → `advise` tool and harness `advise` hook (start before the first state-changing call, stuck/stagnation reflections, finish when no reviewer; once each; "OK" accepts the finish), packet (task, pinned rules, `mechanicalNote`, ledger audit, git diff, last failure; ≤ 20,000 chars; answer ≤ 2,500), cap 4 per request, failures silent; `ToolCtx.messages`. `/models advisor`, Settings, `--advisor-model`. Tests: `test/advisor.test.ts`. Not done: the Haiku-only nudge after N turns without a call; showing advisor calls in the sidebar (they appear as `hook` events and in `byModel`).
+
+- **M15** [~] (2026-11-11): stable tools mode (`stableTools` option, config, Settings toggle, `--stable-tools`, eval `tools:stable`): `specsFor()` builds every tool list (main loop and keep-alive alike) and adds `call_tool` when there are deferred tools; tool_search only describes; `call_tool` is unwrapped at the top of `exec` (the rest of exec, including permissions, taint, hooks, approval, loop detection and the ledger, sees the real name and arguments; events carry the inner arguments); a deferred tool called by name runs too (respecting `allow` and `when()`); the scheduler reads the real tool for read-only/parallel. Rewrite governance: `cachedPrice` falls back to the card's `cacheFactor` (profile field, written by `doctor --write` when the cold request took at least 200 ms). Docs: per-server hints, worded as "check your version". Tests: `test/stabletools.test.ts`. Left: a local cache indicator in the UI (time to first token, reused share), and a check that plan-mode switches and `when()` predicates do not change the list mid-task.
+
+- **M11** [x] (2026-11-11): explorer from its own card (F6): window via the card, `EXPLORE_LOCAL` prompt and compact specs for a small window or a set local tier. Roles `approve` and `quarantine` (done in M1). Structured explorer result (G28) as opt-in `exploreRanges` (config, `--explore-ranges`, Settings toggle, eval `full+ranges`): ANSWER / FILES lines, `checkRanges` keeps only ranges that exist inside the workspace. Takeover: explorer or read-only custom agent on another model that does not finish, returns nothing, or breaks the ranges contract → `TAKEOVER:` result with the partial text marked unchecked, `takeover` event (shown in both front ends), after 2 the role runs on the main model. `Budget.tierWeights` (`budgetLocalWeight`, `--local-weight`) discounts local-tier tokens in `effective`; slices inherit it; `/tokens` shows the last turn per model; the chat budget resets `byModel` per turn. Local endpoints: `maxConcurrent` default 1. Tests: `test/delegate.test.ts`. Not done: takeover for writing agents (their partial edits are real; left to the ledger), and a "contract" beyond the ranges format.
+
+- **M3** [x] (2026-11-11): `src/doctor.ts` (`runDoctor`, `formatDoctor`): checks typed (3 tries with the error fed back), parallel, chain (three steps, then must stop), required, format (native or text, from all checks), recover, window (stated, from `detectWindow`), latency (same long prefix twice; `cacheFactor`). Verdict: compact and quarantine always; explore/review need typed + chain; main/edit also need recover; approve needs typed. Suggestions: `textToolCalls` when calls came only as text, `toolChoice: "required"` when it holds and the typed call needed retries, `tier: "local"` when chain or recover failed. `amness doctor [ref] [--write] [--yes] [--json]` (asks before a paid provider; exit 0 only when qualified for main) and `/doctor [ref] [write]` (both front ends). Profile field `qualified` ({roles, at, by}); `writeProfile` takes a note. `/models` warns when a job is outside the verdict, or suggests `/doctor`. Tests: `test/doctor.test.ts`, `test/tui-app.test.ts`. Left: offering it right after `/provider` sets up a server; a real-model run (E17); the window check does not send a long prompt (truncation is watched during sessions, M8).
+
+- **M9** [x] (2026-11-11): `LOCAL_SYSTEM` (short, imperative, ends with finish, no phases); in `src/code.ts` two questions: `small()` (window ≤ 16,384, now also read from the card) and `localTier()` (the `tier` option, or the card's tier only when `tierFrom: "profile"`). Local tier: `LOCAL_SYSTEM`, the lean tool set, compact specs. **Decision:** a guessed tier changes nothing (every custom server would otherwise switch harness without a measurement, against the Track B rule); it is shown in the config line and harness card. Profile `tools` (allow-list through `Registry.allow`, also hides from tool_search; finish kept) and `prompt` (prompt id; `/prompt` wins) in both front ends and `amness run`. Warning for plan-first with a set local tier (chat app). Eval variant `tier:local|mid|frontier`. Tests: `test/tier.test.ts`.
+
+- **M5** [~] (2026-11-11): `src/rescue.ts` (`findTextCalls` for `<tool_call>`, `<function=…>` with JSON or `<parameter=…>`, `[TOOL_CALLS]`, `<|python_tag|>`, fenced JSON, a bare object only when it is the whole reply; `withoutCalls`). Applied in the harness (not the adapter: the harness knows the visible tools and has the M4 pipeline) when a reply has no structured calls and no `raw`, and `textToolCalls` (option) or `card.caps.textToolCalls` (profile field `textToolCalls`) is on; content first, thinking as a fallback. Only visible tools (after `exactName`) with arguments that validate after `parseArgs`/`coerce`. One `repair` event (`fixed`, "rescued …"). Harness card `tools.textToolCalls`. Tests: `test/rescue.test.ts`. Left: switch it on automatically from the M3 probe.
+
+- **M8** [~] (2026-11-11): Ollama window from `/api/ps` (`context_length`, field name **not verified** against a real Ollama; falls back to `/api/show`). Silent-truncation check in the harness: fires only on a ceiling (the same reported prompt size, within 3%, twice in a row, while our estimate grew more than 10% and both counts are under 60% of the estimate, estimate over 3,000, on a non-official host), because llama.cpp may report only the uncached part of a cached prompt (**unverified**). Then the window becomes about the reported size, `onWindow` is called once, a `trim` and a `hook` (`Window`) event name the fix; calibration is not learned from such replies. Docs: Ollama's VRAM-dependent default and the 64,000 recommendation. Tests: `test/truncation.test.ts`, `test/args.test.ts`. Left: `/status` showing loaded and maximum context side by side; checking both unverified points on real servers (E17).
+
+- **M17** [x] (2026-11-11): variant suffix `<variant>@role=model+role=model` (`parseRoleSpec`; roles explore, compact, review, cheap; built through `modelFor` = the shared resolver); `Budget.byModel` / `byTier` (calls, tokens, prompt, completion, cached, ms waiting), charged with the answering model's card (the router's card now follows the tier in use); eval rows carry `byModel`/`byTier` when more than one model ran, `VariantStats.tiers` and a per-tier table in the report; `countEvents` adds `reread` (a read of an already-read file after a trim or rollover); `src/harnesscard.ts` (seven layers) in the `--json` config line; the result line has `byModel`/`byTier`; eval result files list each variant's roles (`harness`). Tests: `test/tiers.test.ts`. Not done: cost in dollars per tier (tokens and seconds only; prices per tier come with M14's `Prices` extension), and the harness card is not written per eval variant (the variant name and roles are).
+
+- **M2** [x] (2026-11-11): `src/card.ts` (`ModelCard`, `withCard`, `windowOf`, `keepIdentity`), `Model.card`. Cards are attached by `wireModels` (`cardFor`: the model's own id, window, profile entry, tier) for the main model and every role, and for `tune --models` / eval `model:<ref>` (`modelByRef` in `cli/amness.ts`, replacing `tuneModelFor`; the M1 leftover). `createHarness` reads window, `off`, `maxSteps`, `stagnationTurns`, `contextBudget` from the card when its options do not set them. Per-call settings are applied by the answering model's `withCard`, so the chat app and `amness run` now pass only explicit flags; chat mode passes `toolChoice: "auto"` so a profile's `required` does not reach chat replies (subagents in chat do get it now). `withFallback`: `appendOnly` and the card follow the model that answered last (F9). `routedModel`: `appendOnly` follows the tier in use; the cheap tier is skipped when the transcript exceeds 80% of its window. `roll()` sizes the handoff request for the compact model's window (F7; the test fails without the fix: 5,198 tokens sent to a 3,500 window). `onWindow(tokens, modelId)` and `rememberWindow(c, tokens, model)`. Profile field `tier`; `guessTier`. Tests: `test/card.test.ts`. Not done: `rateLimited`, `cachedModel`, chaos and `choosingModel` copy the card statically (fine while they wrap one model).
+
+- **M1** [x] (2026-11-11): `cli/roles.ts`: model references (`id`, `provider:model`, `provider/model`, `server:<name>[/model]`, a saved server's bare name; under OpenRouter `a/b` stays an OpenRouter id; Ollama tags such as `mistral:latest` stay bare ids), `resolveConfig` with a clear error listing what is connected, `wireModels` shared by the chat app (TUI and desktop) and `amness run`. A role on a saved server gets that server's key only. New roles `approve` and `quarantine` (wired in both front ends); `advisor` is reserved for M12. Custom agents' `model:` key resolves (role name or reference; a bad one is reported by the `task` call). `/models` validates before saving and shows labels; completion offers saved servers and connected providers; `/status`, the TUI sidebar and the desktop panel list roles on other models. Tests: `test/roles.test.ts`, `test/agents.test.ts`, `test/tui-app.test.ts`. Left for M2: `tune --models` and eval `model:` variants still use their own resolver (`tuneModelFor`), move them onto `resolveConfig`.
+- **M0** [x] (2026-11-11): `mechanicalNote` reads `cmd`; malformed JSON emits `repair`; `amness run` reads `models`, `fallback`, `router` and has `--explore-model`, `--compact-model`, `--review-model`, `--cheap-model`, `--approve-model`, `--quarantine-model`, `--fallback`, `--router`, `--subagents` (the `task` tool was chat-only; it is now on in `amness run` only when an explore model is set or `--subagents` is given, so default runs are unchanged). The `--json` config line has `roles`, `router`, `subagents`. Headless `--approval-reviewer` stays flag-only (the config's `approvalReviewer` is not read headless, so a reviewer can never approve calls a plain run would deny).
+- **M4** [x] (2026-11-11): `parseArgs` (strict, loose, trailing commas, raw newlines, single quotes, stringified object, `arguments`/`parameters`/`args` wrapper) and `coerce` (numeric strings, booleans, JSON strings for objects and arrays, scalar to one-item list, optional `null` dropped; nothing guessed) in `src/schema.ts`; `exactName` in `src/context.ts` (only one candidate, case/separator or one edit). New guard `argfix` (on; `full-argfix` ablation). Corrected calls run once, the model gets a note, the history holds the corrected call, the approval prompt sees corrected arguments, `repair` events carry `fixed: true`. Chaos kind `chaos:argshape`. Tests: `test/argfix.test.ts`.
 
 - **G41**: agents with no 'report' instruction in their prompt get an advice warning; brief template is in docs/budgets.md
 - **G40** (partly): usage.md lists /budget /lsp /approver /branch, images and config-only options; headless.md flags for --best-of/--parts/--image/--approval-reviewer not yet listed

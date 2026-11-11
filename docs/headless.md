@@ -88,6 +88,12 @@ The values are an example. The field `stopped` is missing when the run ends norm
 | `--parts <file.json>` | Runs independent parts at the same time. See below. |
 | `--trace <file>` | Writes a JSONL trace of every loop event. Set `AMNESS_OTLP=<collector url>` to export with OpenTelemetry. |
 | `--max-tokens <n>` | A hard token cap. The default is 300,000 (or the value in your config). |
+| `--local-weight <0-1>` | How much a token of a local-tier model counts against `--max-tokens`. The default is 1. |
+| `--advisor-model <model>` | A stronger model the agent consults at a few moments. See [Ask a stronger model](features.md#models-per-job-and-a-fallback). |
+| `--ladder <model,model,…>`, `--ladder-start <n>` | Runs the loop on a recovery ladder of models, cheapest first. |
+| `--explore-ranges` | The explorer answers with file ranges that are checked against the files. |
+| `--stable-tools` | Keeps the tool list the same for the whole run, so the prompt cache survives. |
+| `--tool-choice`, `--thinking-budget`, `--keep-thinking`, `--request`, `--off`, `--plugin`, `--max-time`, `--max-steps`, `--context-window` | See `amness run --help`. |
 | `--no-memory` | Turns memory off. |
 
 `amness eval` has its own flags. See [Evaluating the harness](evaluation.md).

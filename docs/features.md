@@ -556,7 +556,7 @@ Anthropic measured that a plain nudge to call the advisor raised pass rates for 
 
 **How to use it.**
 
-1. Choose the cheap model. It must use the same provider:
+1. Choose the cheap model. It can be on any provider or saved server (see [Models per job](#models-per-job-and-a-fallback)). The saving is priced only for models in the price table:
 
    ```text
    /models cheap gpt-6.1-luna
@@ -1321,7 +1321,7 @@ guard verdicts:
 
 - The recommender is careful. It recommends removal only when removing the guard is clearly better, or when it makes no difference (within 2 points) and is cheaper for each solved task. If removal clearly hurts, the guard is marked `KEEP`. Anything unclear stays on. With few tasks, the report says the evidence is weak.
 - Without a profile file, every guard is on.
-- The profile applies in the chat. `amness run` does not read it.
+- The profile applies in the chat and in `amness run`. Each model reads its own entry, also when it does a job for another model.
 - Status: covered by automated tests. **No profile has been measured to help on a real model yet.** The idea follows the advice to remove each part of a harness one at a time and measure the result.
 
 **Related pages.** [Evaluating the harness](evaluation.md), [Agent loop](agent-loop.md).

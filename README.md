@@ -199,6 +199,7 @@ More plugin ideas (finish gates, policies, loop strategies, custom metrics) are 
 | **A loop that checks itself** | A finish is compared with a record of what really ran (edits, commands, exit codes). Your `verify` command must pass. An optional independent reviewer can object. Loops, stalls and malformed calls are caught. Token budget notes and a final report mean a long run ends with an answer, not a bare "budget exhausted". |
 | **Guardrails you control** | Permission rules (allow / ask / deny) with a safety floor that holds even in `yolo`, an OS sandbox (macOS, Linux), secrets masked before the model sees them, commands copied from untrusted text need approval, `/undo` also reverts what shell commands changed. |
 | **Cost under control** | Staged context trimming that keeps the provider's prompt cache valid, each file line sent once (a re-read sends only new lines), a shared rate limiter for parallel agents (honours `Retry-After`), subagent budget slices, optional routing of exploration to a cheaper model, optional server-side compaction. |
+| **Mix models** | Give each job its own model, on any provider or your own server (`/models explore server:lab`), each with its own key and settings. Check a model first with `amness doctor`. A stronger model can advise a cheaper one, and a recovery ladder starts cheap and moves up only when trouble adds up. Local models get help: broken tool calls are repaired, calls written as text can be taken, and a server that cuts the prompt is noticed. See [Models per job](docs/features.md#models-per-job-and-a-fallback). |
 | **Make it yours** | [Plugins](docs/plugins.md) (in-process hooks on 8 loop events, tools, prompt rewrites, eval graders and variants), shell hooks, skills, custom subagents, MCP servers, your own slash commands, `AGENTS.md`, a library API. |
 | **Evaluate and improve** | `amness eval` (ablations, SWE-bench-format suites, injection suite, leak audit), trace replay, failure mining, `amness tune` (changes kept only if they hold on unseen tasks). |
 | **Works where you work** | A desktop app (`amness-desktop`), full-screen and inline terminal UI, headless mode, git worktree sessions with `/review` and `/pr`, scheduled runs, a GitHub Action, an editor server (`amness acp`), image input, session branching. |
@@ -213,8 +214,8 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 
 ## Status: what is and is not proven
 
-- **Tested:** about 540 automated tests (scripted models, mock servers, real git repositories, a pseudo-terminal), plus 50 checks that drive the real desktop window (`npm run test:desktop-ui`, run on macOS only so far), CI on Linux and Windows, and a Docker and npm-package smoke test.
-- **Measured on real models (small):** the guards and the reviewer showed no detectable pass-rate effect on [these tasks and models](docs/evaluation.md#measured-results-so-far); the guards and reviewer cost extra tokens, most visibly on strong models. Every newer feature (routing, `tune`, best-of-n, parallel parts, language-server diagnostics, the approval reviewer) is implemented and unit-tested but **not yet shown to help on real work**. The [roadmap](ROADMAP.md) lists the measurements still to run.
+- **Tested:** about 680 automated tests (scripted models, mock servers, real git repositories, a pseudo-terminal), plus about 120 checks that drive the real desktop window (`npm run test:desktop-ui`, run on macOS only so far), CI on Linux and Windows, and a Docker and npm-package smoke test.
+- **Measured on real models (small):** the guards and the reviewer showed no detectable pass-rate effect on [these tasks and models](docs/evaluation.md#measured-results-so-far); the guards and reviewer cost extra tokens, most visibly on strong models. Every newer feature (models per job, the advisor, the recovery ladder, `amness doctor`, routing, `tune`, best-of-n, parallel parts, language-server diagnostics, the approval reviewer) is implemented and unit-tested but **not yet shown to help on real work**. The [roadmap](ROADMAP.md) lists the measurements still to run.
 - **Platforms:** developed on macOS and Linux. Windows runs the test suite but has no OS sandbox. Installed from npm; the Claude SDK comes with it.
 - Cost figures are estimates. Small local models vary widely in tool-calling quality.
 
@@ -232,7 +233,7 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 | [Bake-off: Amness vs Claude Code vs Codex](docs/bench.md) | run the same tasks through several agent tools and compare, with a Windows setup guide |
 | [Budgets and subagents](docs/budgets.md) | why runs ran out of budget, rate limits, what the vendors recommend |
 | [The agent loop](docs/agent-loop.md) · [Architecture](docs/architecture.md) | how it works inside |
-| [Providers and local models](docs/providers.md) · [Headless and CI](docs/headless.md) · [Library](docs/library.md) | using it |
+| [Providers, local models and models per job](docs/providers.md) · [Headless and CI](docs/headless.md) · [Library](docs/library.md) | using it |
 | [Safety and privacy](docs/safety.md) | what leaves your machine and what protects it |
 | [Development](docs/development.md) · [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md) | contributing and what is next |
 
