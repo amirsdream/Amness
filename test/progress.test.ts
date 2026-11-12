@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ProgressTracker, countFailures, createHarness, defineTool, type Message, type Model } from "../src/index.ts";
+import { ProgressTracker, countFailures, isInspection, inspectedPaths, createHarness, defineTool, type Message, type Model } from "../src/index.ts";
 
 test("countFailures reads the common runners, tsc and lint, and falls back to the exit code", () => {
   assert.equal(countFailures("npm test", "exit=1\nTests: 3 failed, 9 passed, 12 total"), 3);
@@ -49,4 +49,61 @@ test("harness: a loop that acts but never improves is told to reflect, then stop
   // switched off
   const q3 = Array.from({ length: 8 }, () => call("poke", { flip: true })); q3.push(call("finish", { summary: "." }));
   assert.ok((await createHarness({ model: async () => q3.shift()!, tools: tools(["x"]), stagnationTurns: 3, off: ["stagnation"], maxSteps: 20 }).run("x")).finished);
+});
+
+test("a comparison (diff, cmp) is a check: different counts as failing, identical as passing; git diff is not one", () => {
+  assert.equal(countFailures("diff out.txt expected.txt", "exit=1\n3c3\n< a\n> b\n"), 1);
+  assert.equal(countFailures("diff out.txt expected.txt", "exit=0\n"), 0);
+  assert.equal(countFailures("cmp a.dat b.dat", "exit=1\na.dat b.dat differ: byte 5, line 1\n"), 1);
+  assert.equal(countFailures("cp a b; diff -q x y && echo IDENTICAL || echo DIFFERENT", "exit=0\nDIFFERENT\n"), 1);   // the exit code of a compound command is the echo's
+  assert.equal(countFailures("cp a b; diff -q x y && echo IDENTICAL || echo DIFFERENT", "exit=0\nIDENTICAL\n"), 0);
+  assert.equal(countFailures("git diff src/a.ts", "exit=0\n@@ -1 +1 @@\n"), undefined);
+});
+
+test("reading through the shell: inspection commands are told from commands that act", () => {
+  for (const c of ["xxd /app/data/BOOKS.DAT | head -20", "od -c /app/a.dat", "cd /app && cat src/x.cbl", "grep -n foo a.ts | sort | uniq", "sed -n 1,20p a.ts", "ls -la 2>&1"]) assert.ok(isInspection(c), c);
+  for (const c of ["python3 program.py", "cat a > b", "sed -i s/a/b/ a.ts", "find . -delete", "echo $(rm -rf x)", "cobc -x a.cbl", "cp a b"]) assert.ok(!isInspection(c), c);
+  assert.deepEqual(inspectedPaths("od -A x -t x1z -v /app/data/ACCOUNTS.DAT | head -20"), ["/app/data/ACCOUNTS.DAT"]);
+});
+
+test("tracker: the same file seen again through another command is not new; checksPass after an edit and a passing check", () => {
+  const t = new ProgressTracker(), sh = (cmd: string, result = "exit=0\n00 01") => ({ calls: [{ name: "sh", args: { cmd }, result }], edits: [] as { path: string; diff: string }[] });
+  assert.match(t.observe({ calls: [{ name: "read_file", args: { path: "/app/data/BOOKS.DAT" }, result: "1\tB001" }], edits: [] })[0], /read something new/);
+  for (const c of ["xxd /app/data/BOOKS.DAT", "od -x /app/data/BOOKS.DAT", "od -c /app/data/BOOKS.DAT"]) assert.equal(t.observe(sh(c)).length, 0, c);
+  assert.equal(t.stale, 3);
+  assert.match(t.observe(sh("od -c /app/data/ACCOUNTS.DAT"))[0], /read something new/);
+  assert.ok(!t.checksPass);
+  t.observe({ calls: [], edits: [{ path: "/app/program.py", diff: "@@\n+print(1)\n" }] });
+  assert.match(t.observe(sh("diff a.out b.out"))[0], /the checks pass/); assert.ok(t.checksPass);
+  t.observe({ calls: [], edits: [{ path: "/app/program.py", diff: "@@\n+print(2)\n" }] }); assert.ok(!t.checksPass);       // a pass from before the latest edit says nothing about it
+  assert.match(t.observe(sh("diff a.out b.out"))[0], /a check passes after the latest change/); assert.ok(t.checksPass);
+  assert.equal(t.observe(sh("diff a.out b.out")).length, 0);                                                                   // the same pass again is not new
+});
+
+test("harness: write-first note at steps 6 and 10 while nothing is edited, only when turned on, and never after an edit", async () => {
+  const runWith = async (o: { writeFirst?: boolean; off?: any[]; editAt?: number }) => {
+    let s = 0; const seen: Message[][] = [];
+    const model: Model = async (m) => { seen.push(m.map((x) => ({ ...x }))); s++; return s > 12 ? call("finish", { summary: "." }) : s === o.editAt ? call("poke", { flip: true }) : call("sh", { cmd: `od -c /app/f${s}.dat` }); };
+    await createHarness({ model, tools: tools(["exit=0\n0000"]), writeFirst: o.writeFirst, off: o.off, stagnationTurns: 0, maxSteps: 20 }).run("write /app/program.py");
+    return seen.map((m) => m.filter((x) => x.role === "user" && /without creating or editing any file/.test(x.content ?? "")).length);
+  };
+  const on = await runWith({ writeFirst: true });
+  assert.equal(on[5], 0); assert.equal(on[6], 1); assert.equal(on[10], 2);   // before the model call of step 6, then step 10
+  assert.ok((await runWith({})).every((n) => n === 0));
+  assert.ok((await runWith({ writeFirst: true, off: ["wrapup"] })).every((n) => n === 0));
+  const edited = await runWith({ writeFirst: true, editAt: 2 }); assert.ok(edited.every((n) => n === 0));
+});
+
+test("harness: inspecting through sh counts toward the only-reading nudge", async () => {
+  let s = 0; const ev: any[] = [];
+  const model: Model = async () => (++s > 13 ? call("finish", { summary: "." }) : call("sh", { cmd: `xxd /app/f${s}.dat | head -5` }));
+  await createHarness({ model, tools: tools(["exit=0\n00"]), stagnationTurns: 0, maxSteps: 20, onEvent: (e) => ev.push(e) }).run("x");
+  assert.ok(ev.some((e) => e.kind === "nudge" && /explored for 12 turns/.test(e.detail)));
+});
+
+test("harness: stalled after an edit and a passing check, the stagnation note says finish instead of 'try another approach'", async () => {
+  const q = [call("poke", { flip: true }), call("sh", { cmd: "diff a.out b.out" }), ...Array.from({ length: 6 }, (_, i) => call("sh", { cmd: `python3 p.py ${i}` })), call("finish", { summary: "." })], seen: Message[][] = [];
+  await createHarness({ model: async (m) => (seen.push(m.map((x) => ({ ...x }))), q.shift()!), tools: tools(["exit=0\n"]), stagnationTurns: 3, maxSteps: 20 }).run("x");
+  const notes = seen.flat().filter((x) => x.role === "user" && /For \d+ turns nothing/.test(x.content ?? ""));
+  assert.ok(notes.length && notes.every((x) => /your last check passed/.test(x.content ?? "") && /call `finish` now/.test(x.content ?? "")));
 });

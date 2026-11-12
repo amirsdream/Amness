@@ -36,7 +36,7 @@ For a local run, use the file you passed to `--trace`, or the `--json` output.
 
 | What you see | Likely cause | Where to look |
 |---|---|---|
-| `stopped: stuck` after many turns with no edit, while the agent ran new shell commands | the stagnation guard may not count that work as progress: read what `observe` counts (on 2026-11-12, new shell output did not count) | `src/progress.ts` (`observe`) |
+| `stopped: stuck` after many turns with no edit, while the agent ran new shell commands | the stagnation guard may not count that work as progress: read what `observe` counts (before 0.8.1, shell reads and `diff`/`cmp` did not count; since then a shell read of a new file, a passing comparison and a check that passes after a new edit do) | `src/progress.ts` (`observe`) |
 | the same call blocked again and again | the loop guard | `canonicalCall`, `findCycle` in `src/harness.ts` |
 | `repair` lines, or calls refused as invalid JSON | malformed tool calls; is `argfix` on, does the model need `textToolCalls`? | `src/schema.ts`, `src/rescue.ts` |
 | an edit refused as a placeholder | the hollow guard | `src/hollow.ts` |
@@ -52,6 +52,6 @@ Separate four kinds of cause: **harness** (a guard or tool did the wrong thing),
 
 Write a short report: the failure, the evidence (step numbers and lines), the cause and its kind, and the next check (usually one run with the suspected part switched off: `--ak off=<guard>` in a campaign, or `amness replay <trace> --off <guard>`). Say what one run can and cannot show.
 
-Example (2026-11-12): cobol-modernization on a local Qwen failed twice. First `stopped: time` at 10 minutes (a setup cause: a 10-minute cap), then `stopped: stuck` after 12 turns of `od`, `xxd` and `cobc` with no edit (a possible harness cause in `src/progress.ts`). The check, one run with `off=stagnation`, also failed: stopped by time at step 13 with no edit. So the guard did not cost a pass here; the cause was the model and the task (re-dumping the same files, long thinking on each step).
+Example (2026-11-12): cobol-modernization on a local Qwen failed twice. First `stopped: time` at 10 minutes (a setup cause: a 10-minute cap), then `stopped: stuck` after 12 turns of `od`, `xxd` and `cobc` with no edit (a possible harness cause in `src/progress.ts`). The check, one run with `off=stagnation`, also failed: stopped by time at step 13 with no edit. So the guard did not cost that pass. The cause was found by comparing a length-matched pair: a note at step 6 saying "write a first version now" made the agent write the program and pass, while a neutral note of the same length did not. That pointed at the harness after all (prompts made for editing an existing repository, shell reads not seen as reading), fixed in 0.8.1. Lesson: "the model" is a conclusion only after a harness-side change has been tried against a control.
 
 The structure (capture, diagnose, contained next step, report) follows the agent-introspection-debugging skill of ECC (MIT, https://github.com/affaan-m/ECC), adapted to Amness's own logs.

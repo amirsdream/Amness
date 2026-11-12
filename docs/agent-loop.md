@@ -140,7 +140,7 @@ A *guard* watches the loop. You can switch each one off with the `off` option (s
 |---|---|
 | `loop` | Stops the same call (after normalising it) from running a third time while nothing was edited in between. Running tests again after an edit is fine. It also finds cycles: 2 to 4 different calls that repeat three times, such as an edit flipped back and forth around a test run. |
 | `nudge` | If the model says what it will do ("I'll run the tests") instead of doing it, the loop tells it to act. At most 2 times. |
-| `wrapup` | Warns 3 steps before the step cap. Adds budget notes. Makes the final report. Checks for 12 read-only turns in a row. |
+| `wrapup` | Warns 3 steps before the step cap. Adds budget notes. Makes the final report. Checks for 12 read-only turns in a row (reading through `sh`, such as `cat`, `od` or `grep`, counts as reading). For a local-tier model outside the chat, it also sends the write-first note (see below). |
 | `stuck` | After 3 turns in a row where every tool call failed, asks the model to reflect. After 6, stops the run. |
 | `stagnation` | See the next section. |
 | `coverage` | When the task says to read each (or every, or all) file, and the file list the agent printed shows files it never opened, refuses the finish and names the unread files. At most twice per run. Silent when it cannot tell (no file list, or the history was replaced by a handoff). Added after a local Qwen read 3 of 32 files and described all 32. |
@@ -161,15 +161,27 @@ A *guard* watches the loop. You can switch each one off with the `off` option (s
 "Improves" means one of these:
 
 - The count of failing tests, errors or lint problems reaches a new low. Amness reads the count from output of Jest, pytest, Go, Cargo, the Node test runner, `tsc` and `eslint`, among others (`countFailures()`).
+- A comparison passes: `diff` or `cmp` counts as a check. Different output counts as 1 failure, identical output as 0. This is how a task without a test suite is checked, for example against the output of an older program.
+- A check passes after a new edit, even if an earlier check had already passed. Running the checks after a change verifies the new work.
 - A file is edited for the first time.
 - An edit adds a change that is not the undo of an earlier edit.
-- The agent reads something new (counted at most 15 times per run).
+- The agent reads a file or folder it has not read before (counted at most 15 times per run). Reading the same file again through another command (`read_file`, then `xxd`, then `od -c`) is not new.
+
+When files were edited and a check passed after the latest edit, the note after 8 turns tells the agent to finish if the task is done, instead of asking it to try another approach.
 
 The model's own confidence counts for nothing.
 
 **How to tune it.** Set `stagnationTurns` (default 8; the stop comes at 8 plus half of 8, which is 12). Set it to `0`, or use `off: ["stagnation"]`, to switch it off. Tested in `test/progress.test.ts`.
 
 **Limits.** The count is read from text output. If a tool prints failures in a format Amness does not know, it falls back to the exit code and counts 1 failure.
+
+### The write-first note
+
+**What it is.** A model that keeps looking at its inputs may never write anything. If no file has been edited before step 6, Amness tells the agent to write a first working version, run it, and improve it from what it sees. It says this again at step 10 if there is still no edit. It is part of the `wrapup` guard.
+
+**When it is on.** The code agent turns it on for a local-tier model outside the chat (`writeFirst` in `src/harness.ts`). Switch it off with `off: ["wrapup"]`.
+
+**What was measured.** On 2026-11-12, on the Terminal-Bench task `cobol-modernization` with a local Qwen model: with the note, the agent wrote the program and passed; with a note of the same length that gave no advice, it edited nothing and failed. This is one run each, so it shows the note can help, not how often.
 
 ### The claims ledger checks the final summary
 

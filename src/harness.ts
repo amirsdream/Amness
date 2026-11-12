@@ -4,7 +4,7 @@ import { findTextCalls, withoutCalls, type TextCall } from "./rescue.ts";
 import { RiskMeter, ladderDecide, type LadderModel } from "./ladder.ts";
 import { type Schema, validate, parseLooseJson, parseArgs, coerce } from "./schema.ts";
 
-import { ProgressTracker, type TurnFacts } from "./progress.ts";
+import { ProgressTracker, isInspection, type TurnFacts } from "./progress.ts";
 import { redact } from "./secrets.ts";
 import { MARKER_REF, ReadLedger, ToolCache, isPointer, pointerText, repairMarkers, repairPointers, stillAbove } from "./cache.ts";
 import { planRewrite, requestsLeft } from "./rewrite.ts";
@@ -248,6 +248,8 @@ export type Options = {
   hollow?: (name: string, args: Record<string, unknown>) => string | undefined;
   /** The task re-read check (guard `reread`): on the first finish, send the model back to check each requirement once. The code agent turns it on for a local-tier model. */
   reread?: boolean;
+  /** The write-first note (part of guard `wrapup`): at steps 6 and 10 with no file edited yet, tell the model to write a first working version and improve it from what it sees. The code agent turns it on for a local-tier model outside chat. */
+  writeFirst?: boolean;
   /** Keep the tool list the same for the whole session: tools found with tool_search are run through \`call_tool\` (or by name) instead of being added to the list, so the provider's prompt cache (or a local server's prefix cache) survives. Off by default (eval variant \`tools:stable\`). */
   stableTools?: boolean;
   /** Rescue tool calls the model wrote as text (`<tool_call>…`, `<function=…>`, a JSON object) when it sent no structured call. Default: the model card's `caps.textToolCalls`. Each rescue is a `repair` event. */
@@ -338,6 +340,10 @@ const SMALL_TALK = new Set("hi hii hello hey hiya yo sup hola salam good morning
 /** A greeting, thanks or "ok" with no request in it ("hi", "hey there", "thanks!", "how are you"): answered in words, with no project context and no tools. */
 export const isSmallTalk = (text: string): boolean => { const w = text.toLowerCase().replace(/[^\p{L}\p{N}'\s]/gu, " ").split(/\s+/).filter(Boolean); return w.length > 0 && w.length <= 6 && w.every((x) => SMALL_TALK.has(x)); };
 
+/** The command of an `sh` call, or "" when its arguments are not JSON. */
+const shCmd = (c: ToolCall): string => { try { return String(JSON.parse(c.function.arguments || "{}").cmd ?? ""); } catch { return ""; } };
+/** The write-first note, word for word as measured on cobol-modernization (it wrote the program and passed; a note of the same length without this advice did not). */
+export const WRITE_FIRST = (n: number) => `You have taken ${n} steps without creating or editing any file. If the task asks you to produce a file or a program, write a first working version now, run it, and improve it from what you see. Do not inspect the same inputs again.`;
 export const clip = (s: string, n = 6000) =>
   s.length <= n ? s : `${s.slice(0, (n * 2) / 3)}\n...[${s.length - n} chars cut; read a smaller part for the rest]...\n${s.slice(-n / 3)}`;
 
@@ -621,6 +627,11 @@ export function createHarness(o: Options) {
         if (pre?.block) { emit({ kind: "loop", detail: `stopped by a PreModel hook: ${pre.block}` }); o.checkpoint?.(msgs); return end(`stopped: ${pre.block}`, false, step, "blocked"); }
         if (pre?.context) msgs.push({ role: "user", content: pre.context });
         allowNow = pre?.tools ? new Set(pre.tools) : undefined; thenNext = pre?.then; }
+      // Inspecting without ever starting: a local model re-read the same four data files five ways (read_file, xxd, od) and never wrote the program the task asked for.
+      if (o.writeFirst && !off.has("wrapup") && epoch === 0 && (step === 6 || step === 10)) {
+        emit({ kind: "nudge", detail: `write-first: ${step} steps without an edit` });
+        msgs.push({ role: "user", content: WRITE_FIRST(step) });
+      }
       emit({ kind: "phase", phase: "model", step, max });
       let m!: Message;
       let streamed = false, callStart = Date.now();
@@ -829,7 +840,7 @@ export function createHarness(o: Options) {
       if (done !== undefined) return end(done, true, step + 1);
       // Exploration that never closes: many turns of only reading. Say so once, then again after another stretch.
       if (!off.has("wrapup")) {
-        const reads = m.tool_calls.every((c) => c.function.name !== "finish" && reg.get(c.function.name)?.readOnly === true);
+        const reads = m.tool_calls.every((c) => c.function.name !== "finish" && (reg.get(c.function.name)?.readOnly === true || (c.function.name === "sh" && isInspection(shCmd(c)))));   // xxd, od, cat | head: reading through the shell is reading too
         readStreak = reads ? readStreak + 1 : 0;
         if (readStreak > 0 && readStreak % 12 === 0) {
           emit({ kind: "nudge", detail: `explored for ${readStreak} turns without acting` });
@@ -843,7 +854,9 @@ export function createHarness(o: Options) {
           if (progress.stale >= K && !stagnationWarned) {
             stagnationWarned = true; emit({ kind: "nudge", detail: "stagnation: nothing has measurably improved" });
             const adv = await adviceFor("stuck");
-            msgs.push({ role: "user", content: (adv ? `A stronger model looked at your work and advises:\n${clip(adv, 3000)}\n\n` : "") + `For ${progress.stale} turns nothing measurable has improved (${progress.summary()}). Stop and reflect before acting again: what do the latest results actually say, which assumption have you not checked, and what is a different approach? If you cannot make progress, call \`finish\` and explain what blocks you.` });
+            msgs.push({ role: "user", content: (adv ? `A stronger model looked at your work and advises:\n${clip(adv, 3000)}\n\n` : "") + (progress.checksPass
+              ? `For ${progress.stale} turns nothing has changed, and your last check passed (${progress.summary()}). If the task is done, call \`finish\` now with what you changed and how you checked it; if a requirement is still open, work on that one. Do not repeat checks that already pass.`
+              : `For ${progress.stale} turns nothing measurable has improved (${progress.summary()}). Stop and reflect before acting again: what do the latest results actually say, which assumption have you not checked, and what is a different approach? If you cannot make progress, call \`finish\` and explain what blocks you.`) });
           } else if (stagnationWarned && progress.stale >= K + Math.ceil(K / 2)) { emit({ kind: "loop", detail: `stagnation: no measurable progress for ${progress.stale} turns` }); o.checkpoint?.(msgs); return end(`stopped: no measurable progress for ${progress.stale} turns (${progress.summary()})`, false, step + 1, "stuck"); }
         } }
       // The recovery ladder: the cheapest useful next step, chosen from the risk accumulated over the run.
