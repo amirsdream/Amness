@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 (2026-11-12)
 
 - **A local model that only looks now starts writing.** On a task that asks for a new program, a local model looked at the same small files again and again (`read_file`, `xxd`, `od`) and never wrote anything. Three causes are fixed. The prompts now say that a new program starts with a first working version that is then improved. With a local-tier model outside the chat, the agent is told at steps 6 and 10, if it has not edited a file yet, to write a first version and improve it (the write-first note, part of the `wrapup` guard). And reading through `sh` (`cat`, `od`, `grep` and similar) now counts as reading, so the "only reading" note can fire. Measured on 2026-11-12 on the Terminal-Bench task `cobol-modernization`: with the note the agent wrote the program and passed; with a note of the same length without the advice it edited nothing. One run each.
 - **Fixed: the stagnation guard stopped runs that were checking their work.** Comparing outputs with `diff` or `cmp` now counts as a check, and a check that passes after a new edit counts as progress. Reading the same file again through another command no longer counts as new. When the checks pass after the latest edit, the stagnation note tells the agent to finish. Before, a run that had written a working program and was comparing its output with the original program's was stopped as making "no measurable progress".
