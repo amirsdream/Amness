@@ -7,7 +7,7 @@ import { onRateLimitWait } from "../model.ts";
 import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
-import { PROVIDERS, home, keyFor, keyIdOf, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
+import { PROVIDERS, applyTeam, forProject, home, keyFor, keyIdOf, layerNotes, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { editExternally, editorCommand, readClipboardImage, savePastedImage } from "./external.ts";
 import { fileOpenCommand } from "./find.ts";
@@ -104,7 +104,8 @@ export class App {
   done: Promise<number>; private resolveDone!: (n: number) => void;
 
   constructor(o: AppOptions) {
-    this.opts = o; this.cfg = o.cfg; this.cwd = o.cwd; this.snaps = new Snapshots(o.cwd); this.version = o.version; this.persist = o.persist ?? true; this.savedDirs = this.persist ? loadState().dirs?.[o.cwd] ?? [] : [];
+    this.opts = o; this.cwd = o.cwd; this.cfg = forProject(o.cfg, o.cwd, { teamTrusted: (() => { const fp = projectConfigFingerprint(o.cwd); return !!fp && loadState().hookTrust?.[o.cwd] === fp; })() });   // .amness/settings.json and settings.local.json on top of yours
+     this.snaps = new Snapshots(o.cwd); this.version = o.version; this.persist = o.persist ?? true; this.savedDirs = this.persist ? loadState().dirs?.[o.cwd] ?? [] : [];
     this.io = { input: o.input ?? process.stdin, output: o.output ?? (process.stdout as any) };
     this.ui = o.ui ?? "inline"; this.remote = o.remote; this.screen = new Screen(this.io.output); this.files = new FileIndex(o.cwd); this.store = new SessionStore(o.sessionsRoot ?? o.cwd);
     if (this.ui === "full") this.full = new FullView(this);
@@ -197,6 +198,7 @@ export class App {
     if (resumed && !this.structured) this.replay();
     this.render();
     if (!(await this.trustFolder())) { this.exit(NOT_TRUSTED); return this.done; }   // before hooks, plugins or a task given on the command line
+    for (const n of layerNotes(this.cfg)) this.note(n);
     void this.askHookTrust();
     if (this.opts.prompt) void this.dispatch(this.opts.prompt);
     return this.done;
@@ -838,7 +840,11 @@ export class App {
   loadSession(s: SessionData) { this.saveSession(); this.session = s; this.recount(); this.edits = []; }
   saveSession() { if (this.persist && this.session.turns.length) try { this.session.model = this.cfg.model; this.store.save(this.session); } catch { /* read-only dir */ } }
   saveHistory() { if (!this.persist) return; try { mkdirSync(home(), { recursive: true }); writeFileSync(join(home(), "history.json"), JSON.stringify(this.editor.history.slice(0, 200))); } catch { /* ignore */ } }
-  saveConfig() { if (this.persist) saveConfig(this.cfg); }
+  saveConfig() {
+    if (!this.persist) { saveConfig(this.cfg, { write: false }); return; }
+    const wrote = saveConfig(this.cfg);
+    if (wrote.has("team")) { const fp = projectConfigFingerprint(this.cwd), st = loadState(); if (fp && st.hookTrust?.[this.cwd]) { st.hookTrust[this.cwd] = fp; saveState(st); } }   // you wrote it, so it stays trusted
+  }
   /** Put text on the clipboard (OSC 52 plus the platform tool). */
   copyText(text: string) { if (this.remote?.copy) this.remote.copy(text); else if (this.full) this.full.copy(text); else copyToClipboard(this.io.output, text, this.persist); }
   // ---- cache keep-alive: Claude drops a cached prefix after ~5 idle minutes; a tiny re-send every ~4.5 minutes costs a cache read instead of a cold re-read.
@@ -950,8 +956,8 @@ export class App {
     await this.askPluginTrust();
     if (!fp || trusted || !this.persist) { this.buildAgent(); return; }
     if (loadState().hookDeclined?.[this.cwd] === fp) { this.note("project hooks and permission rules are ignored: you said no to these files (/trust asks again)"); this.buildAgent(); return; }
-    const ok = await this.pick("This project has its own hooks and/or permission rules (.amness/hooks.json, permissions.json). Hooks run commands on your machine and allow-rules skip prompts. Trust them?", [{ label: "Yes, trust this version of the files", value: "y" }, { label: "No, ignore them (deny and ask rules still apply)", value: "n" }]);
-    if (ok === "y") { const st = loadState(); st.hookTrust = { ...(st.hookTrust ?? {}), [this.cwd]: fp }; if (st.hookDeclined) delete st.hookDeclined[this.cwd]; saveState(st); this.loadHooks(); }
+    const ok = await this.pick("This project has its own hooks, permission rules and/or team settings (.amness/hooks.json, permissions.json, settings.json). Hooks run commands on your machine, allow-rules skip prompts, and settings change how the agent works. Trust them?", [{ label: "Yes, trust this version of the files", value: "y" }, { label: "No, ignore them (deny and ask rules still apply)", value: "n" }]);
+    if (ok === "y") { const st = loadState(); st.hookTrust = { ...(st.hookTrust ?? {}), [this.cwd]: fp }; if (st.hookDeclined) delete st.hookDeclined[this.cwd]; saveState(st); this.loadHooks(); applyTeam(this.cfg); }
     else if (ok === "n") { const st = loadState(); st.hookDeclined = { ...(st.hookDeclined ?? {}), [this.cwd]: fp }; saveState(st); }
     this.buildAgent();
   }

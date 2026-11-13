@@ -4,14 +4,14 @@ import { bgLine } from "./background.ts";
 import { formatDoctor, loadProfile, runDoctor, writeProfile } from "../../src/index.ts";
 import { previewLines, relatives } from "./session.ts";
 import { GUARDS, harnessView } from "./harnessinfo.ts";
-import { applySettings, settingsView, showValue, type SettingChange, type SettingItem, type SettingValue } from "./settings.ts";
+import { SCOPE_LABEL, applySettings, settingsView, showValue, type SettingChange, type SettingItem, type SettingValue } from "./settings.ts";
 import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
 import { join, resolve, sep } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { approveDraft, fetchSource, inspectSource, installSkills, listDrafts, rejectDraft, scaffoldSkill, trashSkill } from "../../src/index.ts";
 import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
-import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, forgetServer, keyFor, serverKey, serverName, storeKey, useServer, type Connection, type ProviderId, type Server } from "../config.ts";
+import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, forgetServer, keyFor, serverKey, serverName, storeKey, useServer, type Connection, type Layer, type ProviderId, type Server } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { fetchModels, prefixCacheRate } from "../models.ts";
 import { argOptions } from "./argcomplete.ts";
@@ -79,19 +79,22 @@ async function settingsPage(a: App) {
   const count = () => drafts.size + [...lists.values()].reduce((n, l) => n + l.length, 0);
   const shown = (s: SettingItem) => { if (s.kind === "list") { const ops = lists.get(s.id) ?? []; return `${s.entries?.length ?? 0} folder${s.entries?.length === 1 ? "" : "s"}${ops.length ? ` → ${ops.length} change${ops.length === 1 ? "" : "s"} •` : ""}`; }
     if (!drafts.has(s.id)) return showValue(s); return `${showValue(s)} → ${showValue({ ...s, value: drafts.get(s.id)! })} •`; };
-  const apply = async () => {
+  const apply = async (to?: Layer) => {
     const changes: SettingChange[] = [...[...drafts].map(([id, value]) => ({ id, value })), ...[...lists].flatMap(([id, ops]) => ops.map((value) => ({ id, value })))];
-    const res = await applySettings(a, changes, async (cmd) => { await a.runCommand(cmd); return []; });
+    const res = await applySettings(a, changes, async (cmd) => { await a.runCommand(cmd); return []; }, to);
     for (const r of res.filter((x) => x.message !== "done")) a.say(`${r.ok ? green("✓") : red("✗")} ${r.message}`, r.ok ? dim : red);
     a.say(`${green("✓")} ${res.filter((r) => r.ok).length} of ${res.length} setting${res.length === 1 ? "" : "s"} applied`, dim); drafts.clear(); lists.clear();
   };
   for (;;) {
     const groups = settingsView(a, "terminal"), n = count();
     const g = await a.pick<string>(`Settings${n ? `   ${n} change${n === 1 ? "" : "s"} not applied yet` : ""}`, [
-      ...(n ? [{ label: `Apply ${n} change${n === 1 ? "" : "s"}`, value: "@apply" }, { label: "Revert", value: "@revert", hint: "forget the changes" }] : []),   // first, so they are never below the fold
+      ...(n ? [{ label: `Apply ${n} change${n === 1 ? "" : "s"}`, value: "@apply", hint: "each where it belongs: about the code → this project, about you → all projects" },
+        { label: "Apply for this chat only", value: "@apply:chat", hint: "nothing is saved" }, { label: "Apply for this project only", value: "@apply:project", hint: ".amness/settings.local.json, kept out of git" },
+        { label: "Apply for all my projects", value: "@apply:user", hint: "~/.amness/config.json" }, { label: "Revert", value: "@revert", hint: "forget the changes" }] : []),   // first, so they are never below the fold
       ...groups.map((x) => ({ label: x.label, value: x.id, hint: x.items.filter((i) => drafts.has(i.id) || lists.get(i.id)?.length).length ? "changed •" : x.lead })),
     ]);
     if (g === "@apply") { await apply(); continue; }
+    if (g?.startsWith("@apply:")) { await apply(g.slice(7) as Layer); continue; }
     if (g === "@revert") { drafts.clear(); lists.clear(); continue; }
     if (!g) {
       if (!count()) return;
@@ -100,7 +103,7 @@ async function settingsPage(a: App) {
     }
     for (;;) {
       const group = settingsView(a, "terminal").find((x) => x.id === g); if (!group) break;
-      const id = await a.pick<string>(group.label, group.items.map((s) => ({ label: s.label, value: s.id, hint: s.kind === "action" ? `${s.button ?? "Open…"} ${dim(s.help)}` : `${shown(s)}  ${dim(s.help)}` })));
+      const id = await a.pick<string>(group.label, group.items.map((s) => ({ label: s.label, value: s.id, hint: s.kind === "action" ? `${s.button ?? "Open…"} ${dim(s.help)}` : `${shown(s)}${s.scope && s.scope !== "default" ? cyan(`  ${SCOPE_LABEL[s.scope]}`) : ""}  ${dim(s.help)}` })));
       if (!id) break;
       const s = group.items.find((x) => x.id === id)!;
       if (s.kind === "action") { await a.runCommand(s.command!); continue; }                   // its own dialog (keys, servers) or output, then back to this group with the drafts kept
@@ -173,14 +176,16 @@ export function buildCommands(): Cmd[] {
       a.say(a.removeDir(d) ? `${d} removed: the agent asks again before using it` : `${d} was not on the list`, dim);
     } },
     { name: "settings", alias: "config", help: "every setting in one place, grouped as in the desktop Preferences; changes wait for Apply", run: (a) => settingsPage(a) },
-    { name: "set", help: "change one setting by name: /set contextWindow 32768 (no name lists them)", args: "[setting] [value]", run: async (a, arg) => {
-      const [id = "", ...rest] = arg.trim().split(/\s+/), value = rest.join(" ");
-      if (!id) return void a.say([bold("Settings you can change with /set"), ...settingsView(a, "terminal").flatMap((g) => g.items.filter((x) => x.kind !== "action").map((x) => `  ${x.id.padEnd(22)} ${dim(showValue(x) || "—")}  ${dim(x.label)}`))].join("\n"));
+    { name: "set", help: "change one setting by name: /set contextWindow 32768 (no name lists them); add --chat, --project, --team or --user to choose where it is saved", args: "[setting] [value] [--chat|--project|--team|--user]", run: async (a, arg) => {
+      const flag = /(?:^|\s)--(chat|project|team|user|all)\b/.exec(arg), to = flag ? (flag[1] === "all" ? "user" : flag[1]) as Layer : undefined;
+      const [id = "", ...rest] = arg.replace(/(?:^|\s)--(chat|project|team|user|all)\b/, "").trim().split(/\s+/), value = rest.join(" ");
+      if (!id) return void a.say([bold("Settings you can change with /set"), ...settingsView(a, "terminal").flatMap((g) => g.items.filter((x) => x.kind !== "action").map((x) => `  ${x.id.padEnd(22)} ${dim(showValue(x) || "—")}  ${dim(x.label)}${x.scope && x.scope !== "default" ? cyan(`  (${SCOPE_LABEL[x.scope]})`) : ""}`))].join("\n"));
       const d = settingsView(a, "terminal").flatMap((g) => g.items).find((x) => x.id.toLowerCase() === id.toLowerCase());
       if (!d || d.kind === "action") return void a.say(`no setting called "${id}". /set lists them`, red);
       const v: SettingValue = d.kind === "toggle" ? onoffValue(value, !d.value) : value;
-      const [r] = await applySettings(a, [{ id: d.id, value: v }], async (cmd) => { await a.runCommand(cmd); return []; });
-      if (r.message !== "done") a.say(r.ok ? `${d.label}: ${r.message}` : `${d.label}: ${r.message}`, r.ok ? dim : red);
+      const [r] = await applySettings(a, [{ id: d.id, value: v }], async (cmd) => { await a.runCommand(cmd); return []; }, to);
+      const where = r.ok ? settingsView(a, "terminal").flatMap((g) => g.items).find((x) => x.id === d.id)?.scope : undefined;
+      if (r.message !== "done" || where) a.say(`${d.label}: ${r.message === "done" ? "changed" : r.message}${where && where !== "default" ? ` · saved for ${SCOPE_LABEL[where]}` : ""}`, r.ok ? dim : red);
     } },
     { name: "connect", alias: "keys", help: "providers and saved servers: add, replace or remove keys; change or forget a server; add a new one", run: async (a) => {
       for (;;) {

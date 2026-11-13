@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, resolve, sep } from "node:path";
-import { PROVIDERS, cloneConfig, ready, saveConfig, windowFor, type Config } from "../config.ts";
+import { PROVIDERS, cloneConfig, ready, saveConfig, windowFor, type Config, type Layer } from "../config.ts";
 import { SHELL_CHOICES, STRATEGIES, createSessionWorktree, effortsFor, isRepo, removeWorktree, worktreeIsUntouched } from "../../src/index.ts";
 import { strip } from "../ui.ts";
 import { loadState, saveState } from "../state.ts";
@@ -210,8 +210,8 @@ export class DesktopBridge {
     };
   }
   /** Apply drafts from Preferences, in order, through the same code as /settings and /set; then the fresh settings. */
-  async applySettings(changes: SettingChange[]) {
-    const results = await applySettings(this.app, changes, (cmd) => this.command(cmd));
+  async applySettings(changes: SettingChange[], scope?: Layer) {
+    const results = await applySettings(this.app, changes, (cmd) => this.command(cmd), scope);
     return { results, settings: this.settings() };
   }
   /** Run a terminal command without showing its output in the conversation (Preferences uses this); returns what it said, as plain lines. */

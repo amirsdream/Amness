@@ -500,6 +500,37 @@ Notes are ranked, merged and removed in a way you can reverse. Details: [Feature
 
 A value a setting does not accept is refused with the reason (for example `between 1 and 64`). Tested in `test/tui-app.test.ts`.
 
+### Settings for this chat, this project or all your projects
+
+**What it is.** Settings come from several files, as in Claude Code. When a setting is in more than one, the higher one wins:
+
+| Where | File | Who it is for |
+|---|---|---|
+| This chat | none (not saved) | this conversation only |
+| This project | `.amness/settings.local.json` | you, in this project. Amness adds it to `.git/info/exclude`, so it is not committed |
+| Team | `.amness/settings.json` | everyone who clones the repository (commit it) |
+| All projects | `~/.amness/config.json` | you, in every project |
+
+**Where a change is saved.** A setting about the code (sandbox, reviewer, language server, step and token limits, shell, strategy) is saved for this project. A setting about you (provider, keys, theme, notifications, vim) is saved for all your projects. If the value comes from a file already, the change goes to that file. A change to a team value is saved in your own project file; the team file stays as it is.
+
+**Choose where.** Add `--chat`, `--project`, `--team` or `--user` to `/set`. In `/settings`, choose **Apply for this chat only**, **Apply for this project only** or **Apply for all my projects**. In the desktop app, Preferences shows a **Save for** choice next to Apply.
+
+```
+/set review on              # this project
+/set model gpt-6.1-sol --chat
+/set lsp on --user          # all projects
+```
+
+`/set` alone and each row in `/settings` and Preferences show where the value comes from now (for example `this project` or `team`).
+
+**Limits and safety.**
+- The team file is used only after you trust it. Amness asks about it together with the project's hooks and permission rules, and asks again when it changes.
+- The team file cannot choose your provider, server or keys, cannot switch on the approval reviewer, choose the sandbox engine, image, runtime or shell, cannot weaken your sandbox, and cannot switch the reviewer, untrusted-content reader or guards off. Amness tells you what it ignored.
+- A `settings.local.json` that git tracks came with the repository, so Amness does not use it.
+- The agent cannot edit either file.
+
+Tested in `test/config-layers.test.ts`, `test/tui-app.test.ts` and `test/desktop.test.ts`.
+
 ## Options without a command
 
 Put these in `~/.amness/config.json`. See [Budgets and subagents](budgets.md). `taskBudget` and `maxConcurrent` can also be set with `/set` (or in Preferences → Context and limits).

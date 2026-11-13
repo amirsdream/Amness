@@ -45,7 +45,7 @@ export async function startDesktopServer(o: { cfg: Config; cwd: string; version:
     "GET /api/prefs": () => bridge.prefs(),
     "POST /api/prefs": (b) => bridge.setPrefs(b && typeof b === "object" ? b : {}),
     "GET /api/settings": () => bridge.settings(),
-    "POST /api/settings": (b) => bridge.applySettings(Array.isArray(b.changes) ? b.changes.filter((c: any) => c && typeof c.id === "string" && ["string", "number", "boolean"].includes(typeof c.value)).slice(0, 200) : []),
+    "POST /api/settings": (b) => bridge.applySettings(Array.isArray(b.changes) ? b.changes.filter((c: any) => c && typeof c.id === "string" && ["string", "number", "boolean"].includes(typeof c.value)).slice(0, 200) : [], ["chat", "project", "team", "user"].includes(b.scope) ? b.scope : undefined),
     "POST /api/command": async (b) => ({ lines: await bridge.command(String(b.text ?? "")) }),
     "POST /api/scheme": (b) => { bridge.setScheme(b.scheme === "light" || b.scheme === "retro" ? b.scheme : "dark"); return { ok: true }; },
     "POST /api/step": (b) => { bridge.toggleStep(Number(b.n)); return { ok: true }; },

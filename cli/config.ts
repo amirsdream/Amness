@@ -1,6 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { deleteSecret, getSecret, noStore, setSecret } from "./keystore.ts";
 
 export const PROVIDERS = {
@@ -133,7 +134,7 @@ const baselines = new WeakMap<Config, Map<string, string>>();
 const snapshot = (c: object) => new Map(Object.entries(c).filter(([k]) => !SKIP.has(k)).map(([k, v]) => [k, JSON.stringify(v) ?? "undefined"]));
 const remember = (c: Config) => { baselines.set(c, snapshot(c)); };
 /** A separate copy of the config (a desktop chat with its own provider and model). Saving it writes only what it changed. */
-export function cloneConfig(c: Config): Config { const copy = structuredClone(c); remember(copy); return copy; }
+export function cloneConfig(c: Config): Config { const copy = structuredClone(c); remember(copy); const l = layers.get(c); if (l) layers.set(copy, { ...l, from: new Map(l.from), to: undefined, notes: [] }); return copy; }
 
 function writeConfigFile(c: Config) {
   mkdirSync(home(), { recursive: true });
@@ -142,7 +143,9 @@ function writeConfigFile(c: Config) {
   chmodSync(file(), 0o600); // and for a file that already existed
 }
 
-export function saveConfig(c: Config) {
+/** Save what changed, each key to its layer. `write: false` only keeps the books (where each value now comes from), for a run that saves nothing. */
+export function saveConfig(c: Config, o: { write?: boolean } = {}): Set<Layer> {
+  if (o.write === false) { const base = baselines.get(c), info = layers.get(c), now = snapshot(c); if (base && info) for (const k of new Set([...now.keys(), ...base.keys()])) if (!SKIP.has(k) && now.get(k) !== base.get(k)) { const to = targetOf(c, k); if (to !== "user") info.from.set(k, to); else if (info.parent) (info.parent as Record<string, unknown>)[k] = (c as Record<string, unknown>)[k]; } remember(c); return new Set(); }
   if (c.server) c.servers = (c.servers ?? []).map((s) => (s.name === c.server ? { ...s, provider: c.provider === "ollama" ? "ollama" : "custom", baseUrl: c.baseUrl, model: c.model } : s));   // /model or a new address on a saved server is remembered with it
   const out: Config = { ...c }; delete out.apiKey; delete out.apiKeys;
   const id = keyIdOf(c);
@@ -151,17 +154,98 @@ export function saveConfig(c: Config) {
   if (tv && tv === tavilyEnv) delete out.tavilyKey;
   else if (!tv) { deleteSecret("tavilyKey"); delete out.tavilyKey; }
   else if (setSecret("tavilyKey", tv) || noStore()) delete out.tavilyKey;
-  const base = baselines.get(c);
-  if (!base) { writeConfigFile(out); return; }
+  const base = baselines.get(c), info = layers.get(c), written = new Set<Layer>();
+  if (!base) { writeConfigFile(out); return written; }
   const disk = readFileCfg() as Record<string, unknown>, merged: Record<string, unknown> = { ...disk }, now = snapshot(out);
+  const files: Partial<Record<"project" | "team", Record<string, unknown>>> = {};
   for (const k of new Set([...now.keys(), ...base.keys()])) {
     if (SKIP.has(k) || now.get(k) === base.get(k)) continue;
-    const v = (out as Record<string, unknown>)[k]; if (v === undefined) delete merged[k]; else merged[k] = v;
+    const v = (out as Record<string, unknown>)[k], to = targetOf(c, k);
+    if (info && to !== "user") info.from.set(k, to);
+    if (to === "chat") continue;                                                        // this conversation only: nothing is written
+    if (to === "project" || to === "team") { const f = (files[to] ??= readJson(projectFile(info!.root, to)) ?? {}); if (v === undefined) delete f[k]; else f[k] = v; continue; }
+    if (v === undefined) delete merged[k]; else merged[k] = v;
+    if (info?.parent) (info.parent as Record<string, unknown>)[k] = v;                 // the shared copy other chats start from sees it too
+    written.add("user");
   }
   if (out.tavilyKey) merged.tavilyKey = out.tavilyKey; else delete merged.tavilyKey;
   delete merged.apiKey; delete merged.apiKeys;
-  writeConfigFile(merged as Config); remember(c);
+  writeConfigFile(merged as Config);
+  for (const [layer, f] of Object.entries(files) as ["project" | "team", Record<string, unknown>][]) { writeProjectFile(info!.root, layer, f); written.add(layer); }
+  remember(c); return written;
 }
+
+// ---- layers. Like Claude Code: ~/.amness/config.json (you, every project) < .amness/settings.json (the team's, in the repository; applies only after you
+// trust that exact file, and cannot set keys, servers or loosen safety) < .amness/settings.local.json (you, this project; kept out of git) < this chat.
+/** Where a setting's value comes from, and where a change to it is saved. */
+export type Layer = "user" | "team" | "project" | "chat";
+type LayerInfo = { root: string; from: Map<string, Layer>; to?: Layer; parent?: Config; notes: string[] };
+const layers = new WeakMap<Config, LayerInfo>();
+/** Never read from a project file: they choose where your key goes, or are about you and not the code. */
+const PERSONAL = new Set(["provider", "baseUrl", "apiKey", "apiKeys", "server", "servers", "tavilyKey", "windows", "desktop"]);
+/** Also never from the team file: they loosen safety or run something the repository picks. */
+const NOT_FROM_TEAM = new Set(["approvalReviewer", "sandboxEngine", "sandboxImage", "sandboxRuntime", "shell", "keepWarm", "notify", "embeddings"]);
+/** Saved to this project by default: they depend on the code (its tests, language server, risk, task size). Everything else is saved for all your projects. */
+export const PROJECT_KEYS = new Set(["sandbox", "sandboxEngine", "sandboxImage", "sandboxRuntime", "lsp", "review", "quarantine", "approvalReviewer", "exploreRanges", "harness", "maxTokens", "taskBudget", "compactAt", "shell", "strategy", "prompt", "plans", "stableTools"]);
+const SANDBOX_ORDER = ["off", "workspace", "strict"];
+
+export const projectFile = (root: string, layer: "project" | "team") => join(root, ".amness", layer === "team" ? "settings.json" : "settings.local.json");
+const readJson = (f: string): Record<string, unknown> | undefined => { try { if (!existsSync(f)) return undefined; const j = JSON.parse(readFileSync(f, "utf8")); return j && typeof j === "object" && !Array.isArray(j) ? j : undefined; } catch { return undefined; } };
+const git = (root: string, args: string[]) => { try { const r = spawnSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); return r.status === 0 ? r.stdout.trim() : undefined; } catch { return undefined; } };
+/** A "local" file that git tracks came with the repository: it is not yours, so it is not used. */
+const tracked = (root: string, f: string) => git(root, ["ls-files", "--error-unmatch", f]) !== undefined;
+function writeProjectFile(root: string, layer: "project" | "team", f: Record<string, unknown>) {
+  const file = projectFile(root, layer); mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(f, null, 2) + "\n");
+  if (layer === "project") {                                                            // keep your file out of commits, as Claude Code does
+    const ex = git(root, ["rev-parse", "--git-path", "info/exclude"]); if (!ex) return;
+    const path = isAbsolute(ex) ? ex : join(root, ex), line = ".amness/settings.local.json";
+    try { const cur = existsSync(path) ? readFileSync(path, "utf8") : ""; if (!cur.split(/\r?\n/).includes(line)) { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, (cur && !cur.endsWith("\n") ? "\n" : "") + line + "\n"); } } catch { /* not fatal */ }
+  }
+}
+function applyLayer(c: Config, j: Record<string, unknown>, layer: "team" | "project", info: LayerInfo) {
+  const cfg = c as Record<string, unknown>;
+  for (const [k, v] of Object.entries(j)) {
+    if (PERSONAL.has(k) || (layer === "team" && NOT_FROM_TEAM.has(k))) { info.notes.push(`${k} in ${layer === "team" ? ".amness/settings.json" : ".amness/settings.local.json"} is ignored: set it for yourself`); continue; }
+    if (layer === "team" && k === "sandbox" && SANDBOX_ORDER.indexOf(String(v)) < SANDBOX_ORDER.indexOf(String(cfg.sandbox ?? "off"))) { info.notes.push(`the team file asks for a weaker sandbox (${v}); yours is kept`); continue; }
+    if (layer === "team" && (k === "review" || k === "quarantine") && v !== true) continue;   // the team may only switch these checks on
+    if (layer === "team" && k === "harness" && v && typeof v === "object") { const { off: _off, ...rest } = v as Record<string, unknown>; cfg[k] = { ...(cfg[k] as object), ...rest }; info.from.set(k, layer); continue; }   // nor switch guards off
+    cfg[k] = v; info.from.set(k, layer);
+  }
+}
+/**
+ * The settings for a project: a copy of `c` with the project's own files on top. `teamTrusted` says whether you approved this version of
+ * .amness/settings.json (it is part of the hooks and rules fingerprint). The copy remembers the layers, so a change is saved where it belongs.
+ */
+export function forProject(c: Config, root: string, o: { teamTrusted: boolean }): Config {
+  const out = structuredClone(c), info: LayerInfo = { root, from: new Map(), parent: layers.get(c)?.parent ?? c, notes: [] };
+  const team = readJson(projectFile(root, "team")), local = readJson(projectFile(root, "project"));
+  if (team && o.teamTrusted) applyLayer(out, team, "team", info);
+  if (local) { if (tracked(root, projectFile(root, "project"))) info.notes.push(".amness/settings.local.json is ignored: git tracks it, so it came with the repository (remove it from git to use it)"); else applyLayer(out, local, "project", info); }
+  layers.set(out, info); remember(out); return out;
+}
+/** Apply the team file after you trusted it (the chat started before you answered). */
+export function applyTeam(c: Config) {
+  const info = layers.get(c); if (!info) return; const team = readJson(projectFile(info.root, "team")); if (!team) return;
+  const before = snapshot(c); applyLayer(c, team, "team", info);
+  const base = baselines.get(c); if (base) for (const [k, v] of snapshot(c)) if (before.get(k) !== v) base.set(k, v);   // not a change of yours: nothing to save
+}
+/** Where the value of `key` comes from now. */
+export function sourceOf(c: Config, key: string): Layer | "default" {
+  const l = layers.get(c)?.from.get(key); if (l) return l;
+  return key in readFileCfg() && !(key in defaults() && JSON.stringify((readFileCfg() as Record<string, unknown>)[key]) === JSON.stringify((defaults() as Record<string, unknown>)[key])) ? "user" : "default";
+}
+/** Where a change to `key` is saved: the layer you chose for this change, else where its value comes from (a team value is overridden in your own project file), else its usual place. */
+export function targetOf(c: Config, key: string): Layer {
+  const info = layers.get(c); if (!info) return "user";
+  if (info.to) return info.to;
+  const f = info.from.get(key); if (f) return f === "team" ? "project" : f;
+  return PROJECT_KEYS.has(key) ? "project" : "user";
+}
+/** Save the next changes to this layer (undefined: back to the usual places). */
+export function saveTo(c: Config, layer?: Layer) { const info = layers.get(c); if (info) info.to = layer; }
+export const layerNotes = (c: Config) => layers.get(c)?.notes ?? [];
+export const projectRootOf = (c: Config) => layers.get(c)?.root;
 
 export const ready = (c: Config) => !PROVIDERS[c.provider].needsKey || !!c.apiKey;
 export const mask = (k?: string) => (k ? k.slice(0, 3) + "…" + k.slice(-4) : "not set");

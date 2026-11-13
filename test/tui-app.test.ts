@@ -435,6 +435,23 @@ test("project hooks you said no to are not asked about again until they change; 
   } finally { await t.key(KEY.ctrlD); }
 });
 
+test("/set saves a setting about the code for this project and a setting about you for all projects; --chat saves nothing; a theme cannot go in a project file", async () => {
+  const t = rig([], { persist: true, cols: 160 }); await t.start();
+  try {
+    const { readFileSync, existsSync } = await import("node:fs"), local = join(t.dir, ".amness", "settings.local.json"), user = join(process.env.AMNESS_HOME!, "config.json");
+    await t.app.runCommand("/set review on"); await t.settle();
+    assert.equal(JSON.parse(readFileSync(local, "utf8")).review, true); assert.equal(JSON.parse(readFileSync(user, "utf8")).review, undefined);
+    assert.ok(t.has("saved for this project"));
+    await t.app.runCommand("/set vim on"); await t.settle();
+    assert.equal(JSON.parse(readFileSync(user, "utf8")).vim, true); assert.equal(JSON.parse(readFileSync(local, "utf8")).vim, undefined);
+    await t.app.runCommand("/set model other-model --chat"); await t.settle();
+    assert.equal(t.app.cfg.model, "other-model"); assert.notEqual(JSON.parse(readFileSync(user, "utf8")).model, "other-model"); assert.equal(JSON.parse(readFileSync(local, "utf8")).model, undefined);
+    await t.app.runCommand("/set theme retro --project"); await t.settle();
+    assert.ok(t.has("is yours: it is saved for all your projects")); assert.ok(existsSync(local) && JSON.parse(readFileSync(local, "utf8")).theme === undefined);
+    await t.app.runCommand("/set"); await t.settle(); assert.ok(t.has("(this project)") && t.has("(this chat)"));
+  } finally { await t.key(KEY.ctrlD); }
+});
+
 test("/set changes one setting by name (the same list as desktop Preferences); a bad value is refused and says why", async () => {
   const t = rig([]); await t.start();
   try {

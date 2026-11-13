@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Settings for this chat, this project or all your projects**, as in Claude Code. `.amness/settings.local.json` holds your settings for one project (kept out of git), `.amness/settings.json` the team's (used after you trust it; it cannot choose your provider or keys or loosen safety), `~/.amness/config.json` yours for every project. A setting about the code is saved for this project, a setting about you for all projects. `/set … --chat|--project|--team|--user`, the Apply choices in `/settings` and **Save for** in Preferences choose another place, and every setting shows where its value comes from. The agent cannot edit these files.
+- **Fixed (desktop):** a long choice in Preferences no longer squeezes its description into a thin column.
 - **Retro theme.** `/theme retro` in the terminal, and **Retro** under Preferences > Appearance in the desktop app: blue panels, cyan double frames, yellow highlights, and a key bar at the bottom of the terminal. It is a choice on every system. The default stays Aurora, on Windows too.
 - **Provider icons that look like their brand.** Claude keeps ✻. OpenAI models now show ❁ (a blossom, like the OpenAI mark), and local models show ⌂ (they run at home, on your machine). Before, these were ◈ and ⬢.
 - **A No to project hooks or plugins is remembered.** Before, Amness asked again in every new chat, and the desktop app starts one for each chat. Now it asks again only when those files change. `/trust` (or Settings > Folders and trust) shows your answers and asks again.

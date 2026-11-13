@@ -55,7 +55,7 @@ Click ⚙ in the top bar, or press `⌘,` (macOS) or `Ctrl+,`.
 - If you close Preferences (✕, `Esc` or a click outside) with changes left, it asks: **Discard**, **Keep editing** or **Apply and close**.
 - Buttons that open their own dialog (**Manage…** for keys and servers, **Show…** for memory notes and permission rules) ask you to apply or revert first.
 
-Everything is saved in `~/.amness/config.json`, the same file as the terminal app's settings. The settings come from one shared list, which the terminal shows with `/settings`.
+The settings come from one shared list, which the terminal shows with `/settings`, and are saved in the same files. A setting about the code is saved for this project (`.amness/settings.local.json`), a setting about you for all your projects (`~/.amness/config.json`). Each row shows where its value comes from, and **Save for** next to Apply lets you choose this chat, this project or all projects. See [Settings for this chat, this project or all your projects](usage.md#settings-for-this-chat-this-project-or-all-your-projects).
 
 | Section | What you can set | In the terminal |
 |---|---|---|

@@ -4,7 +4,7 @@ import { join, resolve, sep } from "node:path";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { SHELL_CHOICES, STRATEGIES, applySandboxEngine, effortsFor, loadPrompts, sandboxBackends, sandboxKind, setSandboxBackend } from "../../src/index.ts";
-import { connections, home, keyIdOf, mask, windowFor } from "../config.ts";
+import { connections, home, keyIdOf, mask, saveTo, sourceOf, targetOf, windowFor, type Layer } from "../config.ts";
 import { loadState, saveState } from "../state.ts";
 import { GUARDS, harnessView } from "./harnessinfo.ts";
 import { themeNames } from "./themes.ts";
@@ -17,6 +17,10 @@ export type SettingItem = {
   kind: "toggle" | "choice" | "text" | "number" | "secret" | "list" | "action";
   value?: SettingValue; options?: { value: string; label: string }[]; placeholder?: string;
   entries?: { value: string; hint?: string }[]; command?: string; button?: string;
+  /** Where the value comes from now (a setting kept in the config): this chat, this project (yours), the team's file, all your projects, or the built-in default. */
+  scope?: Layer | "default";
+  /** Where a change is saved unless you choose: settings about the code go to this project, the rest to all your projects. */
+  saves?: Layer;
 };
 export type SettingGroup = { id: string; label: string; lead: string; items: SettingItem[] };
 /** A list change is "add:<value>" or "remove:<value>"; every other change is the new value. */
@@ -172,11 +176,20 @@ function setProfileField(model: string, key: "toolChoice" | "thinkingBudget" | "
 
 const shownIn = (d: Def, front: "terminal" | "desktop") => !d.only || d.only === front;
 
+/** The config key behind a setting, for the ones kept in the config files (layers). Others (verify, check, folders) are per project already. */
+const HARNESS = ["maxSteps", "stagnationTurns", "contextBudget", "governRewrites", "harnessReset"];
+const CONFIG_IDS = new Set(["notify", "provider", "model", "effort", "fallback", "router", "api", "maxConcurrent", "contextWindow", "taskBudget", "compactAt", "sandbox", "sandboxEngine", "sandboxImage", "sandboxRuntime", "lsp", "exploreRanges", "review", "approvalReviewer", "quarantine", "embeddings", "shell", "strategy", "prompt", "keepWarm", "stableTools", "plans", "theme", "vim"]);
+export const configKeyOf = (id: string): string | undefined => (id === "budget" ? "maxTokens" : HARNESS.includes(id) ? "harness" : CONFIG_IDS.has(id) ? id : undefined);
+/** Your own settings: never saved to a project file (where your key goes, how your terminal looks). */
+const PERSONAL_IDS = new Set(["provider", "notify", "embeddings", "keepWarm", "theme", "vim", "tavilyKey", "maxConcurrent"]);
+export const SCOPE_LABEL: Record<Layer | "default", string> = { chat: "this chat", project: "this project", team: "team (.amness/settings.json)", user: "all projects", default: "default" };
+
 /** Every setting with its current value, grouped, for one front end. */
 export function settingsView(a: App, front: "terminal" | "desktop"): SettingGroup[] {
   return GROUPS.map((g) => ({ ...g, items: DEFS.filter((d) => d.group === g.id && shownIn(d, front)).flatMap((d) => {
     const r = d.read ? d.read(a) : {}; if (r === null) return [];
-    const { read: _r, write: _w, group: _g, only: _o, ...item } = d; return [{ ...item, ...r }];
+    const { read: _r, write: _w, group: _g, only: _o, ...item } = d, key = configKeyOf(d.id);
+    return [{ ...item, ...r, ...(key && d.write && { scope: sourceOf(a.cfg, key), saves: PERSONAL_IDS.has(d.id) ? "user" as const : targetOf(a.cfg, key) }) }];
   }) })).filter((g) => g.items.length);
 }
 
@@ -184,11 +197,14 @@ export const settingIds = () => DEFS.filter((d) => d.write).map((d) => d.id);
 export const findSetting = (id: string) => DEFS.find((d) => d.id === id || d.id.toLowerCase() === id.toLowerCase());
 
 /** Apply changes in order; a value a setting refuses is reported, not applied. `run` runs a terminal command and returns what it said (quietly in the desktop app, in the conversation in the terminal). */
-export async function applySettings(a: App, changes: SettingChange[], run: (cmd: string) => Promise<string[]>): Promise<{ id: string; ok: boolean; message: string }[]> {
+export async function applySettings(a: App, changes: SettingChange[], run: (cmd: string) => Promise<string[]>, to?: Layer): Promise<{ id: string; ok: boolean; message: string }[]> {
   const out: { id: string; ok: boolean; message: string }[] = [];
   for (const c of changes) {
     const d = findSetting(c.id);
     if (!d?.write) { out.push({ id: c.id, ok: false, message: `no setting called ${c.id}` }); continue; }
+    const key = configKeyOf(d.id), layer = to && key ? (PERSONAL_IDS.has(d.id) && to !== "user" && to !== "chat" ? undefined : to) : undefined;
+    if (to && key && !layer) { out.push({ id: c.id, ok: false, message: `${d.label} is yours: it is saved for all your projects, not in a project file` }); continue; }
+    saveTo(a.cfg, layer);                                                                 // where this change is saved (/set --project, Preferences "Save for")
     try {
       const w = d.write(a, c.value);
       const message = typeof w === "string" ? (await run(w)).join(" ").trim() || "done" : w(a);
@@ -197,6 +213,7 @@ export async function applySettings(a: App, changes: SettingChange[], run: (cmd:
       const stuck = now === undefined || String(now) === String(d.kind === "toggle" ? onoff(c.value) === "on" : c.value);
       out.push({ id: c.id, ok: stuck, message: stuck ? message : `${d.label} is still ${d.kind === "toggle" ? (now ? "on" : "off") : now}${message !== "done" ? `: ${message}` : ""}` });
     } catch (e) { out.push({ id: c.id, ok: false, message: (e as Error).message }); }
+    finally { saveTo(a.cfg, undefined); }
   }
   return out;
 }

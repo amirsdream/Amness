@@ -1027,6 +1027,7 @@ async function showPrefs() {
   // Every change is a draft until Apply. The window's own look previews live (and goes back on Revert or a discarded close); agent settings run only on Apply,
   // through the same code as /settings in the terminal. Switching tabs keeps the drafts.
   const winDraft = new Map(), winOrig = new Map(), draft = new Map(), lists = new Map(), outputs = new Map();   // outputs: what an action button printed, shown under it
+  let saveFor = "";                                                                 // where agent settings are saved: "" each where it belongs, or chat / project / user (like Claude Code's settings files)
   const count = () => winDraft.size + draft.size + [...lists.values()].reduce((n, l) => n + l.length, 0);
   const P = (k, d) => pref(k, d);
   const stageWin = (k, live = true) => (v) => { if (!winOrig.has(k)) winOrig.set(k, prefs[k]); if (v === winOrig.get(k)) winDraft.delete(k); else winDraft.set(k, v); prefs[k] = v; if (live) { applyPrefs(); render(true); } refresh(); };
@@ -1042,7 +1043,7 @@ async function showPrefs() {
     for (const [k, v] of winDraft) setPref(k, v); winDraft.clear(); winOrig.clear();
     const changes = [...[...draft].map(([id, value]) => ({ id, value })), ...[...lists].flatMap(([id, ops]) => ops.map((value) => ({ id, value })))];
     if (changes.length) {
-      const r = await tryApi("/api/settings", { changes }); draft.clear(); lists.clear();
+      const r = await tryApi("/api/settings", { changes, ...(saveFor && { scope: saveFor }) }); draft.clear(); lists.clear(); saveFor = "";   // the choice is for this Apply only
       if (r) { s = r.settings; const bad = r.results.filter((x) => !x.ok); if (bad.length) for (const b of bad) toast("error", b.message); else toast("ok", `${r.results.length} setting${r.results.length === 1 ? "" : "s"} applied`); }
     } else toast("ok", "applied");
     draw();
@@ -1058,7 +1059,9 @@ async function showPrefs() {
     for (const b of nav.querySelectorAll("button[data-tab]")) b.classList.toggle("dirty", tabChanged(b.dataset.tab));
     foot.replaceChildren(...(closing && n
       ? [h("span", { class: "msg", text: `Apply your ${n} change${n === 1 ? "" : "s"} before closing?` }), h("span", { class: "spacer" }), h("button", { class: "btn", onclick: () => { revert(); shut(); } }, "Discard"), h("button", { class: "btn", onclick: () => { closing = false; refresh(); } }, "Keep editing"), h("button", { class: "btn primary", onclick: async () => { await apply(); shut(); } }, "Apply and close")]
-      : [h("span", { class: "msg", text: n ? `${n} change${n === 1 ? "" : "s"} not applied yet` : "No changes" }), h("span", { class: "spacer" }), h("button", { class: "btn", disabled: !n, onclick: revert }, "Revert"), h("button", { class: "btn primary", disabled: !n, onclick: apply }, "Apply")]));
+      : [h("span", { class: "msg", text: n ? `${n} change${n === 1 ? "" : "s"} not applied yet` : "No changes" }), h("span", { class: "spacer" }),
+        ...(draft.size || [...lists.values()].some((l) => l.length) ? [h("label", { class: "savefor", title: "Where the changed settings are saved. Each where it belongs: settings about the code go to this project (.amness/settings.local.json, kept out of git), settings about you go to all your projects (~/.amness/config.json)." }, "Save for ",
+          sel([["", "Each where it belongs"], ["chat", "This chat only"], ["project", "This project"], ["user", "All my projects"]], saveFor, (v) => { saveFor = v; }))] : []), h("button", { class: "btn", disabled: !n, onclick: revert }, "Revert"), h("button", { class: "btn primary", disabled: !n, onclick: apply }, "Apply")]));
   };
   const WIN = { appearance: ["theme", "accent", "uiScale", "chatSize", "codeFont", "density", "reduceMotion"], chat: ["defaultMode", "sendKey", "foldFinished", "autoOpen"] };
   const tabChanged = (t) => (WIN[t] ?? []).some((k) => winDraft.has(k)) || ((s.groups ?? []).find((g) => g.id === t)?.items ?? []).some((it) => changed(it.id));
@@ -1094,7 +1097,9 @@ async function showPrefs() {
     }
     return txt(v === undefined || v === null ? "" : String(v), it.placeholder ?? "", stage(it.id));
   };
-  const shared = (id) => { const g = (s.groups ?? []).find((x) => x.id === id); return g ? g.items.map((it) => prow(it.id, false, it.label, it.help, control(it))) : []; };
+  const SCOPE = { chat: "this chat", project: "this project", team: "team", user: "all projects" };
+  const SCOPE_TIP = { chat: "Set for this chat only: not saved.", project: "Set for this project only (.amness/settings.local.json, yours, kept out of git).", team: "Set by the project's team file (.amness/settings.json). A change here is saved for you in this project.", user: "Set for all your projects (~/.amness/config.json)." };
+  const shared = (id) => { const g = (s.groups ?? []).find((x) => x.id === id); return g ? g.items.map((it) => { const r = prow(it.id, false, it.label, it.help, control(it)); if (SCOPE[it.scope]) r.querySelector(".pl").append(h("span", { class: `scope scope-${it.scope}`, text: SCOPE[it.scope], "data-tip": SCOPE_TIP[it.scope] })); return r; }) : []; };
   const draw = () => {
     const groups = (s.groups ?? []).filter((g) => g.id !== "chat");
     const TABS = [["appearance", "◐", "Appearance"], ["chat", "✉", "Chat"], ...groups.map((g) => [g.id, { model: "◆", limits: "▤", harness: "⟳", safety: "⛨", folders: "▣", search: "⌕", advanced: "⚙", extend: "✚" }[g.id] ?? "·", g.label]), ["about", "ⓘ", "About"]];

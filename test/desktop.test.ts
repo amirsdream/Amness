@@ -268,3 +268,19 @@ test("desktop: a new folder asks whether you trust it; No while switching projec
     assert.ok(!(await d.api("/api/projects")).json.includes(other), "a folder you said no to leaves the recent list, so the next start does not open it and ask again");
   } finally { await d.close(); }
 });
+
+test("desktop: Preferences shows where each setting comes from and saves a change for this chat, this project or all projects", async () => {
+  const d = await boot([], undefined, { persist: true });
+  try {
+    const trust = await dialogOf(d, "choice", /Do you trust the files in this folder/); await d.api("/api/dialog", { id: trust.id, value: 0 });
+    const item = (st: any, id: string) => st.groups.flatMap((g: any) => g.items).find((x: any) => x.id === id);
+    const local = join(d.dir, ".amness", "settings.local.json"), user = join(process.env.AMNESS_HOME!, "config.json");
+    let r = (await d.api("/api/settings", { changes: [{ id: "review", value: true }] })).json;
+    assert.ok(r.results[0].ok); assert.equal(item(r.settings, "review").scope, "project");
+    assert.equal(JSON.parse(readFileSync(local, "utf8")).review, true);
+    r = (await d.api("/api/settings", { changes: [{ id: "lsp", value: true }], scope: "user" })).json;
+    assert.equal(item(r.settings, "lsp").scope, "user"); assert.equal(JSON.parse(readFileSync(user, "utf8")).lsp, true);
+    r = (await d.api("/api/settings", { changes: [{ id: "plans", value: true }], scope: "chat" })).json;
+    assert.equal(item(r.settings, "plans").scope, "chat"); assert.equal(JSON.parse(readFileSync(local, "utf8")).plans, undefined); assert.equal(JSON.parse(readFileSync(user, "utf8")).plans, undefined);
+  } finally { await d.close(); }
+});
