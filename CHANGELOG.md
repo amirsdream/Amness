@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 (2026-11-13)
 
 - **Desktop: the window opens at once.** Amness now starts the window first and shows a start screen (the logo, the name, a moving line) while the agent loads, then fades into the app. Before, nothing showed until everything had loaded.
 - **Desktop: easier to find your way.** The top bar has a search box, "Search or run a command" (Ctrl/Cmd K), clear icons instead of symbols, and a labelled Settings button. In Preferences, controls line up across rows and tabs, and folder lists are one tidy box.
