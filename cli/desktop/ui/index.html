@@ -10,12 +10,15 @@
 <body>
   <div id="app" class="app panel-open sidebar-open">
     <header class="topbar" id="topbar">
-      <button id="toggleSidebar" class="icon-btn" title="Sidebar (Ctrl/⌘ B)" aria-label="Toggle sidebar">☰</button>
+      <!-- Icons: Lucide (https://lucide.dev), ISC License, Copyright (c) Lucide Contributors -->
+      <button id="toggleSidebar" class="icon-btn" title="Sidebar (Ctrl/⌘ B)" aria-label="Toggle sidebar"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg></button>
       <button id="projectBtn" class="crumb project" title="Project">
         <img class="logo" src="mark.svg" alt="" width="18" height="18"><span id="projectName">…</span><span class="caret">▾</span>
       </button>
       <span class="crumb-sep">/</span>
       <button id="titleBtn" class="crumb title" title="Rename this conversation"><span id="sessionTitle">New conversation</span></button>
+      <div class="spacer"></div>
+      <button id="paletteBtn" class="command-center" title="Search or run a command (Ctrl/⌘ K)" aria-label="Search or run a command"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><span class="cc-text">Search or run a command</span><kbd class="cc-key" id="paletteKey">⌘K</kbd></button>
       <div class="spacer"></div>
       <div class="segmented" id="modeSwitch" role="radiogroup" aria-label="Permission mode">
         <button data-mode="default" title="Ask before edits and commands">Ask</button>
@@ -24,11 +27,11 @@
         <button data-mode="yolo" title="Everything runs without asking (the safety floor still applies)">Yolo</button>
       </div>
       <button id="modelBtn" class="model-chip" data-tip="Model and provider"><span class="model-dot"></span><span id="modelName">…</span><span class="caret">▾</span></button>
-      <button id="paletteBtn" class="icon-btn" title="All commands (Ctrl/⌘ K)" aria-label="Commands">⌘</button>
-      <button id="expandBtn" class="icon-btn" title="Expand all tool output and thinking (Ctrl/⌘ E)" aria-label="Expand all">⇕</button>
-      <button id="newBtn" class="icon-btn" title="New conversation (Ctrl/⌘ N)" aria-label="New conversation">✎</button>
-      <button id="prefsBtn" class="icon-btn" title="Preferences (Ctrl/⌘ ,)" aria-label="Preferences">⚙</button>
-      <button id="togglePanel" class="icon-btn" title="Workspace panel (Ctrl/⌘ J)" aria-label="Toggle workspace panel">▥</button>
+      <span class="tb-sep" aria-hidden="true"></span>
+      <button id="expandBtn" class="icon-btn" title="Expand all tool output and thinking (Ctrl/⌘ E)" aria-label="Expand all"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg></button>
+      <button id="newBtn" class="icon-btn" title="New conversation (Ctrl/⌘ N)" aria-label="New conversation"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg></button>
+      <button id="prefsBtn" class="labeled-btn" title="Settings (Ctrl/⌘ ,)" aria-label="Settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span class="lb-text">Settings</span></button>
+      <button id="togglePanel" class="icon-btn" title="Workspace panel (Ctrl/⌘ J)" aria-label="Toggle workspace panel"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg></button>
     </header>
 
     <aside class="sidebar" id="sidebar">

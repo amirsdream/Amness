@@ -1123,7 +1123,7 @@ async function showPrefs() {
         ...shared("chat")],
       about: [h("div", { class: "about" }, h("img", { src: "icon.png", alt: "" }), h("div", {}, h("h3", { text: "Amness" }), h("div", { class: "muted", text: `Version ${state?.version ?? ""}` }), h("div", { class: "muted small", text: navigator.userAgent.match(/Electron\/[\d.]+/)?.[0]?.replace("/", " ") ?? "browser" }))),
         row("Project", state?.cwd ?? "", window.amnessDesktop && state ? h("button", { class: "btn small", onclick: () => window.amnessDesktop.reveal(state.cwd) }, "Show in folder") : null),
-        row("Settings file", `${s.configFile ?? "~/.amness/config.json"}, shared with the terminal app. In the terminal: /settings, or /set <name> <value>.`, null),
+        row("Settings files", "~/.amness/config.json for all your projects, .amness/settings.local.json for you in this project (kept out of git), .amness/settings.json for the team. Shared with the terminal app: /settings, or /set <name> <value> [--chat|--project|--user].", null),
         row("Shortcuts", "⌘/Ctrl K commands · N new · O open · P file · F find · E expand · B sidebar · J panel · , preferences", null)],
     };
     for (const g of groups) sections[g.id] = [h("h2", { text: g.label }), g.id === "model" ? h("div", { class: "lead", text: `${s.providerLabel ?? ""} · ${s.model ?? ""}` }) : lead(g), ...shared(g.id)];
@@ -1177,6 +1177,7 @@ document.addEventListener("keydown", (e) => {
   if (k) { e.preventDefault(); menuAction(k); }
 });
 if (window.amnessDesktop && /Mac/.test(navigator.platform)) document.documentElement.classList.add("mac-electron");
+$("paletteKey").textContent = /Mac/.test(navigator.platform) ? "⌘K" : "Ctrl K";
 
 // ------------------------------------------------------------------ start
 if (!TOKEN) document.body.replaceChildren(h("div", { class: "empty" }, h("h1", { text: "Open Amness with the amness-desktop command." }), h("p", { class: "muted", text: "This page needs the access link that the command opens." })));

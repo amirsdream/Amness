@@ -50,7 +50,7 @@
 :root[data-theme="retro"] .panel { border-left: 3px double var(--border); }
 :root[data-theme="retro"] .topbar { background: #00a8a8; color: #000000; border-bottom: 0; }
 :root[data-theme="retro"] .topbar :is(button, span, input) { color: #000000; }
-:root[data-theme="retro"] .topbar :is(.segmented, #modelBtn), :root[data-theme="retro"] .topbar :is(.segmented, #modelBtn) :is(button, span) { color: var(--text); }
+:root[data-theme="retro"] .topbar :is(.segmented, #modelBtn, .command-center), :root[data-theme="retro"] .topbar :is(.segmented, #modelBtn, .command-center) :is(button, span, kbd) { color: var(--text); }
 :root[data-theme="retro"] .topbar .segmented button.on { color: #000000; background: var(--accent); }
 :root[data-theme="retro"] :is(.composer, .modal) { border: 3px double var(--border); box-shadow: var(--shadow); }
 :root[data-theme="retro"] .bubble { background: #00a8a8; color: #000000; } :root[data-theme="retro"] .bubble .note { color: #003838; }
@@ -115,6 +115,19 @@ code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 .icon-btn { width: 28px; height: 28px; border-radius: 7px; color: var(--muted); display: inline-grid; place-items: center; font-size: 14px; flex: none; }
 .icon-btn:hover { background: var(--surface3); color: var(--text); }
 .icon-btn.on { background: var(--sel); color: var(--text); }
+.ico { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.icon-btn .ico { width: 17px; height: 17px; }
+/* Search or run a command: the main way in, so it looks like a search box in the middle of the bar (as in VS Code and other desktop apps). */
+.command-center { display: inline-flex; align-items: center; gap: 8px; width: min(380px, 32vw); min-width: 0; height: 28px; padding: 0 6px 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 12.5px; flex: 0 1 auto; }
+.command-center:hover { border-color: var(--border2); color: var(--text); background: var(--surface2); }
+.command-center .cc-text { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-center .cc-key { font: 500 11px var(--sans); padding: 1px 6px; border-radius: 5px; border: 1px solid var(--border2); color: var(--faint); background: var(--bg2); }
+/* Settings has a word next to its icon: it is what people look for most, and an icon alone was missed. */
+.labeled-btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border-radius: 7px; color: var(--muted); font-size: 12.5px; flex: none; }
+.labeled-btn:hover { background: var(--surface3); color: var(--text); }
+.tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; flex: none; }
+@media (max-width: 1250px) { .command-center .cc-text { display: none; } .command-center { width: auto; padding: 0 6px; } }
+@media (max-width: 1000px) { .labeled-btn .lb-text, .command-center .cc-key { display: none; } .labeled-btn { padding: 0 6px; } .tb-sep { display: none; } }
 .crumb { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .crumb:hover { background: var(--surface3); }
 .crumb.project { font-weight: 600; flex: none; max-width: 30vw; }
@@ -503,7 +516,9 @@ img.empty-logo { width: 56px; height: 56px; display: inline-block; filter: drop-
 .pref.wide .pc { grid-row: auto; grid-column: 1 / -1; justify-self: stretch; }
 .pref input[type=text], .pref input[type=number], .pref select { padding: 5px 8px; border-radius: 7px; border: 1px solid var(--border2); background: var(--bg2); color: var(--text); outline: none; font: inherit; font-size: 12.5px; min-width: 180px; }
 .pref input:focus, .pref select:focus { border-color: var(--accent); }
-.pref .pc select { max-width: min(320px, 40vw); text-overflow: ellipsis; }   /* a long option must not squeeze the description into a thin column */
+/* One width for every text box and dropdown, so the controls line up from row to row and tab to tab; a long option is cut, never squeezing the description. */
+.pref .pc > select, .pref .pc > input[type=text], .pref .pc > input[type=number], .pref .pc > input[type=password] { width: 240px; min-width: 0; max-width: 40vw; text-overflow: ellipsis; }
+.prefs-body { scrollbar-gutter: stable; }
 .pref input[type=range] { width: 170px; accent-color: var(--accent); }
 .pref .val { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 42px; text-align: right; }
 .switch { position: relative; width: 34px; height: 20px; border-radius: 12px; background: var(--surface3); border: 1px solid var(--border2); transition: background .15s; flex: none; }
@@ -600,14 +615,17 @@ textarea.long-edit:focus { border-color: var(--accent); }
 .pref.changed .pl::after { content: " •"; color: var(--accent); }
 .prefs-nav button .dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); visibility: hidden; }
 .prefs-nav button.dirty .dot { visibility: visible; }
-.plist { display: flex; flex-direction: column; gap: 4px; width: 100%; }
-.pli { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; min-width: 0; }
+/* A list setting is one box: its entries as rows, an empty state, and the add row at the bottom. */
+.plist { display: flex; flex-direction: column; width: 100%; margin-top: 6px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg2); overflow: hidden; }
+.pli { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12px; min-width: 0; min-height: 34px; }
 .pli .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pli .spacer { flex: 1; }
 .pli.gone .mono { text-decoration: line-through; color: var(--faint); }
-.pli.added { border-style: dashed; }
-.pli.addrow { border: 0; padding: 0; }
-.pli.addrow input { flex: 1; min-width: 0; }
+.pli.added { background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.plist > .faint.small { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.pli.addrow { border-bottom: 0; background: var(--surface); padding: 6px 6px 6px 10px; }
+.pref .pli.addrow input { flex: 1; min-width: 0; width: auto; border: 0; background: transparent; padding: 4px 0; }
+.pref .pli.addrow input:focus { box-shadow: none; }
 .pref:has(.plist) { grid-template-columns: minmax(0, 1fr); }
 .pref:has(.plist) .pc { grid-row: auto; grid-column: 1; justify-self: stretch; }
 .prefs-nav button { white-space: nowrap; }
