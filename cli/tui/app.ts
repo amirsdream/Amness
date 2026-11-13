@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import { createModel, nativeAdvisor } from "../model.ts";
 import { wireModels, type Wired } from "../roles.ts";
 import { BackgroundTasks, type BgTask } from "./background.ts";
-import { loadState, saveState } from "../state.ts";
+import { isTrustedDir, loadState, saveState } from "../state.ts";
 import { bold, cyan, dim, gray, green, magenta, red, yellow } from "../ui.ts";
 import { BlockStore } from "./blocks.ts";
 import { buildCommands, type Cmd } from "./commands.ts";
@@ -893,15 +893,17 @@ export class App {
   async askPluginTrust() {
     const { r, fp } = await this.loadPluginsNow();
     if (!r.untrusted || !fp || !this.persist) return;
+    if (loadState().pluginDeclined?.[this.cwd] === fp) { this.note("project plugins are off: you said no to these files (/trust asks again)"); return; }   // a no is kept, so a new chat does not ask again
     const ok = await this.pick(`This project has ${r.untrusted.count} plugin file${r.untrusted.count === 1 ? "" : "s"} (.amness/plugins). A plugin is code that runs with your permissions and can change what the agent does. Trust this version of the files?\n${describeProjectPlugins(this.cwd).map((l) => "  " + l).join("\n")}\n(a text scan, not a guarantee: read them first)`, [{ label: "Yes, trust this version", value: "y" }, { label: "No, run without them", value: "n" }]);
-    if (ok === "y") { const st = loadState(); st.pluginTrust = { ...(st.pluginTrust ?? {}), [this.cwd]: fp }; saveState(st); await this.loadPluginsNow(); }
+    if (ok === "y") { const st = loadState(); st.pluginTrust = { ...(st.pluginTrust ?? {}), [this.cwd]: fp }; if (st.pluginDeclined) delete st.pluginDeclined[this.cwd]; saveState(st); await this.loadPluginsNow(); }
+    else if (ok === "n") { const st = loadState(); st.pluginDeclined = { ...(st.pluginDeclined ?? {}), [this.cwd]: fp }; saveState(st); }
   }
   /** The first time Amness opens a folder, ask whether you trust it (as Claude Code does): the agent reads, changes and runs what is there, and a stranger's files can carry instructions.
    * A yes is saved in state.json and covers the folders inside it. Without saving (tests, --no-persist) nothing is asked. */
   async trustFolder(): Promise<boolean> {
     if (!this.persist) return true;
     const st = loadState(), here = resolvePath(this.cwd);
-    if ((st.trustedDirs ?? []).some((d) => here === d || here.startsWith(d.endsWith(sep) ? d : d + sep))) return true;
+    if (isTrustedDir(st, here)) return true;
     const home = here === resolvePath(homedir());
     const body = [bold(here), "", "Amness will read, change and run files here to do what you ask.", "Files from someone else can contain instructions that make the agent do things you did not intend.",
       ...(home ? ["", yellow("This is your home folder. Open a project folder instead if you can.")] : []), "", dim("Only continue if you wrote these files or trust where they came from. Folders inside it are trusted too."), dim("Project hooks, plugins and permission rules (.amness/) are still asked about separately.")];
@@ -942,12 +944,15 @@ export class App {
     if (this.savedDirs.includes(dir)) { const st = loadState(), list = (st.dirs?.[this.cwd] ?? []).filter((d) => d !== dir); st.dirs = { ...(st.dirs ?? {}), [this.cwd]: list }; if (!list.length) delete st.dirs[this.cwd]; saveState(st); this.savedDirs = list; }
     return had;
   }
-  private async askHookTrust() {
+  /** Ask about the project's hooks, permission rules and plugins. A no is saved for those exact files, so it is not asked again until they change; /trust asks again. */
+  async askHookTrust() {
     const { fp, trusted } = this.loadHooks();
     await this.askPluginTrust();
     if (!fp || trusted || !this.persist) { this.buildAgent(); return; }
+    if (loadState().hookDeclined?.[this.cwd] === fp) { this.note("project hooks and permission rules are ignored: you said no to these files (/trust asks again)"); this.buildAgent(); return; }
     const ok = await this.pick("This project has its own hooks and/or permission rules (.amness/hooks.json, permissions.json). Hooks run commands on your machine and allow-rules skip prompts. Trust them?", [{ label: "Yes, trust this version of the files", value: "y" }, { label: "No, ignore them (deny and ask rules still apply)", value: "n" }]);
-    if (ok === "y") { const st = loadState(); st.hookTrust = { ...(st.hookTrust ?? {}), [this.cwd]: fp }; saveState(st); this.loadHooks(); }
+    if (ok === "y") { const st = loadState(); st.hookTrust = { ...(st.hookTrust ?? {}), [this.cwd]: fp }; if (st.hookDeclined) delete st.hookDeclined[this.cwd]; saveState(st); this.loadHooks(); }
+    else if (ok === "n") { const st = loadState(); st.hookDeclined = { ...(st.hookDeclined ?? {}), [this.cwd]: fp }; saveState(st); }
     this.buildAgent();
   }
   /** Shell snapshots: before the first command of a turn that may change files, remember the working tree so /undo can put it back. */

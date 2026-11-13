@@ -420,6 +420,21 @@ test("a folder you do not trust: No exits (code 3) without running anything or s
   assert.deepEqual((await import("../cli/state.ts")).loadState().trustedDirs ?? [], []);
 });
 
+test("project hooks you said no to are not asked about again until they change; /trust asks again", async () => {
+  const t = rig([], { persist: true, cols: 160, files: { ".amness/hooks.json": JSON.stringify({ PreToolUse: [{ command: "true" }] }) } }); await t.start();
+  try {
+    assert.ok(await t.until(() => t.has("has its own hooks")));
+    await t.key(KEY.down); await t.key(KEY.enter); await t.settle();
+    const { loadState } = await import("../cli/state.ts");
+    assert.ok(loadState().hookDeclined?.[t.dir], "the no is saved");
+    await t.app.askHookTrust(); await t.settle();                                        // what a new chat in this folder does (the desktop starts one per chat)
+    assert.equal(t.app.overlay, null, "not asked again"); assert.ok(t.has("you said no to these files"));
+    void t.app.runCommand("/trust"); assert.ok(await t.until(() => !!t.app.overlay && t.has("you said no")));
+    await t.key(KEY.enter); await t.settle();
+    const st = loadState(); assert.ok(st.hookTrust?.[t.dir]); assert.equal(st.hookDeclined?.[t.dir], undefined);
+  } finally { await t.key(KEY.ctrlD); }
+});
+
 test("/set changes one setting by name (the same list as desktop Preferences); a bad value is refused and says why", async () => {
   const t = rig([]); await t.start();
   try {

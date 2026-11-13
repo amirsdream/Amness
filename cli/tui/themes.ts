@@ -12,10 +12,15 @@ export type Theme = {
   syn: { keyword: number; string: number; number: number; comment: number; func: number; type: number; punct: number; plain: number };
   gradient: number[];
   tool: { read: number; edit: number; shell: number; web: number; memory: number; plan: number; explore: number; generic: number };
+  /** Frame lines for boxes: rounded by default, double for the retro look. */
+  frame: "round" | "double";
+  /** A bottom bar of key cells (key on dark, label on a light bar), as in a 1980s file manager. */
+  keybar?: { key: number; keyBg: number; label: number; labelBg: number };
 };
 
-const T = (t: Omit<Theme, "tool" | "inlineCodeBg" | "inlineCode" | "link" | "selection" | "borderStrong"> & Partial<Pick<Theme, "tool" | "inlineCodeBg" | "inlineCode" | "link" | "selection" | "borderStrong">>): Theme => ({
-  borderStrong: mix(t.border, t.text, 0.25), selection: mix(t.surface2, t.accent, 0.45), inlineCodeBg: t.surface2, inlineCode: t.accent2, link: t.info,
+type Optional = "tool" | "inlineCodeBg" | "inlineCode" | "link" | "selection" | "borderStrong" | "frame";
+const T = (t: Omit<Theme, Optional> & Partial<Pick<Theme, Optional>>): Theme => ({
+  frame: "round", borderStrong: mix(t.border, t.text, 0.25), selection: mix(t.surface2, t.accent, 0.45), inlineCodeBg: t.surface2, inlineCode: t.accent2, link: t.info,
   tool: { read: t.info, edit: t.warn, shell: t.accent, web: t.accent2, memory: t.ok, plan: 0xff79c6, explore: 0xff9e64, generic: t.dim }, ...t,
 });
 
@@ -73,6 +78,18 @@ export const THEMES: Record<string, Theme> = {
     addBg: 0xdcf3e5, addFg: 0x14663a, addStrong: 0xb3e3c6, delBg: 0xfde1e5, delFg: 0xa8202f, delStrong: 0xf6b5bd,
     syn: { keyword: 0x7a3ec7, string: 0x2a7a2a, number: 0xb4530a, comment: 0x6f7993, func: 0x1d5fc4, type: 0x8a6100, punct: 0x096f82, plain: 0x1f2430 },
     gradient: [0x5b4bdb, 0x1d62c9, 0x0b7d92],
+  }),
+  /** A two-panel file manager from the DOS days: blue panels, cyan double frames, yellow highlights and a key bar at the bottom. Pick it with /theme on any system. */
+  retro: T({
+    name: "retro", label: "Retro (blue panels)", dark: true, frame: "double",
+    bg: 0x0000a8, surface: 0x0000a8, surface2: 0x000070, border: 0x54fcfc, borderStrong: 0xfcfcfc,
+    text: 0xfcfcfc, dim: 0xb8c8f0, faint: 0x9098d8, accent: 0xfcfc54, accent2: 0x54fcfc, onAccent: 0x000000,
+    ok: 0x54fc54, warn: 0xfcfc54, err: 0xff8888, info: 0x54fcfc,
+    addBg: 0x004400, addFg: 0x7cfc7c, addStrong: 0x007000, delBg: 0x500000, delFg: 0xff9c9c, delStrong: 0x800000,
+    syn: { keyword: 0xfcfc54, string: 0x7cfc7c, number: 0xfc9cfc, comment: 0xa8b0e0, func: 0x54fcfc, type: 0xfcd480, punct: 0xd0d8f8, plain: 0xfcfcfc },
+    gradient: [0x54fcfc, 0xfcfcfc, 0xfcfc54],
+    selection: 0x006868, inlineCodeBg: 0x000070, inlineCode: 0x54fcfc, link: 0x54fcfc,
+    keybar: { key: 0xfcfcfc, keyBg: 0x000000, label: 0x000000, labelBg: 0x00a8a8 },
   }),
   /** Uses the terminal's own background and palette: no painted surfaces, structure comes from borders only. */
   terminal: T({

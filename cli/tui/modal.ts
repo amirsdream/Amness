@@ -18,7 +18,7 @@ export function drawModal(c: Canvas, t: Theme, o: Overlay, frame: number): Modal
     const x = Math.floor((c.w - w) / 2), y = Math.max(1, Math.floor((c.h - h) / 2.2));
     c.dim(0, 0, c.w, c.h, 0.62, dimTo, t.text === -1 ? 0xdddddd : t.text, t.bg === -1 ? 0x101010 : t.bg);
     c.fill(x + 1, y + 1, w, h, mix(t.bg === -1 ? 0x101010 : t.bg, 0x000000, 0.55));        // soft shadow
-    c.box(x, y, w, h, { border, bg: t.surface, style: "round" });
+    c.box(x, y, w, h, { border, bg: t.surface, style: t.frame });
     if (title) c.ansi(x + 2, y, " " + (icon ? F(border, icon) + " " : "") + BOLD(F(t.text, title)) + " ", {}, w - 4);
     return { x, y };
   };
@@ -83,7 +83,7 @@ export function drawModal(c: Canvas, t: Theme, o: Overlay, frame: number): Modal
     const w = Math.min(c.w - 8, 72), inner = w - 4, h = 7, { x, y } = card(w, h, t.accent, undefined);
     c.ansi(x + 2, y + 1, BOLD(F(t.text, o.prompt.length > inner ? o.prompt.slice(0, inner - 1) + "…" : o.prompt)), { bg: t.surface }, inner);
     const shown = o.secret ? "•".repeat(o.ed.text.length) : o.ed.text.split("\n")[0];
-    c.box(x + 2, y + 2, inner, 3, { border: t.accent, bg: t.surface2, style: "round" });
+    c.box(x + 2, y + 2, inner, 3, { border: t.accent, bg: t.surface2, style: t.frame });
     c.ansi(x + 4, y + 3, F(t.text, clipWidth(shown, inner - 4)), { bg: t.surface2 }, inner - 4);
     c.ansi(x + 2, y + h - 2, F(t.faint, o.hint), { bg: t.surface }, inner);
     return { hits, box: { x, y, w, h }, cursor: { x: x + 4 + Math.min(cellWidth(shown), inner - 5), y: y + 3 } };

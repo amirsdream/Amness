@@ -7,7 +7,7 @@ import { basename } from "node:path";
 import type { App } from "./app.ts";
 import { A, mix, type Cell } from "./ansi.ts";
 import { brandOfModel } from "./brand.ts";
-import { Canvas } from "./canvas.ts";
+import { BORDERS, Canvas } from "./canvas.ts";
 import { isQuiet, renderBlock, renderGroup, type Hit, type RenderCtx, type Rendered } from "./cards.ts";
 import type { Block } from "./blocks.ts";
 import type { MouseEv } from "./keys.ts";
@@ -302,7 +302,7 @@ export class FullView {
   private drawSidebar(c: Canvas, t: Theme, x0: number, y0: number, w: number, h: number) {
     const { rows, hits } = renderSidebar(sidebarData(this.app, this.panel, t, Date.now()), t, w, h);
     rows.forEach((r, i) => c.put(x0 + 1, y0 + i, r, w - 1));
-    for (let i = 0; i < h; i++) c.text(x0, y0 + i, "│", { fg: t.border, bg: t.surface });
+    for (let i = 0; i < h; i++) c.text(x0, y0 + i, BORDERS[t.frame].v, { fg: t.border, bg: t.surface });
     for (const hh of hits) if (hh.row < h) this.regions.push({ x: x0, y: y0 + hh.row, w, h: 1, kind: "change", click: () => { if (hh.kind === "step" && hh.step !== undefined) { toggleStep(this.panel, hh.step); this.invalidate(); } else if (hh.blockId !== undefined) this.scrollToBlock(hh.blockId); } });
   }
 
@@ -324,7 +324,7 @@ export class FullView {
   private drawInput(c: Canvas, t: Theme, x: number, y: number, w: number, h: number) {
     const app = this.app, mode = app.mode, col = mode === "yolo" ? t.err : mode === "plan" ? t.info : mode === "acceptEdits" ? t.ok : t.accent;
     const dimBorder = app.running ? mix(col, t.bg, 0.55) : col;
-    c.box(x, y, w, h, { border: dimBorder, bg: t.surface, style: "round" });
+    c.box(x, y, w, h, { border: dimBorder, bg: t.surface, style: t.frame });
     const label = ` ${MODE_LABEL[mode] ?? mode} `;
     c.text(x + 2, y, label, { fg: t.onAccent, bg: col, attr: A.bold });
     this.regions.push({ x: x + 2, y, w: label.length, h: 1, kind: "mode", click: () => { app.cycleMode(); app.render(); } });
@@ -348,7 +348,7 @@ export class FullView {
     if (room < 3) return;
     const { rows, above, below } = menuRows(s.items, s.sel, Math.min(14, room)), y = inputY - rows.length - 2;
     const pos = s.items.length > rows.filter((r) => "item" in r).length ? `  ${s.sel + 1}/${s.items.length}${above ? " ↑" : ""}${below ? " ↓" : ""}` : "";
-    c.box(x + 1, y, w, rows.length + 2, { border: t.border, bg: t.surface, style: "round", title: (s.kind === "slash" ? "commands" : s.kind === "arg" ? `/${s.token.cmd} options` : "files") + pos, titleFg: t.dim });
+    c.box(x + 1, y, w, rows.length + 2, { border: t.border, bg: t.surface, style: t.frame, title: (s.kind === "slash" ? "commands" : s.kind === "arg" ? `/${s.token.cmd} options` : "files") + pos, titleFg: t.dim });
     rows.forEach((r, i) => {
       if ("head" in r) { c.ansi(x + 2, y + 1 + i, fit(" " + F(t.faint, "── ") + BOLD(F(t.dim, r.head)) + " " + F(t.faint, "─".repeat(Math.max(2, 24 - r.head.length))), w - 2, t.surface), {}, w - 2); return; }
       const idx = r.item, it = s.items[idx], on = idx === s.sel, bg = on ? t.selection : t.surface;
@@ -367,14 +367,26 @@ export class FullView {
       c.ansi(0, y, fit(" " + BOLD(F(t.accent, "Find")) + " " + F(t.text, f.q) + F(t.accent, "▏") + "  " + F(n || !f.q ? t.dim : t.warn, pos) + "   " + F(t.faint, "↑ older · ↓ newer · enter stay · esc back"), W, t.bg));
       return;
     }
+    if (t.keybar && hints.length && !(app.notice && now < app.noticeUntil)) { this.drawKeybar(c, t.keybar, hints, W - cellWidth(right) - 1, y, t.bg); if (right) c.ansi(W - cellWidth(right) - 1, y, right); return; }
     c.ansi(0, y, fit(" " + (app.notice && now < app.noticeUntil ? F(t.warn, app.notice) : left), W - cellWidth(right) - 1, t.bg));
     if (right) c.ansi(W - cellWidth(right) - 1, y, right);
+  }
+  /** The retro key bar: each hint is a key on a dark cell and its label on a light bar, the cells stretched to share the width. */
+  private drawKeybar(c: Canvas, k: NonNullable<Theme["keybar"]>, hints: [string, string][], w: number, y: number, bg: number) {
+    c.fill(0, y, w, 1, bg);
+    const cell = Math.floor(w / hints.length);
+    if (cell < 6) return;
+    hints.forEach(([key, label], i) => {
+      const x = i * cell, kw = Math.min(cellWidth(key) + 1, cell - 3);
+      c.fill(x, y, kw, 1, k.keyBg); c.text(x, y, clipWidth(key, kw - 1), { fg: k.key, bg: k.keyBg, attr: A.bold });
+      c.fill(x + kw, y, cell - kw - 1, 1, k.labelBg); c.text(x + kw, y, clipWidth(label, cell - kw - 1), { fg: k.label, bg: k.labelBg });
+    });
   }
   private drawToasts(c: Canvas, t: Theme, W: number) {
     this.toasts.forEach((ts, i) => {
       const col = ts.kind === "ok" ? t.ok : ts.kind === "warn" ? t.warn : ts.kind === "error" ? t.err : t.accent2, icon = ts.kind === "ok" ? "✓" : ts.kind === "warn" ? "⚠" : ts.kind === "error" ? "✗" : "●";
       const n = this.toasts.length, text = clipWidth(` ${icon} ${ts.text} `, Math.max(10, this.mainW - 6)), w = cellWidth(text) + 2, x = 2, y = this.toastBase - 3 * (n - i);   // bottom-left of the transcript: never covers the header or sidebar
-      c.box(x, y, w, 3, { border: col, bg: t.surface2, style: "round" }); c.text(x + 1, y + 1, text, { fg: t.text, bg: t.surface2 });
+      c.box(x, y, w, 3, { border: col, bg: t.surface2, style: t.frame }); c.text(x + 1, y + 1, text, { fg: t.text, bg: t.surface2 });
       c.text(x + 2, y + 1, icon, { fg: col, bg: t.surface2 });
     });
   }

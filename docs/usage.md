@@ -95,7 +95,7 @@ If you have no key yet, the first start asks you to pick a provider and paste a 
 
 **Mouse.** You can scroll with the wheel, click a card to open or close it, click the model or mode chips in the header, and click suggestions and modal options. A "Jump to bottom" pill and a sticky prompt appear when you scroll up.
 
-**Themes.** `aurora` (default), `tokyo-night`, `catppuccin`, `gruvbox`, `nord`, `daylight` (light) and `terminal` (transparent). `/theme` shows a live preview, and `Ctrl+T` goes to the next theme. Amness uses truecolor and falls back to 256 or 16 colours.
+**Themes.** `aurora` (default), `tokyo-night`, `catppuccin`, `gruvbox`, `nord`, `daylight` (light), `terminal` (transparent) and `retro`. `retro` looks like a DOS file manager from the 1980s: blue panels, cyan double frames, yellow highlights and a key bar at the bottom. It is never the default, on any system. `/theme` shows a live preview, and `Ctrl+T` goes to the next theme. Amness uses truecolor and falls back to 256 or 16 colours.
 
 **Limits and common problems.**
 

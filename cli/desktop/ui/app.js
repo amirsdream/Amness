@@ -132,20 +132,22 @@ const pref = (k, d) => (prefs[k] === undefined ? d : prefs[k]);
 let prefsT, prefsDirty = {};
 function setPref(k, v) { prefs[k] = v; prefsDirty[k] = v; clearTimeout(prefsT); prefsT = setTimeout(() => { const p = prefsDirty; prefsDirty = {}; api("/api/prefs", p).catch(() => {}); }, 250); }
 const ACCENTS = { violet: ["#8b7cf6", "#6d5ce8"], blue: ["#5b9cff", "#2f6fe0"], teal: ["#2ec5b6", "#0f8f83"], green: ["#4ccf8a", "#18a058"], amber: ["#f5a54b", "#c97212"], pink: ["#f472b6", "#cf3f8a"] };
+const schemeNow = () => (pref("theme", "system") === "retro" ? "retro" : lightNow() ? "light" : "dark");
 const lightNow = () => { const t = pref("theme", "system"); return t === "light" || (t === "system" && matchMedia("(prefers-color-scheme: light)").matches); };
 /** Apply the appearance preferences to the page (and tell the server which scheme, so command output is coloured to match). */
 function applyPrefs() {
   const root = document.documentElement, t = pref("theme", "system");
   if (t === "system") delete root.dataset.theme; else root.dataset.theme = t;
   const a = ACCENTS[pref("accent", "violet")] ?? ACCENTS.violet, col = lightNow() ? a[1] : a[0];
-  root.style.setProperty("--accent", col); root.style.setProperty("--sel", col + (lightNow() ? "1f" : "33"));
+  if (t === "retro") { root.style.removeProperty("--accent"); root.style.removeProperty("--sel"); }   // the retro theme brings its own yellow accent
+  else { root.style.setProperty("--accent", col); root.style.setProperty("--sel", col + (lightNow() ? "1f" : "33")); }
   root.style.zoom = String(pref("uiScale", 1));
   root.style.setProperty("--chat-size", `${pref("chatSize", 14)}px`);
   const font = String(pref("codeFont", "")).trim().replace(/[;{}"]/g, "");
   if (font) root.style.setProperty("--mono", `"${font}", var(--mono-base)`); else root.style.removeProperty("--mono");
   document.body.classList.toggle("compact", pref("density", "comfortable") === "compact");
   document.body.classList.toggle("reduce-motion", !!pref("reduceMotion", false));
-  if (TOKEN) api("/api/scheme", { scheme: lightNow() ? "light" : "dark" }).catch(() => {});
+  if (TOKEN) api("/api/scheme", { scheme: schemeNow() }).catch(() => {});
 }
 
 // ------------------------------------------------------------------ state
@@ -476,7 +478,7 @@ $("jumpBottom").onclick = () => toBottom();
 function connect() {
   const es = new EventSource(`/events?t=${encodeURIComponent(TOKEN)}`);
   es.onmessage = (m) => { let e; try { e = JSON.parse(m.data); } catch { return; } onServer(e); };
-  es.onopen = () => tryApi("/api/scheme", { scheme: lightNow() ? "light" : "dark" });
+  es.onopen = () => tryApi("/api/scheme", { scheme: schemeNow() });
   es.onerror = () => { if (es.readyState === EventSource.CLOSED) { toast("error", "lost the connection to Amness; trying again…"); setTimeout(connect, 1500); } };
 }
 matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => applyPrefs());
@@ -1101,7 +1103,7 @@ async function showPrefs() {
     const lead = (g) => h("div", { class: "lead", text: g?.lead ?? "" });
     const sections = {
       appearance: [h("h2", { text: "Appearance" }), h("div", { class: "lead", text: "How this window looks. You see changes at once; they are kept when you apply." }),
-        prow("theme", true, "Theme", "Follow the system, or always dark or light.", seg([["system", "System"], ["dark", "Dark"], ["light", "Light"]], P("theme", "system"), stageWin("theme"))),
+        prow("theme", true, "Theme", "Follow the system, or always dark or light. Retro is blue panels with double frames, like an old DOS file manager.", seg([["system", "System"], ["dark", "Dark"], ["light", "Light"], ["retro", "Retro"]], P("theme", "system"), stageWin("theme"))),
         prow("accent", true, "Accent colour", "Buttons, selection and the active step.", h("div", { class: "swatches" }, Object.entries(ACCENTS).map(([name, c]) => h("button", { class: `swatch${P("accent", "violet") === name ? " on" : ""}`, title: name, style: `background:${c[0]}`, onclick: (e) => { stageWin("accent")(name); for (const x of e.currentTarget.parentElement.children) x.classList.toggle("on", x === e.currentTarget); } })))),
         prow("uiScale", true, "Interface size", "Scales the whole window.", ...range(0.8, 1.3, 0.05, P("uiScale", 1), (v) => `${Math.round(v * 100)}%`, stageWin("uiScale"))),
         prow("chatSize", true, "Chat text size", "Replies, your messages and the message box.", ...range(12, 18, 1, P("chatSize", 14), (v) => `${v}px`, stageWin("chatSize"))),

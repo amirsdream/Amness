@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.ts";
-import { loadState } from "./state.ts";
+import { isTrustedDir, loadState } from "./state.ts";
 import { openUrl } from "./tui/openurl.ts";
 import { startDesktopServer } from "./desktop/server.ts";
 
@@ -45,7 +45,7 @@ export async function runDesktop(argv: string[]): Promise<number> {
   const folder = argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--port");
   // Started from a dock, a menu or Finder the working folder is / or the home folder: open the last project instead.
   const launched = process.cwd() === "/" || process.cwd() === homedir();
-  const recent = ((loadState() as { recentProjects?: string[] }).recentProjects ?? []).find((p) => existsSync(p));
+  const st = loadState(), recent = ((st as { recentProjects?: string[] }).recentProjects ?? []).find((p) => existsSync(p) && isTrustedDir(st, p));   // never a folder you did not trust: it would ask again at every start
   const cwd = resolve(folder ?? (launched && recent ? recent : process.cwd()));
   if (!existsSync(cwd)) { console.error(`amness-desktop: no such folder: ${cwd}`); return 2; }
 

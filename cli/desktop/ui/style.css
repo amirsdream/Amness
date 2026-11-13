@@ -34,6 +34,27 @@
     color-scheme: light;
 }
 
+/* Retro: blue panels, cyan double frames, yellow highlights and square corners, as in a DOS two-panel file manager. Chosen in Preferences, never the default. */
+:root[data-theme="retro"] {
+    --bg: #0000a8; --bg2: #000090; --surface: #0000a8; --surface2: #000070; --surface3: #00006a; --border: #54fcfc; --border2: #54fcfc;
+    --text: #fcfcfc; --muted: #b8c8f0; --faint: #9098d8; --accent: #fcfc54; --accent2: #54fcfc; --on-accent: #000000;
+    --ok: #54fc54; --warn: #fcfc54; --err: #ff8888; --add-bg: #004400; --add-fg: #7cfc7c; --del-bg: #500000; --del-fg: #ff9c9c;
+    --code-bg: #000070; --sel: #006868; --shadow: 6px 6px 0 rgba(0, 0, 0, .55); --glow: 0 0 0 1px #fcfc54;
+    --ansi-k: #9098d8; --ansi-r: #ff8888; --ansi-g: #54fc54; --ansi-y: #fcfc54; --ansi-b: #8cb4ff; --ansi-m: #fc9cfc; --ansi-c: #54fcfc; --ansi-w: #d0d8f8;
+    --ansi-bk: #a8b0e0; --ansi-br: #ffaaaa; --ansi-bg: #7cfc7c; --ansi-by: #fcfc88; --ansi-bb: #aac8ff; --ansi-bm: #fcbcfc; --ansi-bc: #88fcfc; --ansi-bw: #ffffff;
+    --radius: 0; --sans: var(--mono);
+    color-scheme: dark;
+}
+:root[data-theme="retro"] *, :root[data-theme="retro"] *::before, :root[data-theme="retro"] *::after { border-radius: 0 !important; }
+:root[data-theme="retro"] .sidebar { border-right: 3px double var(--border); }
+:root[data-theme="retro"] .panel { border-left: 3px double var(--border); }
+:root[data-theme="retro"] .topbar { background: #00a8a8; color: #000000; border-bottom: 0; }
+:root[data-theme="retro"] .topbar :is(button, span, input) { color: #000000; }
+:root[data-theme="retro"] .topbar :is(.segmented, #modelBtn), :root[data-theme="retro"] .topbar :is(.segmented, #modelBtn) :is(button, span) { color: var(--text); }
+:root[data-theme="retro"] .topbar .segmented button.on { color: #000000; background: var(--accent); }
+:root[data-theme="retro"] :is(.composer, .modal) { border: 3px double var(--border); box-shadow: var(--shadow); }
+:root[data-theme="retro"] .bubble { background: #00a8a8; color: #000000; } :root[data-theme="retro"] .bubble .note { color: #003838; }
+
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; overflow: hidden; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }

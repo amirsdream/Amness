@@ -21,8 +21,8 @@ import type { App } from "./app.ts";
 import { estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
 import { codeBlocks } from "./clipboard.ts";
 import { execFile } from "node:child_process";
-import { caseFromWorkspace, commitLog, createPr, currentBranch, defaultBase, diffForReview, draftPr, hasUpstream, pushBranch, reviewWork, formatMining, Hooks, Permissions, SANDBOX_MODES, cacheWaste, projectConfigFingerprint, sandboxHelp, sandboxKind, type SandboxMode } from "../../src/index.ts";
-import { loadState, saveState } from "../state.ts";
+import { caseFromWorkspace, commitLog, createPr, currentBranch, defaultBase, diffForReview, draftPr, hasUpstream, pushBranch, reviewWork, formatMining, Hooks, Permissions, SANDBOX_MODES, cacheWaste, pluginFingerprint, projectConfigFingerprint, sandboxHelp, sandboxKind, type SandboxMode } from "../../src/index.ts";
+import { isTrustedDir, loadState, saveState } from "../state.ts";
 import { tokenReport } from "./tokens.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
 import { helpLines, renderDiff, toolCall, todoList } from "./view.ts";
@@ -445,6 +445,16 @@ export function buildCommands(): Cmd[] {
     { name: "hooks", help: "lifecycle hooks in effect (.amness/hooks.json, ~/.amness/hooks.json)", live: true, run: (a) => {
       const l = a.hooks.list(), fp = Hooks.fingerprint(a.cwd);
       a.commit(["", bold("  Hooks"), ...(l.length ? l.map((h) => `  ${cyan(h.event.padEnd(16))} ${h.def.match ? dim(`[${h.def.match}] `) : ""}${h.def.command} ${dim(`${h.def.timeout ?? 10}s${h.def.failClosed ? " · fail closed" : ""}`)}`) : [dim("  none active")]), ...(fp && !l.some(() => true) ? [dim("  this project has .amness/hooks.json but it is not approved; restart and allow it")] : []), dim("  exit 0 allows · exit 2 blocks (stderr is shown to the model) · stdout JSON can add context or rewrite arguments")]);
+    } },
+    { name: "trust", args: "[reset]", help: "this folder's trust: shows it and asks again about project hooks, rules and plugins you said no to; reset forgets the yes answers too", run: async (a, arg) => {
+      if (!a.persist) return void a.say("nothing is saved in this session, so there is nothing to change", dim);
+      const st = loadState(), cwd = a.cwd, hfp = projectConfigFingerprint(cwd), pfp = pluginFingerprint(cwd), reset = arg.trim() === "reset";
+      const what = (fp: string | undefined, yes?: Record<string, string>, no?: Record<string, string>) => !fp ? dim("none in this project") : yes?.[cwd] === fp ? green("trusted") : no?.[cwd] === fp ? yellow("you said no") : dim("not asked yet");
+      a.commit(["", bold("  Trust for this folder"), `  folder          ${isTrustedDir(st, cwd) ? green("trusted") : yellow("not trusted")}`, `  hooks and rules ${what(hfp, st.hookTrust, st.hookDeclined)}`, `  plugins         ${what(pfp, st.pluginTrust, st.pluginDeclined)}`, dim("  remove a trusted folder in Preferences (Trusted folders)")]);
+      for (const k of ["hookDeclined", "pluginDeclined", ...(reset ? ["hookTrust", "pluginTrust"] as const : [])] as const) { const m = st[k]; if (m) delete m[cwd]; }
+      saveState(st);
+      if ((hfp && st.hookTrust?.[cwd] !== hfp) || (pfp && st.pluginTrust?.[cwd] !== pfp)) await a.askHookTrust();
+      else if (reset) { a.loadHooks(); await a.loadPluginsNow(); a.buildAgent(); }
     } },
     { name: "permissions", help: "permission rules: list · allow|ask|deny <rule> · e.g. /permissions allow sh(npm test*)", args: "[allow|ask|deny <rule>]", live: true, run: (a, arg) => {
       const [list, ...rest] = arg.split(/\s+/), rule = rest.join(" ");

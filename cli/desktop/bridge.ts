@@ -68,9 +68,9 @@ export class DesktopBridge {
   private dialogOf?: object; private dialogId = 0; private switching = false;
 
   /** The window's colour scheme: the App's renderers use a matching theme for the text they colour. */
-  scheme: "dark" | "light" = "dark";
+  scheme: "dark" | "light" | "retro" = "dark";
   constructor(o: BridgeOptions) { this.o = o; this.emit = o.emit; this.cwd = resolve(o.cwd); setLevel(3); forceColor(true); this.open(this.cwd); }   // the window turns terminal colours into HTML
-  get theme() { return getTheme(this.scheme === "light" ? "daylight" : this.app.cfg.theme && getTheme(this.app.cfg.theme).dark ? this.app.cfg.theme : "aurora"); }
+  get theme() { return getTheme(this.scheme === "light" ? "daylight" : this.scheme === "retro" ? "retro" : this.app.cfg.theme && getTheme(this.app.cfg.theme).dark ? this.app.cfg.theme : "aurora"); }
 
   /**
    * Run an App for `cwd`. The previous one ends (its conversation is saved), unless it is busy (working, or waiting for your answer):
@@ -88,6 +88,7 @@ export class DesktopBridge {
     void app.done.then((code) => {
       this.live = this.live.filter((l) => l.app !== app);
       if (this.switching || this.app !== app) return;
+      if (code === NOT_TRUSTED) this.forgetRecent(cwd);                                 // a folder you said no to is not opened again by itself at the next start
       if (code === NOT_TRUSTED && back) { this.emit({ type: "toast", level: "warn", text: `not opened: you did not trust ${cwd}` }); this.open(back); this.fullSync(); this.changed(); return; }
       this.emit({ type: "exit" });
     });
@@ -240,7 +241,7 @@ export class DesktopBridge {
   send(text: string) { void this.app.submitText(text.trim()); }
   stop() { this.app.interrupt(); }
   setMode(m: "default" | "acceptEdits" | "plan" | "yolo") { this.app.setMode(m); this.changed(); }
-  setScheme(s: "dark" | "light") { this.scheme = s; this.changed(); }
+  setScheme(s: "dark" | "light" | "retro") { this.scheme = s; this.changed(); }
   toggleStep(n: number) { toggleStep(this.panel, n); this.changed(); }
   commands() { return this.app.cmds.map((c) => ({ name: c.name, alias: c.alias, help: c.help, args: c.args, group: groupOf(c.name), live: !!c.live })); }
   suggest(text: string, cursor: number) { return this.app.suggestionsFor(text, cursor, () => this.emit({ type: "suggestReady" })); }
@@ -290,6 +291,11 @@ export class DesktopBridge {
     const abs = resolve(dir); if (!existsSync(abs) || !statSync(abs).isDirectory()) throw new Error(`not a folder: ${dir}`);
     if (this.o.persist !== false) { const st = loadState() as ReturnType<typeof loadState> & { recentProjects?: string[] }; st.recentProjects = [abs, ...(st.recentProjects ?? []).filter((p) => p !== abs)].slice(0, 12); saveState(st); }
     this.open(abs, { keep: true, cfg: this.busy(this.app) ? cloneConfig(this.app.cfg) : undefined }); this.hello();
+  }
+  private forgetRecent(dir: string) {
+    if (this.o.persist === false) return;
+    const st = loadState() as ReturnType<typeof loadState> & { recentProjects?: string[] }; if (!st.recentProjects?.includes(dir)) return;
+    st.recentProjects = st.recentProjects.filter((p) => p !== dir); saveState(st);
   }
   recentProjects(): string[] { return ((loadState() as { recentProjects?: string[] }).recentProjects ?? []).filter((p) => existsSync(p)); }
 

@@ -219,7 +219,7 @@ Headless runs (`amness run`) deny risky commands unless you pass `--yes`. Do not
 **How it works.**
 
 1. Choose **Yes, I trust this folder** to continue. Amness saves your answer in `~/.amness/state.json` and does not ask again. Folders inside a trusted folder are trusted too.
-2. Choose **No, exit** (or `Esc`) to stop. The terminal app exits with code 3. In the desktop app, **No** goes back to the project you had open; for the first project it closes the window.
+2. Choose **No, exit** (or `Esc`) to stop. The terminal app exits with code 3. In the desktop app, **No** goes back to the project you had open; for the first project it closes the window. A folder you said no to is taken off the recent projects, so the desktop app does not open it again by itself at the next start.
 3. If the folder is your home folder, Amness warns you and suggests opening a project folder instead.
 4. A headless run (`amness run`) does not ask: you chose the folder with `--cwd`.
 
@@ -231,7 +231,8 @@ A cloned repository can contain `.amness/hooks.json`, `.amness/plugins/` and `al
 
 1. In the chat, Amness asks once for hooks and rules, and once for plugins. Read the files first.
 2. If a file changes later, Amness asks again. The check compares a fingerprint of the exact content.
-3. In a headless run, project hooks, plugins and `allow` rules are off. Pass `--trust-project` to use them.
+3. Your **No** is saved too. Amness does not ask again for the same files, also not in a new chat or another desktop chat. It shows a short note that they are off. To change your answer, type `/trust`, or open **Settings > Folders and trust > Project hooks and plugins**. `/trust` shows what you trusted and asks again. `/trust reset` also forgets your yes answers.
+4. In a headless run, project hooks, plugins and `allow` rules are off. Pass `--trust-project` to use them.
 
 Hooks and plugins are not sandboxed. A trusted hook can do anything your user can do.
 

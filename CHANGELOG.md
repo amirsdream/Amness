@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Retro theme.** `/theme retro` in the terminal, and **Retro** under Preferences > Appearance in the desktop app: blue panels, cyan double frames, yellow highlights, and a key bar at the bottom of the terminal. It is a choice on every system. The default stays Aurora, on Windows too.
+- **Provider icons that look like their brand.** Claude keeps ✻. OpenAI models now show ❁ (a blossom, like the OpenAI mark), and local models show ⌂ (they run at home, on your machine). Before, these were ◈ and ⬢.
+- **A No to project hooks or plugins is remembered.** Before, Amness asked again in every new chat, and the desktop app starts one for each chat. Now it asks again only when those files change. `/trust` (or Settings > Folders and trust) shows your answers and asks again.
+- **Fixed: the desktop app reopened a folder you did not trust.** A folder you open goes into the recent projects. After a No it stayed there, so the next start opened it, asked again and closed the window. Now a No removes it, and the app never starts in a folder you did not trust.
+
 ## 0.8.1 (2026-11-12)
 
 - **A local model that only looks now starts writing.** On a task that asks for a new program, a local model looked at the same small files again and again (`read_file`, `xxd`, `od`) and never wrote anything. Three causes are fixed. The prompts now say that a new program starts with a first working version that is then improved. With a local-tier model outside the chat, the agent is told at steps 6 and 10, if it has not edited a file yet, to write a first version and improve it (the write-first note, part of the `wrapup` guard). And reading through `sh` (`cat`, `od`, `grep` and similar) now counts as reading, so the "only reading" note can fire. Measured on 2026-11-12 on the Terminal-Bench task `cobol-modernization`: with the note the agent wrote the program and passed; with a note of the same length without the advice it edited nothing. One run each.

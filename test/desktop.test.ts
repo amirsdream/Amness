@@ -265,5 +265,6 @@ test("desktop: a new folder asks whether you trust it; No while switching projec
     assert.ok(await d.until(() => d.events.some((e) => e.type === "toast" && /not opened: you did not trust/.test(e.text))));
     assert.ok(await d.until(() => !d.events.some((e) => e.type === "exit")));
     assert.equal((await d.api("/api/state")).json.cwd, d.dir);                          // back in the first project, window still open
+    assert.ok(!(await d.api("/api/projects")).json.includes(other), "a folder you said no to leaves the recent list, so the next start does not open it and ask again");
   } finally { await d.close(); }
 });

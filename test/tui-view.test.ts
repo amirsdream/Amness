@@ -68,7 +68,7 @@ test("view: todos, option lists, framed boxes, footer, help, welcome", () => {
   assert.match(box[0], /^╭─ Edit file ─+╮$/); assert.match(box.at(-1)!, /^╰─+╯$/);
   const f = strip(v.footer({ mode: "acceptEdits", model: "claude-opus-5-5", ctxPct: 12, cost: "$0.42", branch: "main", queued: 2 }, 100));
   assert.ok(f.includes("accept edits on") && f.includes("✻ claude-opus-5-5") && /▰+▱+ 12%/.test(f) && f.includes("$0.42") && f.includes("2 queued") && cellWidth(f) <= 100);
-  assert.ok(strip(v.footer({ mode: "default", model: "gpt-4.1", provider: "openai", ctxPct: null, cost: "" }, 80)).includes("◈ gpt-4.1"));
+  assert.ok(strip(v.footer({ mode: "default", model: "gpt-4.1", provider: "openai", ctxPct: null, cost: "" }, 80)).includes("❁ gpt-4.1"));
   assert.ok(strip(v.footer({ mode: "default", model: "m", ctxPct: null, cost: "" }, 60)).includes("? for shortcuts"));
   assert.ok(P(v.helpLines([{ name: "model", help: "switch model" }], 80)).join("\n").match(/\/model\s+switch model/));
   const w = P(v.welcome({ version: "0.1", model: "m", cwd: "/x/y", notes: 2, mode: "default", verify: "npm test" }, 80)).join("\n");

@@ -126,6 +126,7 @@ const DEFS: Def[] = [
       st.trustedDirs = add ? [...new Set([...(st.trustedDirs ?? []), d])] : (st.trustedDirs ?? []).filter((x) => x !== d); saveState(st);
       return add ? `trusted: ${d}` : `${d} is not trusted any more${under(resolve(a.cwd), d) ? " (this project included: you are asked again next time)" : ""}`;
     } },
+  { group: "folders", id: "projectTrust", label: "Project hooks and plugins", help: "Shows whether you trusted this project's hooks, permission rules and plugins. A no is remembered until those files change; this asks again.", kind: "action", command: "/trust", button: "Review…" },
   // search and memory
   { group: "search", id: "tavilyKey", label: "Tavily key", help: "Better web search (tavily.com). Kept in your system's key store. Empty removes it.", kind: "secret", placeholder: "not set",
     read: (a) => ({ value: a.cfg.tavilyKey ? mask(a.cfg.tavilyKey) : "" }), write: (_, v) => (a) => { a.cfg.tavilyKey = String(v) || undefined; a.saveConfig(); a.buildAgent(); return v ? "Tavily key saved: web search uses Tavily" : "Tavily key removed"; } },

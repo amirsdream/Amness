@@ -190,3 +190,14 @@ test("skills: /skills off hides one from the model and marks it in the sidebar, 
   await t.submit("/skills bogus"); assert.ok(await t.until(() => t.has("unknown: /skills bogus")));
   await t.key(KEY.ctrlD);
 });
+
+test("full UI: the retro theme draws double frames, a double sidebar line and a key bar; the default theme keeps rounded frames on every system", async () => {
+  assert.equal(getTheme().name, "aurora"); assert.equal(getTheme().frame, "round"); assert.equal(getTheme().keybar, undefined);   // retro is a choice, never the default (Windows included)
+  const t = rig([], { ui: "full", theme: "retro", cols: 120, rows: 24 }); await t.start();
+  try {
+    const s = t.screen();
+    assert.match(s, /╔═ ask ═/); assert.match(s, /╚═+╝/); assert.ok(!/╭|╰/.test(s), "no rounded corners");
+    assert.match(s, /║  /);                                                              // the sidebar line
+    const foot = t.vt.screen().at(-1)!; assert.match(foot, /^enter send +ctrl\+p commands/);
+  } finally { await t.key(KEY.ctrlD); }
+});

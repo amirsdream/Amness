@@ -70,8 +70,8 @@ export const toolColor = (name: string): RGB => CATEGORY[name] ?? (name.includes
 /** Provider/model identity: a glyph and an accent colour. */
 export function brandOf(model: string, provider = ""): { icon: string; color: RGB } {
   if (/claude|fable|mythos/i.test(model) || provider === "anthropic") return { icon: "✻", color: palette.claude };
-  if (/gpt|o[134]-|openai|chatgpt/i.test(model) || provider === "openai") return { icon: "◈", color: palette.openai };
-  if (/llama|qwen|mistral|gemma|phi|deepseek|ollama/i.test(model) || provider === "ollama") return { icon: "⬢", color: palette.local };
+  if (/gpt|o[134]-|openai|chatgpt/i.test(model) || provider === "openai") return { icon: "❁", color: palette.openai };
+  if (/llama|qwen|mistral|gemma|phi|deepseek|ollama/i.test(model) || provider === "ollama") return { icon: "⌂", color: palette.local };
   return { icon: "◆", color: palette.other };
 }
 

@@ -69,7 +69,7 @@ test("stackedBar: segments add up to exactly the width, legend lists non-empty p
 });
 
 test("brand + tool colours: Claude/OpenAI/local get their own identity; tools are coloured by what they do", () => {
-  assert.deepEqual([T.brandOf("claude-opus-5-5").icon, T.brandOf("gpt-4.1").icon, T.brandOf("qwen2.5-coder:7b").icon, T.brandOf("mystery").icon], ["✻", "◈", "⬢", "◆"]);
+  assert.deepEqual([T.brandOf("claude-opus-5-5").icon, T.brandOf("gpt-4.1").icon, T.brandOf("qwen2.5-coder:7b").icon, T.brandOf("mystery").icon], ["✻", "❁", "⌂", "◆"]);
   assert.equal(T.brandOf("whatever", "anthropic").icon, "✻");
   assert.deepEqual(T.toolColor("read_file"), T.palette.read); assert.deepEqual(T.toolColor("sh"), T.palette.shell); assert.deepEqual(T.toolColor("edit_file"), T.palette.edit);
   assert.deepEqual(T.toolColor("github__create_issue"), T.palette.web); assert.deepEqual(T.toolColor("totally_new"), T.palette.generic);
