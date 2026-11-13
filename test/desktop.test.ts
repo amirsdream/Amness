@@ -284,3 +284,10 @@ test("desktop: Preferences shows where each setting comes from and saves a chang
     assert.equal(item(r.settings, "plans").scope, "chat"); assert.equal(JSON.parse(readFileSync(local, "utf8")).plans, undefined); assert.equal(JSON.parse(readFileSync(user, "utf8")).plans, undefined);
   } finally { await d.close(); }
 });
+
+test("desktop start: the window shows its own start screen at once (a local page with its own strict policy) and the app page fades the same picture out", () => {
+  const ui = (f: string) => readFileSync(new URL(`../cli/desktop/ui/${f}`, import.meta.url), "utf8"), main = readFileSync(new URL("../cli/desktop/electron-main.cjs", import.meta.url), "utf8");
+  assert.match(ui("splash.html"), /http-equiv="Content-Security-Policy" content="default-src 'none'/); assert.match(ui("splash.html"), />A<\/span>/);
+  assert.match(main, /AMNESS_DESKTOP_WAIT/); assert.match(main, /loadFile\(path\.join\(__dirname, "ui", "splash\.html"\)\)/);
+  assert.match(ui("index.html"), /id="boot"/); assert.match(ui("app.js"), /bootDone\(\)/);
+});

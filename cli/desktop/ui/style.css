@@ -55,6 +55,19 @@
 :root[data-theme="retro"] :is(.composer, .modal) { border: 3px double var(--border); box-shadow: var(--shadow); }
 :root[data-theme="retro"] .bubble { background: #00a8a8; color: #000000; } :root[data-theme="retro"] .bubble .note { color: #003838; }
 
+/* ---------------------------------------------------------------- start screen */
+.boot { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: radial-gradient(60% 50% at 50% 46%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%), var(--bg); transition: opacity .45s ease, transform .55s cubic-bezier(.2, .7, .2, 1), filter .45s ease; -webkit-app-region: drag; }
+.boot-mark { width: 76px; height: 76px; }
+.boot-name { font-size: 30px; font-weight: 650; letter-spacing: .02em; }
+.boot-tag { color: var(--muted); font-size: 12.5px; }
+.boot-bar { width: 160px; height: 2px; border-radius: 2px; background: color-mix(in srgb, var(--muted) 22%, transparent); overflow: hidden; }
+.boot-bar::after { content: ""; display: block; width: 40%; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); animation: boot-run 1.1s ease-in-out infinite; }
+@keyframes boot-run { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+.boot.gone { opacity: 0; transform: scale(1.04); filter: blur(6px); pointer-events: none; }
+/* the app settles in under it: a short rise, so the change reads as one movement */
+body:not(.booted) .app { opacity: 0; transform: translateY(6px); }
+body.booted .app { transition: opacity .5s ease .08s, transform .6s cubic-bezier(.2, .7, .2, 1) .08s; }
+
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; overflow: hidden; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }

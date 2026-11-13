@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Desktop: the window opens at once.** Amness now starts the window first and shows a start screen (the logo, the name, a moving line) while the agent loads, then fades into the app. Before, nothing showed until everything had loaded.
+- **Desktop: easier to find your way.** The top bar has a search box, "Search or run a command" (Ctrl/Cmd K), clear icons instead of symbols, and a labelled Settings button. In Preferences, controls line up across rows and tabs, and folder lists are one tidy box.
 - **Settings for this chat, this project or all your projects**, as in Claude Code. `.amness/settings.local.json` holds your settings for one project (kept out of git), `.amness/settings.json` the team's (used after you trust it; it cannot choose your provider or keys or loosen safety), `~/.amness/config.json` yours for every project. A setting about the code is saved for this project, a setting about you for all projects. `/set … --chat|--project|--team|--user`, the Apply choices in `/settings` and **Save for** in Preferences choose another place, and every setting shows where its value comes from. The agent cannot edit these files.
 - **Fixed (desktop):** a long choice in Preferences no longer squeezes its description into a thin column.
 - **Retro theme.** `/theme retro` in the terminal, and **Retro** under Preferences > Appearance in the desktop app: blue panels, cyan double frames, yellow highlights, and a key bar at the bottom of the terminal. It is a choice on every system. The default stays Aurora, on Windows too.

@@ -20,6 +20,9 @@ const run = (text) => tryApi("/api/send", { text });
 
 // ------------------------------------------------------------------ small DOM helpers
 const $ = (id) => document.getElementById(id);
+/** The start picture leaves once the app has something to show (or after a while, so a slow start never hides the app). */
+const bootDone = () => { const b = $("boot"); if (!b || b.classList.contains("gone")) return; b.classList.add("gone"); document.body.classList.add("booted"); setTimeout(() => b.remove(), 700); };
+setTimeout(bootDone, 8000);
 function h(tag, props, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
@@ -486,7 +489,7 @@ function onServer(e) {
   switch (e.type) {
     case "blocks": blocks.clear(); order = []; cache.clear(); for (const b of e.blocks) { blocks.set(b.id, b); order.push(b.id); } render(true); toBottom(); break;
     case "block": if (!blocks.has(e.block.id)) order.push(e.block.id); blocks.set(e.block.id, e.block); render(); break;
-    case "state": { const prev = state; state = e.state; sd = state.sidebar; applyState(prev); const sig = (st) => JSON.stringify((st?.live || []).map((l) => [l.id, l.running, l.waiting])); if (sig(prev) !== sig(state)) loadSessions(); break; }
+    case "state": { if (!state) bootDone(); const prev = state; state = e.state; sd = state.sidebar; applyState(prev); const sig = (st) => JSON.stringify((st?.live || []).map((l) => [l.id, l.running, l.waiting])); if (sig(prev) !== sig(state)) loadSessions(); break; }
     case "dialog": showDialog(e.dialog); break;
     case "dialogClose": if (dialogOpen === e.id) closeModal(); break;
     case "toast": toast(e.level, stripAnsi(e.text)); break;

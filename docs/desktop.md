@@ -45,7 +45,7 @@ The window runs the terminal app itself (the same `App`), so everything the term
 
 ## Preferences
 
-Click ⚙ in the top bar, or press `⌘,` (macOS) or `Ctrl+,`.
+Click **Settings** at the right of the top bar, or press `⌘,` (macOS) or `Ctrl+,`.
 
 **Every change waits for Apply.** A changed setting gets a dot, and so does its tab. The footer counts the changes: **3 changes not applied yet · Revert · Apply**.
 
@@ -77,7 +77,7 @@ The app has its own icon (the Amness mark) in the dock, the taskbar and the wind
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl/⌘ K` | All commands |
+| `Ctrl/⌘ K` | All commands (or click **Search or run a command** in the middle of the top bar) |
 | `Ctrl/⌘ N` | New conversation |
 | `Ctrl/⌘ O` | Open a project folder |
 | `Ctrl/⌘ P` | Go to a file |

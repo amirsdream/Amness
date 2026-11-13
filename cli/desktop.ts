@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.ts";
 import { isTrustedDir, loadState } from "./state.ts";
 import { openUrl } from "./tui/openurl.ts";
-import { startDesktopServer } from "./desktop/server.ts";
 
 const VERSION: string = (() => { for (const rel of ["../package.json", "../../package.json"]) { try { return JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8")).version; } catch { /* try the next */ } } return "dev"; })();
 const HELP = `amness-desktop ${VERSION}: the Amness desktop app
@@ -49,23 +48,30 @@ export async function runDesktop(argv: string[]): Promise<number> {
   const cwd = resolve(folder ?? (launched && recent ? recent : process.cwd()));
   if (!existsSync(cwd)) { console.error(`amness-desktop: no such folder: ${cwd}`); return 2; }
 
-  const srv = await startDesktopServer({ cfg: loadConfig(), cwd, version: VERSION, port: val("--port") ? Number(val("--port")) : undefined });
-  const stop = async (code = 0) => { await srv.close(); process.exit(code); };
+  // The window comes first: Electron starts now and shows its start screen (ui/splash.html) while the agent and its server load here,
+  // then gets the address on stdin. Loading the server is most of the wait, so it is imported only after the window is on its way.
+  let child: ChildProcess | undefined, srv: Awaited<ReturnType<typeof import("./desktop/server.ts").startDesktopServer>> | undefined;
+  const stop = async (code = 0) => { await srv?.close(); process.exit(code); };
   process.on("SIGINT", () => void stop(0)); process.on("SIGTERM", () => void stop(0));
-
-  if (argv.includes("--no-window")) { console.log(`Amness desktop is running at ${srv.url}\n(keep the address private: it carries the access token). Ctrl+C stops it.`); return await new Promise<number>(() => {}); }
-  let child: ChildProcess | undefined;
-  const bin = argv.includes("--browser") ? undefined : electronBinary();
+  const bin = argv.includes("--browser") || argv.includes("--no-window") ? undefined : electronBinary();
   if (bin) {
     const main = fileURLToPath(new URL("./desktop/electron-main.cjs", import.meta.url));
-    const env: NodeJS.ProcessEnv = { ...process.env, AMNESS_DESKTOP_URL: srv.url, AMNESS_DESKTOP_TITLE: `Amness · ${srv.bridge.state().project}` };
-    delete env.ELECTRON_RUN_AS_NODE;                                                      // set by some editors' terminals; it would make Electron act as plain Node
-    child = spawn(bin, [main], { stdio: ["ignore", "ignore", "inherit"], env });
-    child.on("error", (e) => { console.error(`amness-desktop: Electron did not start (${e.message}); opening it another way`); child = undefined; void fallback(); });
+    const env: NodeJS.ProcessEnv = { ...process.env, AMNESS_DESKTOP_WAIT: "1" };
+    delete env.ELECTRON_RUN_AS_NODE; delete env.AMNESS_DESKTOP_URL;                         // ELECTRON_RUN_AS_NODE (set by some editors) would make Electron plain Node
+    child = spawn(bin, [main], { stdio: ["pipe", "ignore", "inherit"], env });
+    child.on("error", (e) => { console.error(`amness-desktop: Electron did not start (${e.message}); opening it another way`); child = undefined; if (srv) void fallback(); });
     child.on("exit", () => void stop(0));
-  } else await fallback();
+    child.stdin?.on("error", () => { /* the window closed first */ });
+  }
+  const { startDesktopServer } = await import("./desktop/server.ts");
+  srv = await startDesktopServer({ cfg: loadConfig(), cwd, version: VERSION, port: val("--port") ? Number(val("--port")) : undefined });
+
+  if (argv.includes("--no-window")) { console.log(`Amness desktop is running at ${srv.url}\n(keep the address private: it carries the access token). Ctrl+C stops it.`); return await new Promise<number>(() => {}); }
+  if (child) child.stdin?.write(JSON.stringify({ url: srv.url, title: `Amness · ${srv.bridge.state().project}` }) + "\n");
+  else await fallback();
 
   async function fallback() {
+    if (!srv) return;
     const chrome = argv.includes("--browser") ? undefined : chromeApp();
     if (chrome) {
       const profile = resolve(homedir(), ".amness", "desktop-profile");
@@ -74,6 +80,7 @@ export async function runDesktop(argv: string[]): Promise<number> {
     } else await browser();
   }
   async function browser() {
+    if (!srv) return;
     const ok = await openUrl(srv.url);
     console.log(`${ok ? "Opened" : "Open"} Amness in your browser: ${srv.url}\nCtrl+C stops it.`);
   }

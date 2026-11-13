@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- The window shows this at once while Amness starts (cli/desktop/electron-main.cjs); the app page then opens with the same picture and fades it out. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'">
+<title>Amness</title>
+<style>
+  :root { --bg: #0e1116; --text: #e6e9ef; --muted: #8f9aac; --a1: #8b7cf6; --a2: #5ec4e8; color-scheme: dark; }
+  @media (prefers-color-scheme: light) { :root { --bg: #f7f8fa; --text: #1b2130; --muted: #5d6779; --a1: #6d5ce8; --a2: #0f8fbd; color-scheme: light; } }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Inter, Roboto, sans-serif; overflow: hidden; -webkit-app-region: drag; user-select: none; }
+  .stage { height: 100%; display: grid; place-items: center; background: radial-gradient(60% 50% at 50% 46%, color-mix(in srgb, var(--a1) 12%, transparent), transparent 70%); }
+  .brand { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .mark { width: 76px; height: 76px; opacity: 0; transform: scale(.82) rotate(-30deg); filter: drop-shadow(0 0 0 transparent); animation: mark .9s cubic-bezier(.2, .7, .2, 1) .05s forwards, glow 2.4s ease-in-out 1s infinite; }
+  .name { display: flex; font-size: 30px; font-weight: 650; letter-spacing: .02em; }
+  .name span { opacity: 0; transform: translateY(10px); animation: rise .55s cubic-bezier(.2, .7, .2, 1) forwards; }
+  .tag { color: var(--muted); font-size: 12.5px; opacity: 0; animation: fade .6s ease .75s forwards; }
+  .bar { width: 160px; height: 2px; border-radius: 2px; background: color-mix(in srgb, var(--muted) 22%, transparent); overflow: hidden; opacity: 0; animation: fade .4s ease .9s forwards; }
+  .bar::after { content: ""; display: block; width: 40%; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--a1), var(--a2)); animation: run 1.1s ease-in-out infinite; }
+  @keyframes mark { to { opacity: 1; transform: none; } }
+  @keyframes glow { 50% { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--a1) 55%, transparent)); } }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  @keyframes fade { to { opacity: 1; } }
+  @keyframes run { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+  @media (prefers-reduced-motion: reduce) { *, *::after { animation: none !important; opacity: 1 !important; transform: none !important; } .bar { display: none; } }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="brand" role="status" aria-label="Amness is starting">
+      <img class="mark" src="mark.svg" alt="">
+      <div class="name" aria-hidden="true"><span style="animation-delay:.30s">A</span><span style="animation-delay:.36s">m</span><span style="animation-delay:.42s">n</span><span style="animation-delay:.48s">e</span><span style="animation-delay:.54s">s</span><span style="animation-delay:.60s">s</span></div>
+      <div class="tag">reliable agents for any model</div>
+      <div class="bar"></div>
+    </div>
+  </div>
+</body>
+</html>

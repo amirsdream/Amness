@@ -1,11 +1,18 @@
 // Electron main process for `amness-desktop`. It is only a window: the agent runs in the Node process that started it (cli/desktop.ts),
-// which passes the local address in AMNESS_DESKTOP_URL. The page runs sandboxed with no Node access; it may only ask for a folder picker.
+// which passes the local address in AMNESS_DESKTOP_URL, or (AMNESS_DESKTOP_WAIT) starts this first and sends {url, title} as one line on stdin
+// once its server is up, so the window and its start screen (ui/splash.html) appear at once. The page runs sandboxed with no Node access.
 const { app, BrowserWindow, Menu, Notification, dialog, ipcMain, nativeTheme, session, shell } = require("electron");
 const path = require("node:path");
 
-const target = process.env.AMNESS_DESKTOP_URL;
-if (!target) { console.error("amness-desktop: start it with the amness-desktop command"); process.exit(2); }
-const origin = new URL(target).origin;
+let target = process.env.AMNESS_DESKTOP_URL, origin = target ? new URL(target).origin : undefined;
+const waiting = !target && !!process.env.AMNESS_DESKTOP_WAIT;
+if (!target && !waiting) { console.error("amness-desktop: start it with the amness-desktop command"); process.exit(2); }
+/** The address, once the Node process has sent it (only when waiting). */
+const address = waiting ? new Promise((res) => {
+  let buf = ""; process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (d) => { buf += d; const i = buf.indexOf("\n"); if (i < 0) return; try { const m = JSON.parse(buf.slice(0, i)); if (typeof m.url === "string" && /^http:\/\/127\.0\.0\.1:\d+\//.test(m.url)) res(m); } catch { /* not ours */ } });
+  process.stdin.on("end", () => app.quit());                                                 // the Node process went away before the server was up
+}) : Promise.resolve({ url: target });
 const ICON = path.join(__dirname, "assets", "icon.png");                                      // the app icon: window, taskbar, dock
 const SIZE = (process.env.AMNESS_DESKTOP_SIZE || "1440x920").split("x").map(Number);              // a check can ask for a smaller window
 app.setName("Amness");
@@ -21,7 +28,7 @@ function createWindow() {
     icon: ICON,
     webPreferences: { preload: path.join(__dirname, "electron-preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, spellcheck: true },
   });
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => win.show());                                               // the start screen is a local page, so this comes at once
   if (process.env.AMNESS_DESKTOP_EVAL) {                                                      // for automated UI checks: run a script in the page, print its result, quit
     win.webContents.once("did-finish-load", async () => {
       let out; try { out = await win.webContents.executeJavaScript(require("node:fs").readFileSync(process.env.AMNESS_DESKTOP_EVAL, "utf8")); } catch (e) { out = { error: String(e && e.message || e) }; }
@@ -32,8 +39,11 @@ function createWindow() {
     win.webContents.once("did-finish-load", () => setTimeout(async () => { require("node:fs").writeFileSync(process.env.AMNESS_DESKTOP_SCREENSHOT, (await win.webContents.capturePage()).toPNG()); app.quit(); }, Number(process.env.AMNESS_DESKTOP_SCREENSHOT_MS || 2500)));
   }
   win.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: "deny" }; });
-  win.webContents.on("will-navigate", (e, url) => { if (new URL(url).origin !== origin) { e.preventDefault(); openExternal(url); } });
-  void win.loadURL(target);
+  win.webContents.on("will-navigate", (e, url) => { if (!origin || new URL(url).origin !== origin) { e.preventDefault(); openExternal(url); } });
+  if (waiting) {
+    void win.loadFile(path.join(__dirname, "ui", "splash.html"));
+    void address.then((m) => { target = m.url; origin = new URL(m.url).origin; if (m.title) win.setTitle(String(m.title)); void win.loadURL(target); });
+  } else void win.loadURL(target);
   return win;
 }
 
