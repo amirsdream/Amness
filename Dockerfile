@@ -1,6 +1,6 @@
 # Portable Amness: one small image, any machine. Type stripping needs Node >= 22.18; no build step. The Anthropic SDK is installed
 # so the Claude provider works; Electron (for the desktop app) is installed without its program.
-FROM node:24-alpine
+FROM node:26-alpine
 WORKDIR /opt/amness
 COPY package.json ./
 # Keys are never written inside the container: pass them as an environment variable or a Docker secret.

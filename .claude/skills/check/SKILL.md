@@ -10,7 +10,7 @@ Run these from the repo root, in this order. Stop at the first failure and fix i
 4. One file while iterating: `node --test test/<name>.test.ts`.
 
 Notes:
-- CI runs Node 22 and 24, plus a Windows job. Do not use POSIX-only paths or shell syntax in tests; compare paths and output without assuming `/` or line wraps.
+- CI runs Node 22, 24 and 26, plus a Windows job. Do not use POSIX-only paths or shell syntax in tests; compare paths and output without assuming `/` or line wraps.
 - The Linux sandbox tests need Bubblewrap; on macOS they skip.
 - Report what failed with the real output. Do not call a skipped test a pass.
 - No claim without fresh evidence: quote the counts from the run you just did ("N tests, 0 failed"), not "should pass". A green local run does not prove the Windows job: after a push, check it with `gh run list` and `gh run view <id> --json jobs`.

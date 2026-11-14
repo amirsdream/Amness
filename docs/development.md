@@ -67,14 +67,14 @@ The file `.github/workflows/ci.yml` has these jobs:
 
 | Job | What it does |
 |---|---|
-| `test` | `npm ci`, `npm run typecheck`, `npm test` on Node 22 and Node 24, with Bubblewrap installed |
-| `terminal` | `python3 test/pty/tui.py` on Node 24 |
+| `test` | `npm ci`, `npm run typecheck`, `npm test` on Node 22, 24 and 26, with Bubblewrap installed |
+| `terminal` | `python3 test/pty/tui.py` on Node 26 |
 | `package` | `npm pack`, installs the tarball in a new folder, runs `npx amness --version`, and checks that `import("amness")` exports `createCodeAgent` |
 | `docker` | builds the `Dockerfile`, runs `--version` and `eval --selftest --only off-by-one` |
 | `windows` | `npm run typecheck` and `npm test` on Windows. It is informational (`continue-on-error`) |
 | `action` | runs the GitHub Action (`action.yml`) with no API key and checks that it reports instead of crashing |
 
-A second workflow, `.github/workflows/publish.yml`, runs type check and tests, then `npm stage publish --provenance`, when you push a tag that starts with `v`. It needs an `NPM_TOKEN` secret (a stage-only token is enough). It only stages the version; you release it with `npm stage approve <id>` and your 2FA code.
+A second workflow, `.github/workflows/publish.yml`, runs type check and tests, then `npm stage publish --provenance`, when you push a tag that starts with `v`. It first checks that the tag matches the version in `package.json`. It logs in to npm with Trusted Publishing (OIDC, no stored token) once the repository is set as the package's trusted publisher on npmjs.com; until then it uses the `NPM_TOKEN` secret (a stage-only token is enough). It only stages the version; you release it with `npm stage approve <id>` and your 2FA code.
 
 ## Find your way around the project
 

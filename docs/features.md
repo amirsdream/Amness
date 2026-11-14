@@ -1492,7 +1492,7 @@ Text, tool calls and plans stream to the editor. Risky actions arrive as permiss
 5. For the GitHub Action, add a step to your workflow and give it your API key in `env`:
 
    ```yaml
-   - uses: actions/checkout@v4
+   - uses: actions/checkout@v7
    - uses: amirsdream/Amness@main
      with:
        task: "update the changelog"

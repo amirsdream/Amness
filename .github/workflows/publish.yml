@@ -1,26 +1,32 @@
 name: Publish to npm
 
-# Runs only when you push a version tag (git tag v0.1.0 && git push --tags). Needs an NPM_TOKEN repository secret (a stage-only token is enough). This only STAGES the version; to release it, review with `npm stage list` / `npm stage download <id>`, then `npm stage approve <id>` (2FA) or `npm stage reject <id>`.
+# Runs only when you push a version tag (git tag -a v0.1.0 && git push origin v0.1.0). This only STAGES the version; to release it, review with `npm stage list` / `npm stage download <id>`, then `npm stage approve <id>` (2FA) or `npm stage reject <id>`.
+# Login: npm Trusted Publishing (OIDC, no stored token) once this repo and publish.yml are set as the package's trusted publisher on npmjs.com, allowed to stage only. Until then the NPM_TOKEN secret (a stage-only token) is used.
 on:
   push:
     tags: ["v*"]
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
         with:
-          node-version: 24
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - name: the version in package.json matches the tag
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: npm stage publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
