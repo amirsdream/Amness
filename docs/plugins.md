@@ -625,7 +625,59 @@ Amness then:
 
 The command does not run the plugin. The plugin still needs your approval the first time you start Amness in the project. Read the file before you approve it.
 
-**Limits.** It does not check that the plugin works, or who wrote it. It cannot install a package from npm.
+**Limits.** It does not check that the plugin works, or who wrote it. For a repository, a whole plugin folder or an npm package, use `/plugins add` in the chat (next section).
+
+## Install plugins and skills from open-source repositories
+
+**What it is.** In the chat (the terminal and the desktop app), `/plugins` installs plugins that other people publish. The code is in `cli/extensions.ts`. It understands two kinds:
+
+- **A Claude Code plugin.** A folder with `skills/`, `agents/`, `commands/`, `hooks/hooks.json` and `.mcp.json`, and an optional `.claude-plugin/plugin.json`. Amness already reads each of these parts, so most of these plugins work as they are.
+- **An Amness plugin.** Code that exports `definePlugin({ ... })`. Its `package.json` says `"amness": { "plugin": "<file>" }`, or it has a file named `amness-plugin.mjs` (or `.js`, `.ts`).
+
+**How to use it.**
+
+```text
+/plugins browse                       pick one from your catalogs (it offers catalogs to add the first time)
+/plugins add owner/repo               a GitHub repository
+/plugins add https://github.com/owner/repo/tree/main/plugins/x   one folder of a repository
+/plugins add npm:some-package@1.2.0   an npm package
+/plugins add ./my-plugin              a folder on this computer
+/plugins                              what is loaded and installed
+/plugins update [name]                install the newest version
+/plugins remove <name>                take it away, with everything it added
+/plugins catalog add [url]            add a catalog; without a URL it offers known ones
+/plugins catalog remove <name>        forget a catalog (installed plugins stay)
+```
+
+In the desktop app, the **Inspect** menu (`Ctrl/⌘ I`) has **Browse plugins…**.
+
+**Catalogs.** A catalog is a repository with a `.claude-plugin/marketplace.json` that lists plugins. This is the same format as Claude Code plugin marketplaces. No catalog is added for you. The first `/plugins browse` (or `/plugins catalog add` with no URL) offers these, and you choose:
+
+| Catalog | What is in it |
+|---|---|
+| `anthropics/claude-plugins-official` | About 300 plugins from Anthropic and partners. Many are MCP servers or skills. |
+| `anthropics/skills` | Document skills (Word, Excel, PowerPoint, PDF) and example skills. |
+| `anthropics/claude-code` | Code review, commit commands, feature development and more. |
+
+Catalogs are kept in `~/.amness/catalogs/`. A catalog entry can point to a folder inside the catalog, a GitHub repository, a git URL, a folder of a git repository (`git-subdir`) or an npm package. A zip archive or a `command` source is not supported yet.
+
+**What an install does.** Amness first shows everything the plugin brings, with the parts that run programs first: its code, MCP servers, hooks and program files. Then it asks where to install it: **for all your projects** (`~/.amness`, the default) or **for this project only** (`.amness/` in the project). Then it:
+
+- keeps a copy of the plugin in `.amness/extensions/<name>/`. `${CLAUDE_PLUGIN_ROOT}` in its files points there.
+- copies its skills to `.amness/skills/`, its subagents to `.amness/agents/` and its commands to `.amness/commands/` (in the scope you chose)
+- adds its MCP servers to your MCP settings, named `<plugin>-<server>`. For a project install they go to your own project file, not the shared `.mcp.json`.
+- asks a second time about **hooks**. They stay out unless you say yes, because they run commands at fixed points of every turn. Claude Code tool names in their matchers become the Amness names (`Bash` → `sh`, `Edit` → `edit_file|apply_patch`, `Write` → `write_file`).
+- for an Amness plugin, copies it to `.amness/plugins/<name>/` and runs `npm install --omit=dev --ignore-scripts` if it has dependencies. A project plugin still waits for your approval (Amness records the approval for the version you installed). Its fingerprint covers every file in its folder.
+- records every file it made in `.amness/extensions.json`, so `/plugins remove` takes all of it away
+
+A name that your own files already use is skipped, and Amness says so. Nothing is overwritten.
+
+**Limits.**
+
+- Hooks written for Claude Code get the input that Amness gives a hook. A script that expects Claude Code's input fields may not work. Check them with `/hooks`.
+- Skills and commands keep their own text. Some name Claude Code tools (`Bash`, `Read`), and the model usually understands these. This is not measured.
+- Not supported yet: commands written inline in `plugin.json`, `.mcpb` bundles, language-server settings, the `bin/` folder on the agent's `PATH`, `userConfig` questions, and `zip` and `command` sources.
+- There is no check of who wrote a plugin. A plugin from a catalog is only as safe as the people who publish it.
 
 ## Metrics and graders
 
@@ -663,7 +715,7 @@ Amness looks for these things: shell commands, network use, file writes, file re
 - The loop order (steer, budget, compact, model, tools, verify) and the permission engine are fixed. Plugins act at the events around them. A strategy limits tools and adds notes. It does not replace the loop.
 - A policy cannot loosen the safety floor or the untrusted-text check.
 - Replacing the turn order itself. A plugin cannot change the order of the steps in the loop.
-- Installing a plugin from npm. `amness plugin add` copies one file from a path or an `https` URL.
+- `amness plugin add` on the command line still copies one file. Use `/plugins add` in the chat for a repository, a folder or an npm package.
 - Isolation of plugin code. Plugins run in the Amness process with your permissions.
 - `PostModel` cannot change anything. `PostToolUse` cannot block.
 - A plugin cannot add UI panels. A slash command can only use `say`, `ask` and `run`.

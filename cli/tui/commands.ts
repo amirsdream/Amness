@@ -24,6 +24,7 @@ import { codeBlocks } from "./clipboard.ts";
 import { execFile } from "node:child_process";
 import { caseFromWorkspace, commitLog, createPr, currentBranch, defaultBase, diffForReview, draftPr, hasUpstream, pushBranch, reviewWork, formatMining, Hooks, Permissions, SANDBOX_MODES, cacheWaste, pluginFingerprint, projectConfigFingerprint, sandboxHelp, sandboxKind, type SandboxMode } from "../../src/index.ts";
 import { isTrustedDir, loadState, saveState } from "../state.ts";
+import { KNOWN_CATALOGS, addCatalog, catalogEntries, describeBundle, fetchEntry, fetchExtension, inspectBundle, installBundle, listCatalogs, listInstalled, refreshCatalogs, removeCatalog, removeInstalled, type ExtScope, type ExtSource, type Fetched, type Installed } from "../extensions.ts";
 import { tokenReport } from "./tokens.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
 import { helpLines, renderDiff, toolCall, todoList } from "./view.ts";
@@ -44,7 +45,8 @@ export const INSPECT: { label: string; cmd: string; tip: string }[] = [
   { label: "Skills", cmd: "/skills", tip: "skills and which ones were used" },
   { label: "Subagents", cmd: "/agents", tip: "built-in and custom subagents" },
   { label: "Memory", cmd: "/memory", tip: "saved notes" },
-  { label: "Plugins", cmd: "/plugins", tip: "plugins loaded" },
+  { label: "Plugins", cmd: "/plugins", tip: "plugins loaded and installed" },
+  { label: "Browse plugins…", cmd: "/plugins browse", tip: "install one from a catalog (some catalogs are offered)" },
   { label: "Background tasks", cmd: "/bg", tip: "tasks in their own worktree" },
   { label: "Processes", cmd: "/procs", tip: "commands left running" },
 ];
@@ -61,6 +63,47 @@ const inUse = (a: App, c: Connection) => (c.server ? a.cfg.server === c.server.n
 const serverHint = (c: Connection) => `${c.server!.provider === "ollama" ? "Ollama" : "custom"} · ${c.server!.baseUrl.replace(/^https?:\/\//, "")} · ${c.server!.model} · ${c.source === "none" ? "no key" : c.source === "env" ? `key from ${c.env}` : "key saved"}`;
 const rowOf = (a: App, c: Connection) => ({ label: `${!c.needsKey || c.source !== "none" ? "●" : "○"} ${c.label}${inUse(a, c) ? "  (in use)" : ""}`, value: c.id as string, hint: c.server ? serverHint(c) : keyStatus(c) });
 const ADD_SERVER = [{ label: "+ Ollama server…", value: "+ollama", hint: "a local Ollama, or one on another machine" }, { label: "+ Custom OpenAI-compatible server…", value: "+custom", hint: "vLLM, llama.cpp, LM Studio, a gateway" }];
+
+/** What an installed plugin added, in one line. */
+const installedParts = (x: Installed) => [x.kind === "amness" ? "code plugin" : "", x.skills.length ? `skills ${x.skills.join(", ")}` : "", x.agents.length ? `subagents ${x.agents.join(", ")}` : "", x.commands.length ? `commands ${x.commands.map((c) => "/" + c).join(", ")}` : "", x.mcp.length ? `MCP ${x.mcp.join(", ")}` : "", x.hooks.length ? `${x.hooks.length} hook(s)` : ""].filter(Boolean).join(" · ") || "nothing Amness uses";
+const describeInstalled = (x: Installed) => [`${x.scope === "user" ? "all your projects" : "this project"} · ${x.catalog ? `from ${x.catalog}` : x.source}`, installedParts(x), ...(x.commit ? [dim(`commit ${x.commit.slice(0, 12)}`)] : [])];
+/** After an install or removal: load the new skills, subagents and plugins; restart MCP servers when it had some. */
+async function reloadAfter(a: App, r: Installed) {
+  if (r.scope === "project" && r.kind === "amness" && a.persist) { const fp = pluginFingerprint(a.cwd), st = loadState(); if (fp) { st.pluginTrust = { ...(st.pluginTrust ?? {}), [a.cwd]: fp }; saveState(st); } }   // you installed it: trust exactly these files
+  if (r.scope === "project" && r.hooks.length && a.persist) { const fp = projectConfigFingerprint(a.cwd), st = loadState(); if (fp && st.hookTrust?.[a.cwd]) { st.hookTrust[a.cwd] = fp; saveState(st); } }
+  a.loadHooks(); if (r.kind === "amness") await a.loadPluginsNow(); a.buildAgent(); if (r.mcp.length) await a.startMcp();
+}
+/** Read a plugin source, show everything it brings (the parts that run commands first), ask where to install it, and install it. */
+async function installFrom(a: App, get: () => Fetched, label: string, o: { spec?: ExtSource; catalog?: string; entry?: Record<string, any>; update?: Installed } = {}) {
+  a.say(`reading ${label}…`, dim);
+  let f: Fetched; try { f = get(); } catch (e) { return void a.say((e as Error).message, red); }
+  try {
+    const b = inspectBundle(f.dir, o.entry), runs = !!(b.plugin || b.hooks.length || Object.keys(b.mcp).length || b.scripts.length);
+    const body = [...describeBundle(b).map((l, i) => (i ? (/^note:/.test(l) ? dim(l) : /^(code|its code|hook|MCP server|needs packages|program files)/.test(l) ? yellow(l) : l) : bold(l))), dim(`from ${f.label}${f.commit ? ` · ${f.commit.slice(0, 12)}` : ""}`), ...(runs ? ["", yellow("Parts of it run programs on your computer with your permissions. Install only what you trust.")] : [])];
+    const scopes = o.update ? [o.update.scope] : (["user", "project"] as ExtScope[]);
+    const pick = await a.confirm(o.update ? `Update ${b.name}` : `Install ${b.name}`, body, o.update ? `Install this version of ${b.name}?` : `Install ${b.name}?`,
+      [...scopes.map((s) => ({ label: o.update ? "Update it" : s === "user" ? "Install for all your projects" : "Install for this project only", hint: s === "user" ? "~/.amness" : ".amness/ in this project" })), { label: "Cancel" }]);
+    if (pick === undefined || pick >= scopes.length) return void a.say("not installed", dim);
+    let hooks = !!o.update?.hooks.length;
+    if (b.hooks.length && !o.update) hooks = (await a.confirm("Hooks", b.hooks.map((h) => `${h.event}${h.matcher ? ` (${h.matcher})` : ""}: ${h.command}`), `Also install its ${b.hooks.length} hook(s)? They run these commands at fixed points of every turn.`, [{ label: "No, leave them out" }, { label: "Yes, install them" }])) === 1;
+    const { record, notes } = installBundle(a.cwd, b, { scope: scopes[pick], source: f.label, spec: o.spec ?? (o.catalog ? undefined : label), catalog: o.catalog, commit: f.commit, hooks, replace: !!o.update });
+    await reloadAfter(a, record);
+    a.say([`${green("✓")} ${o.update ? "updated" : "installed"} ${record.name} (${record.scope === "user" ? "all your projects" : "this project"}): ${installedParts(record)}`, ...notes.map((n) => dim("  " + n))]);
+  } catch (e) { a.say((e as Error).message, red); } finally { f.cleanup(); }
+}
+/** Add a catalog: from a URL, or picked from known open-source ones (nothing is added unless you choose). Returns whether one was added. */
+async function addCatalogDialog(a: App, url?: string): Promise<boolean> {
+  if (!url) {
+    const have = new Set(listCatalogs().map((c) => c.url));
+    const v = await a.pick("Add a plugin catalog (a repository that lists plugins)", [...KNOWN_CATALOGS.filter((k) => !have.has(k.url)).map((k) => ({ label: k.label, value: k.url, hint: `${k.hint} · ${k.url.replace("https://github.com/", "")}` })), { label: "Another catalog…", value: "+", hint: "a git URL or owner/repo with a .claude-plugin/marketplace.json" }]);
+    if (!v) return false;
+    url = v === "+" ? (await a.askText("Catalog: a git URL or owner/repo"))?.trim() : v;
+    if (!url) return false;
+  }
+  a.say(`reading ${url}…`, dim);
+  try { const { catalog, entries } = addCatalog(url); a.say(`${green("✓")} added catalog ${catalog.name}: ${entries.length} plugins. /plugins browse shows them`); return true; }
+  catch (e) { a.say((e as Error).message, red); return false; }
+}
 
 /** Make a cloud provider the one in use, with its saved key (or asking for one). Returns false if the user gave up. */
 async function switchProvider(a: App, id: ProviderId): Promise<boolean> {
@@ -528,9 +571,54 @@ export function buildCommands(): Cmd[] {
       if (!names.includes(arg)) return void a.say(`unknown strategy "${arg}". Choose one of ${names.join(", ")}, or off`, dim);
       a.cfg.strategy = arg; a.saveConfig(); a.buildAgent(); a.say(`strategy ${arg} on`, dim);
     } },
-    { name: "plugins", help: "plugins loaded (code in .amness/plugins that extends the loop, tools, guards and evals)", run: (a) => {
-      if (!a.plugins.length) return void a.say("no plugins loaded. Put a file in .amness/plugins/ (or ~/.amness/plugins/) that exports definePlugin({ name, ... }); see docs/plugins.md. Project plugins ask for your approval first.", dim);
-      a.report("Plugins", [...a.plugins.map((p) => `  ${cyan(p.name.padEnd(22))} ${dim([p.tools?.length ? `${p.tools.length} tool(s)` : "", p.hooks ? `hooks: ${Object.keys(p.hooks).join(", ")}` : "", p.system ? "system prompt" : "", p.cases?.length ? `${p.cases.length} eval case(s)` : "", p.variants ? `variants: ${Object.keys(p.variants).join(", ")}` : ""].filter(Boolean).join(" · "))} ${p.description ?? ""}`)]);
+    { name: "plugins", help: "plugins: list · add <git URL | owner/repo | npm:pkg | folder> · browse · remove · update · catalog add|remove|update", args: "[add <source> · browse [words] · remove <name> · update [name] · catalog [add <url> | remove <name> | update]]", run: async (a, arg) => {
+      const [sub = "", ...rest] = arg.trim().split(/\s+/).filter(Boolean), what = rest.join(" ");
+      if (sub === "add" || sub === "install") {
+        if (!what) return void a.say("usage: /plugins add <git URL | owner/repo | npm:package | folder>   (a Claude Code plugin or an Amness plugin)", red);
+        return void (await installFrom(a, () => fetchExtension(what), what));
+      }
+      if (sub === "browse" || sub === "search") {
+        if (!listCatalogs().length && !(await addCatalogDialog(a))) return;
+        const q = what.toLowerCase(), all = catalogEntries().filter((e) => !q || `${e.name} ${e.description}`.toLowerCase().includes(q)), have = new Set(listInstalled(a.cwd).map((x) => x.name));
+        if (!all.length) return void a.say(q ? `no plugin matches "${what}" in your catalogs` : "your catalogs list no plugins", dim);
+        const e = await a.pick(`Plugins (${all.length}) · type to filter`, all.map((x) => ({ label: `${have.has(x.name) ? "● " : ""}${x.name}`, value: x, hint: `${x.description.slice(0, 90)} · ${x.catalog}` })));
+        if (!e) return;
+        return void (await installFrom(a, () => fetchEntry(e), `${e.name} from ${e.catalog}`, { spec: e.source, catalog: e.catalog, entry: e.entry }));
+      }
+      if (sub === "remove" || sub === "uninstall") {
+        const all = listInstalled(a.cwd), r = what ? all.find((x) => x.name === what) : await a.pick("Remove which plugin?", all.map((x) => ({ label: x.name, value: x, hint: `${x.scope === "user" ? "all your projects" : "this project"} · ${x.source}` })));
+        if (!r) return void a.say(what ? `no installed plugin called ${what} (/plugins lists them)` : all.length ? "" : "no plugins installed from a source", dim);
+        const ok = await a.confirm(`Remove ${r.name}`, describeInstalled(r), `Remove ${r.name} and everything it added?`, [{ label: "Cancel" }, { label: "Remove it" }]);
+        if (ok !== 1) return;
+        removeInstalled(a.cwd, r); await reloadAfter(a, r);
+        return void a.say(`${green("✓")} removed ${r.name}`);
+      }
+      if (sub === "update") {
+        const all = listInstalled(a.cwd).filter((x) => !what || x.name === what);
+        if (!all.length) return void a.say(what ? `no installed plugin called ${what}` : "no plugins installed from a source", dim);
+        if (all.some((x) => x.catalog)) { a.say("reading the catalogs again…", dim); for (const p of refreshCatalogs()) a.say(p, yellow); }
+        for (const r of all) {
+          const e = r.catalog ? catalogEntries(r.catalog).find((x) => x.name === r.name) : undefined;
+          await installFrom(a, () => (e ? fetchEntry(e) : fetchExtension(r.spec ?? r.source)), r.name, { spec: r.spec, catalog: r.catalog, entry: e?.entry, update: r });
+        }
+        return;
+      }
+      if (sub === "catalog" || sub === "catalogs" || sub === "marketplace") {
+        const [op = "", ...more] = rest, target = more.join(" ");
+        if (op === "add") return void (await addCatalogDialog(a, target || undefined));
+        if (op === "remove") { if (!target) return void a.say("usage: /plugins catalog remove <name>", red); return void a.say(removeCatalog(target) ? `removed catalog ${target} (installed plugins stay)` : `no catalog called ${target}`, dim); }
+        if (op === "update") { a.say("reading the catalogs again…", dim); const bad = refreshCatalogs(); return void a.say(bad.length ? bad.join("\n") : `${green("✓")} ${listCatalogs().length} catalog(s) up to date`, bad.length ? yellow : undefined); }
+        const cs = listCatalogs();
+        if (!cs.length) return void a.say("no catalogs yet. /plugins catalog add offers some to choose from, or takes a git URL", dim);
+        return void a.report("Plugin catalogs", [...cs.map((c) => `  ${cyan(c.name.padEnd(26))} ${dim(`${catalogEntries(c.name).length} plugins · ${c.url}`)}`), "", dim("  /plugins browse · /plugins catalog add <url> · /plugins catalog remove <name> · /plugins catalog update")]);
+      }
+      const inst = listInstalled(a.cwd), cats = listCatalogs();
+      if (!a.plugins.length && !inst.length) return void a.say(`no plugins yet. /plugins browse picks one from a catalog${cats.length ? "" : " (it offers some to add)"}; /plugins add <git URL | owner/repo | npm:package> installs one. You can also write your own: see docs/plugins.md.`, dim);
+      a.report("Plugins", [
+        ...(a.plugins.length ? [bold("  Loaded (code)"), ...a.plugins.map((p) => `  ${cyan(p.name.padEnd(22))} ${dim([p.tools?.length ? `${p.tools.length} tool(s)` : "", p.hooks ? `hooks: ${Object.keys(p.hooks).join(", ")}` : "", p.system ? "system prompt" : "", p.cases?.length ? `${p.cases.length} eval case(s)` : ""].filter(Boolean).join(" · "))}`)] : []),
+        ...(inst.length ? [...(a.plugins.length ? [""] : []), bold("  Installed from a source"), ...inst.flatMap((x) => [`  ${cyan(x.name.padEnd(22))} ${dim(`${x.scope === "user" ? "all your projects" : "this project"} · ${x.catalog ? `from ${x.catalog}` : x.source}${x.version ? ` · ${x.version}` : ""}`)}`, `    ${dim(installedParts(x))}`])] : []),
+        "", dim(`  ${cats.length} catalog(s) · /plugins browse · /plugins add <source> · /plugins remove <name> · /plugins update`),
+      ]);
     } },
     { name: "plans", help: "offer the plan of a similar finished task as a starting point (off until measured)", args: "[on|off]", run: (a, arg) => {
       if (arg !== "on" && arg !== "off") { const s = a.agent.plans?.stats(); return void a.say(`plan cache is ${a.cfg.plans ? "on" : "off"}${s ? `: ${s.plans} stored, offered ${s.offered}×, led to a finished task ${s.helped}×` : ""}. /plans on: a finished task leaves a short plan (files changed, checks run, result); a similar new task is offered it as a starting point.`, dim); }
@@ -680,8 +768,8 @@ export function buildCommands(): Cmd[] {
           try {
             const found = inspectSource(src.dir); if (!found.length) return void a.say(`no SKILL.md found in ${name} (or one folder down)`, red);
             const scope = rest[1] === "user" ? "user" : "project";
-            a.report(`Skills found in ${name}`, [...found.flatMap((f) => [`  ${f.problems.length ? red("✗") : green("✓")} ${cyan(f.name)} ${dim(`${f.files.length} file${f.files.length === 1 ? "" : "s"}`)}${f.scripts.length ? yellow(`  includes scripts: ${f.scripts.slice(0, 4).join(", ")}`) : ""}`, `      ${dim(f.description || "(no description)")}`, ...f.problems.map((p) => "      " + red(p))]), "", dim("  A skill is a set of instructions the model will follow. Read it first (/skills show <name> after installing), and do not install skills you do not trust.")]);
-            const ok = await a.pick(`Install ${found.filter((f) => !f.problems.length).length} skill(s) for ${scope === "user" ? "all your projects" : "this project"}?`, [{ label: "Install", value: "yes" }, { label: "Cancel", value: "no" }], 1); if (ok !== "yes") return;
+            const body = [...found.flatMap((f) => [`${f.problems.length ? red("✗") : green("✓")} ${cyan(f.name)} ${dim(`${f.files.length} file${f.files.length === 1 ? "" : "s"}`)}${f.scripts.length ? yellow(`  includes scripts: ${f.scripts.slice(0, 4).join(", ")}`) : ""}`, `    ${dim(f.description || "(no description)")}`, ...f.problems.map((p) => "    " + red(p))]), "", dim("A skill is a set of instructions the model will follow. Read it first (/skills show <name> after installing), and do not install skills you do not trust.")];
+            const ok = await a.confirm(`Skills found in ${name}`, body, `Install ${found.filter((f) => !f.problems.length).length} skill(s) for ${scope === "user" ? "all your projects" : "this project"}?`, [{ label: "Cancel" }, { label: "Install" }]); if (ok !== 1) return;
             const r = installSkills(a.cwd, found, { scope }); return void done(`${r.installed.length ? `installed: ${r.installed.join(", ")}` : "nothing installed"}${r.skipped.length ? `\nskipped: ${r.skipped.join("; ")}` : ""}`);
           } finally { src.cleanup(); }
         }

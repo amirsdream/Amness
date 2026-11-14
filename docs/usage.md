@@ -403,7 +403,8 @@ These commands show a report in a window: it does not go into the conversation. 
 | `/procs [stop <id>]` | Lists background processes the agent started, or stops one. |
 | `/profile` | Shows the harness settings that apply to this model. |
 | `/report [case <name>]` | Shows repeated problems in your traces. `case <name>` turns your last request into an eval task. |
-| `/plugins`, `/agents` | Lists loaded plugins and custom subagents. |
+| `/plugins`, `/agents` | Lists plugins (loaded and installed) and custom subagents. |
+| `/plugins browse`, `/plugins add <source>`, `/plugins remove <name>`, `/plugins update` | Installs a Claude Code plugin or an Amness plugin from a catalog, a git repository (`owner/repo` or a URL), an npm package (`npm:name`) or a folder. It shows what the plugin brings and asks where to install it. `/plugins catalog add` adds a catalog and offers known ones. See [Install plugins and skills from open-source repositories](plugins.md#install-plugins-and-skills-from-open-source-repositories). |
 | `/skills [list\|show\|new\|add\|remove\|on\|off\|draft\|approve\|reject]` | Shows which skills exist and which one the model is using, and adds, creates, switches off or removes them. See [Skills](features.md#skills). |
 | `/reload-plugins` | Loads the plugin files again after you edited one. Project plugins that you did not approve are skipped. See [Plugins](plugins.md). |
 | `/strategy [name\|off]` | Chooses a loop strategy: `plan-first` or `explore-then-act`. Without an argument it shows the current one. See [Plugins](plugins.md#change-the-loop-with-a-strategy). |

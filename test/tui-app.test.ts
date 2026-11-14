@@ -803,3 +803,28 @@ test("closing the plan question (Esc) stops the turn instead of letting the agen
     assert.equal(t.app.mode, "plan");
   } finally { t.app.exit(0); }
 });
+
+test("/plugins add shows what a plugin brings and asks where; hooks need their own yes; /plugins lists it; /plugins remove takes it away", async () => {
+  const t = rig([], { cols: 140, rows: 40 }); await t.start();
+  const { mkdirSync, writeFileSync, existsSync } = await import("node:fs"), { join, dirname } = await import("node:path");
+  const src = join((await import("node:fs")).mkdtempSync(join((await import("node:os")).tmpdir(), "amness-plug-")), "plug-src"), files: Record<string, string> = {
+    ".claude-plugin/plugin.json": JSON.stringify({ name: "deploy-tools", description: "Deploy helpers" }),
+    "skills/deploy/SKILL.md": "---\nname: deploy\ndescription: Use when deploying.\n---\nsteps\n",
+    "hooks/hooks.json": JSON.stringify({ hooks: { PostToolUse: [{ matcher: "Write", hooks: [{ type: "command", command: "echo formatted" }] }] } }),
+  };
+  for (const [f, c] of Object.entries(files)) { mkdirSync(dirname(join(src, f)), { recursive: true }); writeFileSync(join(src, f), c); }
+  try {
+    await t.submit(`/plugins add ${src}`); assert.ok(await t.until(() => t.has("Install deploy-tools?")), t.text());
+    assert.ok(t.has("hook on PostToolUse (Write): echo formatted") && t.has("skills: deploy") && t.has("run programs on your computer"), "it shows everything, the parts that run programs too");
+    await t.key(KEY.down); await t.key(KEY.enter);                                         // "Install for this project only"
+    assert.ok(await t.until(() => t.has("Also install its 1 hook(s)?")), t.text());
+    await t.key(KEY.enter);                                                                // "No, leave them out" is the first choice
+    assert.ok(await t.until(() => t.has("installed deploy-tools (this project)")), t.text());
+    assert.ok(existsSync(join(t.dir, ".amness/skills/deploy/SKILL.md")) && !existsSync(join(t.dir, ".amness/hooks.json")));
+    await t.submit("/plugins"); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "Plugins"));
+    assert.match(plain((t.app.overlay as any).lines.join("\n")), /deploy-tools\s+this project · .*plug-src[\s\S]*skills deploy/); await t.key(KEY.esc);
+    await t.submit("/plugins remove deploy-tools"); assert.ok(await t.until(() => t.has("Remove deploy-tools and everything it added?")));
+    await t.key(KEY.down); await t.key(KEY.enter);
+    assert.ok(await t.until(() => t.has("removed deploy-tools"))); assert.ok(!existsSync(join(t.dir, ".amness/skills/deploy")));
+  } finally { await t.key(KEY.ctrlD); }
+});

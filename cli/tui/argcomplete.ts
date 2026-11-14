@@ -4,6 +4,7 @@ import { effortsFor, loadPrompts, SANDBOX_MODES, SHELL_CHOICES, STRATEGIES } fro
 import { GUARDS } from "./harnessinfo.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS } from "../config.ts";
 import { fetchModels } from "../models.ts";
+import { listCatalogs, listInstalled } from "../extensions.ts";
 import { referenceOptions } from "../roles.ts";
 
 const ROLE_DETAIL: [string, string][] = [["explore", "read-only exploration subagent"], ["compact", "handoff notes when the context fills"], ["review", "independent reviewer"], ["cheap", "cheap tier for the router"], ["approve", "approval reviewer for risky calls"], ["quarantine", "reader of untrusted web and MCP content"], ["advisor", "a stronger model to consult"]];
@@ -64,6 +65,14 @@ export function argOptions(a: App, cmd: string, words: string[]): ArgResult {
       if (first) return ok([["list", "all skills and which are in use"], ["show", "print a skill's instructions"], ["new", "create a skill from a template"], ["add", "install from a folder or git URL"], ["remove", "move a skill to the trash"], ["on", "switch a skill on"], ["off", "switch a skill off"], ["draft", "write a skill from this conversation (a draft you approve)"], ["drafts", "drafts waiting for approval"], ["approve", "make a draft active"], ["reject", "delete a draft"]].map(([value, detail]) => ({ value, detail, more: ["show", "new", "add", "remove", "on", "off", "approve", "reject"].includes(value) })));
       if (words.length === 1 && ["show", "remove", "rm", "on", "off"].includes(words[0])) return ok((a.agent.allSkills ?? []).filter((x) => (words[0] === "on" ? a.agent.skillState.isOff(x.name) : words[0] === "off" ? !a.agent.skillState.isOff(x.name) : true)).map((x) => ({ value: x.name, detail: x.description.slice(0, 60) })));
       if (words.length === 1 && ["approve", "reject"].includes(words[0])) return ok(listDrafts(a.cwd).map((d) => ({ value: d.name, detail: d.description.slice(0, 60) })));
+      if (words.length === 1 && words[0] === "add") return { options: [], open: true };
+      return ok([]);
+    }
+    case "plugins": {
+      if (first) return ok([["browse", "pick a plugin from your catalogs"], ["add", "install from a git URL, owner/repo, npm:package or folder"], ["remove", "take an installed plugin away"], ["update", "install the newest version"], ["catalog", "list, add or remove catalogs"]].map(([value, detail]) => ({ value, detail, more: value !== "browse" })));
+      if (words.length === 1 && ["remove", "update"].includes(words[0])) return ok(listInstalled(a.cwd).map((x) => ({ value: x.name, detail: x.catalog ?? x.source })));
+      if (words.length === 1 && words[0] === "catalog") return ok([["add", "add one (some are offered)"], ["remove", "remove one"], ["update", "read them again"]].map(([value, detail]) => ({ value, detail, more: value !== "update" })));
+      if (words.length === 2 && words[0] === "catalog" && words[1] === "remove") return ok(listCatalogs().map((c) => ({ value: c.name, detail: c.url })));
       if (words.length === 1 && words[0] === "add") return { options: [], open: true };
       return ok([]);
     }

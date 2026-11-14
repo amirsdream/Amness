@@ -319,3 +319,18 @@ test("Electron's macOS sandbox start-up line is dropped; its other errors still 
   await new Promise((r) => child.on("close", r));
   assert.equal(got, "real error\nlast\n");
 });
+
+test("desktop: /plugins add opens the same install dialog as the terminal; the answer installs it", async () => {
+  const d = await boot([]);
+  try {
+    const src = join(mkdtempSync(join(tmpdir(), "amness-plug-")), "plug-src"); mkdirSync(join(src, "skills", "deploy"), { recursive: true });
+    writeFileSync(join(src, "skills", "deploy", "SKILL.md"), "---\nname: deploy\ndescription: Use when deploying.\n---\nsteps\n");
+    await d.api("/api/send", { text: `/plugins add ${src}` });
+    assert.ok(await d.until(() => d.events.some((e) => e.type === "dialog" && e.dialog.kind === "choice" && /Install plug-src/.test(e.dialog.title))));
+    const ask = d.events.filter((e) => e.type === "dialog" && e.dialog.kind === "choice").at(-1).dialog;
+    assert.ok(ask.body.some((l: string) => /skills: deploy/.test(l)), "the window shows what the plugin brings");
+    await d.api("/api/dialog", { id: ask.id, value: 1 });                                  // this project only
+    assert.ok(await d.until(() => existsSync(join(d.dir, ".amness", "skills", "deploy", "SKILL.md"))));
+    assert.ok(await d.until(() => d.events.some((e) => (e.type === "toast" && /installed plug-src/.test(e.text)) || (e.type === "dialog" && e.dialog.kind === "text" && e.dialog.lines.some((l: string) => /installed plug-src/.test(l))))));
+  } finally { await d.close(); }
+});

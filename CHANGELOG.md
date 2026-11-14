@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Install plugins and skills from open-source repositories** (terminal and desktop). `/plugins add <owner/repo | git URL | npm:package | folder>` installs a Claude Code plugin (skills, subagents, commands, MCP servers, hooks) or an Amness plugin (`definePlugin` code). `/plugins browse` picks one from your catalogs: repositories with a `.claude-plugin/marketplace.json`, the same format as Claude Code marketplaces. No catalog is added for you; `/plugins catalog add` offers known ones (Anthropic's plugin directory, its skills and its Claude Code plugins) for you to pick. Before it installs, Amness shows everything the plugin brings, the parts that run programs first, and asks: all your projects (the default) or this project only. Hooks need a second yes. `/plugins remove` takes away every file the plugin added, its MCP servers and its hooks. `/plugins update` installs the newest version. Desktop: **Inspect → Browse plugins…**.
+- **`/skills add` shows the skills it found and the question in one dialog.** Before, the question hid the list.
+
 ## 0.11.1 (2026-11-14)
 
 - **Fixed: the agent could kill Amness while freeing a port.** `lsof -ti:8000 | xargs kill -9` stops every program connected to port 8000, clients included, and Amness is one of them when its model server listens on that port (a llama.cpp server on `:8000`). The safety floor now refuses this in every mode, as well as `fuser -k <port>/tcp` and `pkill node` / `killall node`, and tells the model the safe form: `lsof -ti tcp:PORT -sTCP:LISTEN | xargs kill`.

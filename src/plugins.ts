@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { extname, join, resolve } from "node:path";
+import { extname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Case, MetricFn, Variant } from "./evals.ts";
 import type { Grader } from "./grade.ts";
@@ -88,13 +88,30 @@ export type Plugin = {
 export const definePlugin = (p: Plugin): Plugin => p;
 
 const EXT = new Set([".ts", ".mts", ".js", ".mjs"]);
-const filesIn = (dir: string) => (existsSync(dir) ? readdirSync(dir).filter((f) => EXT.has(extname(f)) && statSync(join(dir, f)).isFile()).sort().map((f) => join(dir, f)) : []);
+/** The entry file of a plugin kept in its own folder (an installed one, with its package.json and node_modules): "amness": { "plugin": "<file>" } in package.json, or amness-plugin.* / index.*. */
+function folderEntry(dir: string): string | undefined {
+  let pkg: any; try { pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")); } catch { /* no package.json */ }
+  const named = typeof pkg?.amness?.plugin === "string" ? resolve(dir, pkg.amness.plugin) : undefined;
+  if (named && named.startsWith(resolve(dir)) && existsSync(named)) return named;
+  return ["amness-plugin.mjs", "amness-plugin.js", "amness-plugin.ts", "index.mjs", "index.js", "index.ts"].map((f) => join(dir, f)).find((f) => existsSync(f));
+}
+/** Plugin files in a folder: each code file, and the entry of each sub-folder that holds one plugin. */
+const filesIn = (dir: string) => (existsSync(dir) ? readdirSync(dir).sort().flatMap((f) => {
+  const p = join(dir, f); let st; try { st = statSync(p); } catch { return []; }
+  if (st.isFile()) return EXT.has(extname(f)) ? [p] : [];
+  if (st.isDirectory() && !f.startsWith(".")) { const e = folderEntry(p); return e ? [e] : []; }
+  return [];
+}) : []);
+/** Every file of a plugin folder, for the fingerprint (its node_modules included: they are code too). */
+const allFiles = (dir: string, out: string[] = []): string[] => { for (const e of readdirSync(dir).sort()) { if (e === ".git") continue; const p = join(dir, e), st = statSync(p); if (st.isDirectory()) allFiles(p, out); else out.push(p); } return out; };
 export const projectPluginDir = (cwd: string) => join(cwd, ".amness", "plugins");
 export const projectPluginFiles = (cwd: string) => filesIn(projectPluginDir(cwd));
 /** A fingerprint of the project's plugin files: approval is remembered for exactly this content. */
 export function pluginFingerprint(cwd: string): string | undefined {
-  const fs = filesIn(projectPluginDir(cwd)); if (!fs.length) return undefined;
-  const h = createHash("sha256"); for (const f of fs) h.update(f).update(readFileSync(f)); return h.digest("hex").slice(0, 16);
+  const dir = projectPluginDir(cwd), fs = filesIn(dir); if (!fs.length) return undefined;
+  const h = createHash("sha256");
+  for (const f of fs) { const top = join(dir, relative(dir, f).split(/[\\/]/)[0]); for (const x of top === f ? [f] : allFiles(top)) h.update(x).update(readFileSync(x)); }
+  return h.digest("hex").slice(0, 16);
 }
 
 export type Loaded = { plugins: Plugin[]; warnings: string[]; /** project plugins exist but were not loaded because they are not approved */ untrusted?: { count: number; fingerprint: string } };
