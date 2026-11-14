@@ -54,16 +54,18 @@ export async function runServe(argv: string[]): Promise<number> {
 
   const { ApiSessions } = await import("./serve/sessions.ts"), { v1Routes } = await import("./serve/api.ts"), { startDesktopServer } = await import("./desktop/server.ts");
   const sessions = new ApiSessions({ cfg, version: VERSION, roots, defaultCwd: roots[0], max: Number(one("--max-sessions") ?? 16), persist: true });
-  const v1 = v1Routes(sessions, { version: VERSION });
+  const v1 = v1Routes(sessions, { version: VERSION }), { mcpHttpRoute } = await import("./mcpserve.ts"), mcp = mcpHttpRoute(sessions, { version: VERSION });
+  const extra = async (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, u: URL, authed: boolean) => { if (u.pathname === "/mcp") { await mcp(req, res, authed); return true; } return v1.handler(req, res, u, authed); };
   let srv;
   try {
-    srv = await startDesktopServer({ cfg, cwd: roots[0], version: VERSION, port, persist: true, net: { host, token, tls, allowHosts: vals.get("--allow-host"), extra: v1.handler, log: logTo ? (l) => { try { appendFileSync(logTo, JSON.stringify(l) + "\n"); } catch { /* read-only */ } } : undefined } });
+    srv = await startDesktopServer({ cfg, cwd: roots[0], version: VERSION, port, persist: true, net: { host, token, tls, allowHosts: vals.get("--allow-host"), extra, log: logTo ? (l) => { try { appendFileSync(logTo, JSON.stringify(l) + "\n"); } catch { /* read-only */ } } : undefined } });
   } catch (e) { console.error(`${red("✗")} could not listen on ${host}:${port}: ${(e as Error).message}`); return 1; }
   const plain = !process.stdout.isTTY || !!process.env.NO_COLOR, say = (l: string) => console.log(plain ? strip(l) : l);   // a service log (journald, launchd) gets no colour codes
   const urls = srv.urls.length ? srv.urls : [`${tls ? "https" : "http"}://127.0.0.1:${srv.port}/`];
   say(`${green("●")} ${bold("amness serve")} ${VERSION} · ${local ? "this computer only" : `on ${host}`} · folders: ${roots.join(", ")}`);
   for (const u of urls) say(`  app   ${cyan(`${u}#t=${token}`)}`);
   say(`  API   ${cyan(`${urls[0]}v1/`)}  ${dim(`(Authorization: Bearer <token>; docs/api.md, GET /v1/openapi.json)`)}`);
+  say(`  MCP   ${cyan(`${urls[0]}mcp`)}  ${dim("(for Claude Code, Codex…: http transport with the same Bearer token)")}`);
   say(dim(`  token: amness serve token · log: ${logTo ?? "off"} · stop: Ctrl+C`));
   if (!local && !tls) say(yellow(`  ! not encrypted: anyone on this network who sees the traffic sees the token. Use --tls-cert/--tls-key or a TLS reverse proxy, and only trusted networks.`));
   if (!local) say(yellow(`  ! whoever has the token can run commands in ${roots.join(", ")} as you. Keep it secret (amness serve token --rotate makes a new one).`));

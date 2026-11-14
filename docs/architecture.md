@@ -182,6 +182,7 @@ The table lists every file in `src/` and `cli/`. The text comes from the first c
 | `cli/acpcli.ts` | `amness acp`: serve the Agent Client Protocol on stdin and stdout. |
 | `cli/mcpconfig.ts` | Where MCP servers come from (`.amness/settings.local.json`, `.mcp.json`, `~/.amness/config.json`, `--mcp-config`, the editor), `${VAR}` values, saving and removing. |
 | `cli/mcpcli.ts` | The `amness mcp` command. |
+| `cli/mcpserve.ts` | Amness as an MCP server (`amness mcp serve`, and `/mcp` on `amness serve`): tools on session handles, approvals as elicitation. |
 | `cli/serve.ts` | `amness serve`: the service (browser app and `/v1` API), its token and network options. |
 | `cli/serve/sessions.ts` | The API's sessions: one App each, their items, status, dialogs and events. |
 | `cli/service.ts` | `amness service`: the launchd, systemd or Windows task that keeps `amness serve` running. |

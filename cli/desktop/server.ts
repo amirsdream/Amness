@@ -104,7 +104,7 @@ export async function startDesktopServer(o: { cfg: Config; cwd: string; version:
     const authed = okToken(given);
     if (given && !authed) fails.set(ip, { n: (f && Date.now() - f.at < 60_000 ? f.n : 0) + 1, at: Date.now() });
     if (net.log && (req.method !== "GET" || u.pathname.startsWith("/v1/"))) res.on("finish", () => net.log!({ t: new Date().toISOString(), ip, method: req.method, path: u.pathname, status: res.statusCode }));
-    if (net.extra && u.pathname.startsWith("/v1/") && (await net.extra(req, res, u, authed))) return;
+    if (net.extra && (u.pathname.startsWith("/v1/") || u.pathname === "/mcp") && (await net.extra(req, res, u, authed))) return;
     if (u.pathname === "/" || u.pathname === "/index.html") {                              // the page itself is harmless; the token travels in the fragment, never to the server log
       res.writeHead(200, { "content-type": TYPES[".html"], "content-security-policy": CSP, "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "cache-control": "no-store" });
       res.end(readFileSync(join(UI, "index.html"))); return;

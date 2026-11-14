@@ -111,6 +111,31 @@ Many remote servers need you to sign in (GitHub, Linear, Notion and others). Whe
 
 Editors such as Zed send their own MCP servers when they open an Amness session. Amness starts them (stdio, HTTP and SSE), plus yours, plus the project's if you trusted the project in the terminal app.
 
+## Use Amness from Claude Code, Codex or another agent
+
+Amness is also an MCP server, so other agents can hand it a task:
+
+```bash
+claude mcp add amness -- amness mcp serve                 # Claude Code
+codex mcp add amness -- amness mcp serve                  # Codex
+```
+
+Or, when `amness serve` runs (see [Amness as a service](api.md)), connect to `http://<host>:4747/mcp` with the header `Authorization: Bearer <token>`. These sessions are the same as the API's, so you can watch them in the browser.
+
+| Tool | What it does |
+|---|---|
+| `amness_run` | Starts a session on a task in a folder, and waits up to `wait_seconds` (default 50). Returns the session id, its status (`idle` = done, `running`, `waiting` = it needs an answer), and the answer or the question. |
+| `amness_status` | Waits for a session again, and returns its answer or question. |
+| `amness_reply` | Sends a follow-up message. |
+| `amness_answer` | Answers the question or approval a session is waiting for: an option number, text, or `cancel`. |
+| `amness_sessions`, `amness_close` | Lists the open sessions, or closes one. |
+
+A task can take longer than one tool call may wait (Codex stops a call after 60 seconds by default). So `amness_run` returns a session id, and the caller asks again with `amness_status`.
+
+**Approvals.** Amness asks before risky actions, as always. If the calling app can ask its user (MCP "elicitation", for example Claude Code), the question goes to you there. If it cannot, the calling agent sees the question with numbered options and can answer it with `amness_answer`. So only connect agents you would trust to approve such steps, or start sessions in `plan` mode (`amness_run` with `mode: "plan"`, or `amness mcp serve --mode plan`). Sessions may only use the folders given with `--root` (default: the folder where it starts).
+
+Tested with the official MCP TypeScript SDK (version 1.32): its client used `amness mcp serve`, and Amness's client used the SDK's "everything" example server (tools, prompts, resources), with protocol 2026-07-28.
+
 ## Protocol details
 
 - Version `2026-07-28` first: no handshake. The protocol version, the client name and the client's capabilities go with every request. On HTTP, the request also sends the `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and `Mcp-Param-*` headers. If a tool's `x-mcp-header` is not valid, the tool is left out, with a warning.

@@ -104,6 +104,10 @@ Every route except `/v1/health` and `/v1/openapi.json` needs `Authorization: Bea
 | `DELETE /v1/sessions/{id}` | Closes the session. The conversation stays saved. |
 | `GET /v1/sessions/{id}/events`, `GET /v1/events` | Server-Sent Events, for one session or for all of them. |
 
+### MCP
+
+`amness serve` also answers MCP (Streamable HTTP, `2026-07-28` and the earlier versions) at `/mcp`, with the same token. So Claude Code, Codex and other MCP clients can start and follow Amness sessions from another computer. See [Use Amness from Claude Code, Codex or another agent](mcp.md#use-amness-from-claude-code-codex-or-another-agent).
+
 ### Events
 
 Each event has `type` and `session`:

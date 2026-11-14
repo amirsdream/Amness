@@ -5,6 +5,8 @@ import { openUrl } from "./tui/openurl.ts";
 import { addServer, hubOptions, oauthStore, mcpEntries, mcpFile, parseMcpJson, readServers, removeServer, setDisabled, SCOPE_TEXT, type FileScope } from "./mcpconfig.ts";
 import { loadState } from "./state.ts";
 import { bold, cyan, dim, green, red, yellow } from "./ui.ts";
+import { readFileSync } from "node:fs";
+const VERSION: string = (() => { for (const rel of ["../package.json", "../../package.json"]) { try { return JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8")).version; } catch { /* the built copy sits one folder deeper */ } } return "0.0.0"; })();
 
 export const MCP_HELP = `amness mcp <command>   MCP servers for Amness (terminal, desktop, amness run, editors)
 
@@ -25,6 +27,7 @@ export const MCP_HELP = `amness mcp <command>   MCP servers for Amness (terminal
   approve <name>                               accept tools that changed since you approved the server (they are held back until then)
   login <name> [--no-browser]                  sign in to a remote server (OAuth 2.1; opens your browser, or prints the link)
   logout <name>                                forget its sign-in
+  serve [--root <folder>]… [--model m] [--mode m]   be an MCP server (stdio) so Claude Code, Codex… can hand Amness tasks
       add options for sign-in: --client-id <id> --client-secret <secret> --callback-port <n> --scopes "a b"
 
 Values may use \${VAR} and \${VAR:-default}. Servers from .mcp.json start only after you trust the project
@@ -36,6 +39,17 @@ export async function runMcpCli(argv: string[], o: { cwd?: string } = {}): Promi
   const cwd = resolve(o.cwd ?? process.cwd()), [cmd, ...rest] = argv;
   if (!cmd || cmd === "--help" || cmd === "-h" || cmd === "help") { console.log(MCP_HELP); return cmd ? 0 : 1; }
   const trusted = () => { const fp = projectConfigFingerprint(cwd); return !!fp && loadState().hookTrust?.[cwd] === fp; };
+  if (cmd === "serve") {
+    const { MCP_SERVE_HELP, serveMcpStdio } = await import("./mcpserve.ts");
+    if (rest.includes("--help") || rest.includes("-h")) { console.error(MCP_SERVE_HELP); return 0; }
+    const roots: string[] = [], opt = (k: string) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : undefined; };
+    rest.forEach((a, i) => { if (a === "--root" && rest[i + 1]) roots.push(resolve(rest[i + 1].replace(/^~(?=$|[\\/])/, process.env.HOME ?? "~"))); });
+    const { loadConfig } = await import("./config.ts"), { ApiSessions } = await import("./serve/sessions.ts");
+    const sessions = new ApiSessions({ cfg: loadConfig(), version: VERSION, roots: roots.length ? roots : [cwd], defaultCwd: roots[0] ?? cwd, persist: true });
+    console.log = console.error;                                                                       // stdout carries only MCP messages
+    await serveMcpStdio(sessions, { version: VERSION, defaults: { model: opt("--model"), mode: opt("--mode") } });
+    sessions.closeAll(); return 0;
+  }
   try {
     if (cmd === "add" || cmd === "add-json") {
       const dash = rest.indexOf("--"), opts = dash >= 0 ? rest.slice(0, dash) : rest, after = dash >= 0 ? rest.slice(dash + 1) : [];
