@@ -94,6 +94,7 @@ Masking has limits:
 
 - It only applies to tool results. It does not touch what you type.
 - It finds patterns. A secret in a format it does not know passes through.
+- An assignment whose value is code is not masked: a call, an index, a property path, a variable name (`const passwordStrength = getPasswordStrength(password)`). Masking it would break the code the model reads, and its edits would no longer match the file. A quoted value, and a `.env`-style value such as `DB_PASSWORD=hunter2hunter2`, is still masked.
 - Masking is not applied to memory notes or `AGENTS.md` text (not verified in the memory code).
 
 ## Make Amness stricter
