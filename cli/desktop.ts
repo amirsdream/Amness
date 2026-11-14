@@ -16,11 +16,14 @@ const VERSION: string = (() => { for (const rel of ["../package.json", "../../pa
 const HELP = `amness-desktop ${VERSION}: the Amness desktop app
 
 usage: amness-desktop [folder] [--browser] [--no-window] [--port n]
+       amness-desktop --connect <address> [--token <token>]
 
   folder        the project to open (default: this folder, or the last project when started from a dock or menu)
   --browser     open in your browser instead of the app window
   --no-window   only start the local server and print its address
   --port n      use this port (default: any free port)
+  --connect     open a running \`amness serve\` (this computer or another one) in the window; the token comes from
+                --token, the address (#t=…) or AMNESS_SERVE_TOKEN
 
 Settings, API keys and conversations are shared with the terminal app (amness).`;
 
@@ -41,7 +44,8 @@ export async function runDesktop(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(HELP); return 0; }
   if (argv.includes("--version")) { console.log(VERSION); return 0; }
   const val = (f: string) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; };
-  const folder = argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--port");
+  const folder = argv.find((a, i) => !a.startsWith("--") && !["--port", "--connect", "--token"].includes(argv[i - 1]));
+  if (val("--connect")) return connect(val("--connect")!, val("--token"));
   // Started from a dock, a menu or Finder the working folder is / or the home folder: open the last project instead.
   const launched = process.cwd() === "/" || process.cwd() === homedir();
   const st = loadState(), recent = ((st as { recentProjects?: string[] }).recentProjects ?? []).find((p) => existsSync(p) && isTrustedDir(st, p));   // never a folder you did not trust: it would ask again at every start
@@ -86,6 +90,29 @@ export async function runDesktop(argv: string[]): Promise<number> {
   }
   return await new Promise<number>(() => {});
 }
+
+/** Open a running `amness serve` in the window: check it answers and the token works, then show its own page. */
+async function connect(address: string, tokenArg?: string): Promise<number> {
+  let u: URL; try { u = new URL(/^https?:\/\//.test(address) ? address : `http://${address}`); } catch { console.error(`amness-desktop: not an address: ${address}`); return 2; }
+  const token = tokenArg ?? (/[#&]t=([^&]+)/.exec(u.hash)?.[1]) ?? process.env.AMNESS_SERVE_TOKEN;
+  if (!token) { console.error("amness-desktop: give the token with --token (amness serve token, on the machine that runs it)"); return 2; }
+  const base = `${u.protocol}//${u.host}/`;
+  try {
+    const h = await fetch(base + "v1/health", { signal: AbortSignal.timeout(8000) }); if (!h.ok) throw new Error(`HTTP ${h.status}`);
+    const a = await fetch(base + "v1/sessions", { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) });
+    if (a.status === 401) { console.error("amness-desktop: the server refused the token (amness serve token shows the right one)"); return 2; }
+  } catch (e) { console.error(`amness-desktop: no amness serve answers at ${base} (${(e as Error).message})`); return 1; }
+  const url = `${base}#t=${token}`, bin = argv0Browser() ? undefined : electronBinary();
+  if (bin) {
+    const main = fileURLToPath(new URL("./desktop/electron-main.cjs", import.meta.url)), env: NodeJS.ProcessEnv = { ...process.env, AMNESS_DESKTOP_WAIT: "1", AMNESS_DESKTOP_REMOTE: "1" };
+    delete env.ELECTRON_RUN_AS_NODE; delete env.AMNESS_DESKTOP_URL;
+    const child = spawn(bin, [main], { stdio: ["pipe", "ignore", "inherit"], env });
+    child.stdin?.write(JSON.stringify({ url, title: `Amness · ${u.host}` }) + "\n");
+    return await new Promise<number>((done) => { child.on("exit", () => done(0)); child.on("error", async () => { await openUrl(url); done(0); }); });
+  }
+  const ok = await openUrl(url); console.log(`${ok ? "Opened" : "Open"} ${base} in your browser (the address carries the token: keep it private)`); return 0;
+}
+const argv0Browser = () => process.argv.includes("--browser");
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("amness-desktop") || process.argv[1]?.endsWith("desktop.js") || process.argv[1]?.endsWith("desktop.ts")) {
   runDesktop(process.argv.slice(2)).then((c) => process.exit(c), (e) => { console.error(`amness-desktop: ${(e as Error).message}`); process.exit(1); });

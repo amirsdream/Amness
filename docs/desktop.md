@@ -20,6 +20,7 @@ The first time, if no API key is set, the app asks for one. Keys are saved in th
 | `--browser` | Opens the app in your browser instead of its own window. |
 | `--no-window` | Starts only the local server and prints its address. |
 | `--port n` | Uses this port instead of a free one. |
+| `--connect <address> [--token <token>]` | Opens a running `amness serve` (on this computer or another one) in the window, instead of starting an agent here. See [Amness as a service](api.md). |
 
 ## What is in the window
 

@@ -10,7 +10,7 @@ if (!target && !waiting) { console.error("amness-desktop: start it with the amne
 /** The address, once the Node process has sent it (only when waiting). */
 const address = waiting ? new Promise((res) => {
   let buf = ""; process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (d) => { buf += d; const i = buf.indexOf("\n"); if (i < 0) return; try { const m = JSON.parse(buf.slice(0, i)); if (typeof m.url === "string" && /^http:\/\/127\.0\.0\.1:\d+\//.test(m.url)) res(m); } catch { /* not ours */ } });
+  process.stdin.on("data", (d) => { buf += d; const i = buf.indexOf("\n"); if (i < 0) return; try { const m = JSON.parse(buf.slice(0, i)); if (typeof m.url === "string" && (/^http:\/\/127\.0\.0\.1:\d+\//.test(m.url) || (process.env.AMNESS_DESKTOP_REMOTE === "1" && /^https?:\/\/[^/\s]+\//.test(m.url)))) res(m); } catch { /* not ours */ } });
   process.stdin.on("end", () => app.quit());                                                 // the Node process went away before the server was up
 }) : Promise.resolve({ url: target });
 const ICON = path.join(__dirname, "assets", "icon.png");                                      // the app icon: window, taskbar, dock

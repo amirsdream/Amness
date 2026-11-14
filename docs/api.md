@@ -33,6 +33,31 @@ Open the `app` address in a browser. The part after `#t=` is the token. It stays
 
 `amness serve token` prints the token. `amness serve token --rotate` makes a new one: restart the server, and give the new token to your clients.
 
+## Keep it running: `amness service`
+
+```bash
+amness service install --host 0.0.0.0 --root ~/code      # the same options as amness serve
+amness service status
+```
+
+`install` writes a service for your operating system and starts it. It starts again when you log in, and again if it stops with an error.
+
+| System | What Amness writes | Notes |
+|---|---|---|
+| macOS | `~/Library/LaunchAgents/dev.amness.serve.plist` (launchd) | Runs while you are logged in. |
+| Linux | `~/.config/systemd/user/amness.service` (systemd, your user) | To keep it running when you are logged out: `loginctl enable-linger $USER`. |
+| Windows | A task "Amness serve" that runs when you sign in | |
+
+Its output goes to `~/.amness/serve.out.log` (`amness service logs`). The other commands are `start`, `stop`, `restart`, `uninstall`. `install --dry-run` shows what it would write and run, and changes nothing. Nothing runs as administrator or root.
+
+## Open it in the desktop app
+
+```bash
+amness-desktop --connect http://192.168.1.20:4747 --token <token>
+```
+
+The desktop window shows the running server instead of starting an agent on this computer. The token can also come from the address (`#t=…`) or from `AMNESS_SERVE_TOKEN`. Amness checks that the server answers and that the token is right before it opens the window.
+
 ## Use it from your phone or another computer
 
 ```bash

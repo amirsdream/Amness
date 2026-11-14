@@ -183,6 +183,7 @@ The table lists every file in `src/` and `cli/`. The text comes from the first c
 | `cli/mcpcli.ts` | The `amness mcp` command. |
 | `cli/serve.ts` | `amness serve`: the service (browser app and `/v1` API), its token and network options. |
 | `cli/serve/sessions.ts` | The API's sessions: one App each, their items, status, dialogs and events. |
+| `cli/service.ts` | `amness service`: the launchd, systemd or Windows task that keeps `amness serve` running. |
 | `cli/serve/api.ts` | The `/v1` routes and their OpenAPI description. |
 
 ### `cli/tui/` : the chat interface
