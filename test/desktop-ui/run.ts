@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+const VERSION: string = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;   // screenshots show the real version
+// AMNESS_UI_STEP_MS slows the scripted model (for screenshots that show a real duration).
 import { startDesktopServer } from "../../cli/desktop/server.ts";
 import { electronBinary } from "../../cli/desktop.ts";
 import { loadState, saveState } from "../../cli/state.ts";
@@ -22,7 +25,7 @@ const replies: Message[] = [
   { ...c("edit_file", { path: "src/paginate.ts", old: "i < start + size - 1", new: "i < Math.min(start + size, items.length)" }), content: "Found it: the loop stops one item early." },
   { role: "assistant", content: "Fixed the off-by-one in `src/paginate.ts:4`. Each page now has `size` items and the last page has no `undefined` rows.", usage: u },
 ];
-const model: Model = async (_m, _s, o) => { await new Promise((x) => setTimeout(x, 120)); const r = replies.shift() ?? { role: "assistant", content: "ok", usage: u }; if (r.content && o?.onThinking) o.onThinking("Looking at the loop bounds in paginate…"); if (r.content && o?.onText) o.onText(r.content); return r; };
+const model: Model = async (_m, _s, o) => { await new Promise((x) => setTimeout(x, Number(process.env.AMNESS_UI_STEP_MS ?? 120))); const r = replies.shift() ?? { role: "assistant", content: "ok", usage: u }; if (r.content && o?.onThinking) o.onThinking("Looking at the loop bounds in paginate…"); if (r.content && o?.onText) o.onText(r.content); return r; };
 if (process.argv.includes("--chats")) {
   saveState({ ...loadState(), trustedDirs: [dir] });                                // it saves for real, so the folder-trust question would come first                                         // saved conversations from several days, for the conversation list
   const chats = join(dir, ".amness", "chats"); mkdirSync(chats, { recursive: true });
@@ -36,7 +39,7 @@ if (process.argv.includes("--chats")) {
   mk("Rename customer to account across the API", 40 * 24 * H, 9, ["Rename customer to account.", "Renamed in 41 files, with an alias."]);
   for (let d = 10; d < 18; d++) mk(`Older task from ${d} days ago`, d * 24 * H, 2, ["An older request.", "An older answer."]);   // always "Previous 30 days": folded, and more than the cap
 }
-const srv = await startDesktopServer({ cfg: { provider: "openai", baseUrl: "http://127.0.0.1:9/v1", model: "gpt-6.1-sol", maxTokens: 300000, apiKey: "sk-test" } as any, cwd: dir, version: "0.1.8", persist: process.argv.includes("--chats"), makeModel: () => model });
+const srv = await startDesktopServer({ cfg: { provider: "openai", baseUrl: "http://127.0.0.1:9/v1", model: "gpt-6.1-sol", maxTokens: 300000, apiKey: "sk-test" } as any, cwd: dir, version: VERSION, persist: process.argv.includes("--chats"), makeModel: () => model });
 const env: NodeJS.ProcessEnv = { ...process.env, AMNESS_DESKTOP_URL: srv.url, AMNESS_DESKTOP_EVAL: evalFile, ...(size ? { AMNESS_DESKTOP_SIZE: size } : {}), ...(shot ? { AMNESS_DESKTOP_SCREENSHOT: shot } : {}) }; delete env.ELECTRON_RUN_AS_NODE;
 const ch = spawn(electronBinary()!, [fileURLToPath(new URL("../../cli/desktop/electron-main.cjs", import.meta.url))], { stdio: ["ignore", "pipe", "ignore"], env });
 let out = ""; ch.stdout.on("data", (d) => (out += d));

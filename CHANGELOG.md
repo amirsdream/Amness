@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 (2026-11-14)
 
 - **Amness as an MCP server, so Claude Code, Codex and other agents can hand it tasks.** `amness mcp serve` (stdio; `claude mcp add amness -- amness mcp serve`) and `/mcp` on `amness serve` (Streamable HTTP, same token, same sessions as the app and the API). Tools work on session handles: `amness_run`, `amness_status`, `amness_reply`, `amness_answer`, `amness_sessions`, `amness_close`; calls wait up to 50 s and then return the id to poll. Approvals go to the caller's user when the caller supports elicitation (both protocol generations), else to the calling agent as numbered options. Tested against the official MCP TypeScript SDK in both directions.
 - **MCP sign-in, prompts, resources and questions.** `amness mcp login|logout` and `/mcp login|logout`: OAuth 2.1 as MCP 2026-07-28 describes it (protected-resource and authorization-server discovery with the issuer checked, dynamic registration or your client id, PKCE S256, `resource`, `iss` check), tokens in the system key store and renewed before they expire. A server's prompts are `/mcp__<server>__<prompt>` commands; its resources are read with `list_mcp_resources` and `read_mcp_resource`. A server's question during a call (a form, or a page to open) opens the app's own dialog, in both protocol generations; without a person (`amness run`, editors) Amness declines.

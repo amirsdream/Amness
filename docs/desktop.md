@@ -2,7 +2,7 @@
 
 Amness also runs as a desktop app. It is the same agent as the terminal app, with the same settings, API keys, conversations, permissions and safety rules. Only the window is different.
 
-![The desktop app after a fix](images/desktop.png)
+![The desktop app after a fix: the turn folded to one line, the answer, and the side panel](images/desktop.png)
 
 ## Start it
 
@@ -25,6 +25,8 @@ The first time, if no API key is set, the app asks for one. Keys are saved in th
 ## What is in the window
 
 The window runs the terminal app itself (the same `App`), so everything the terminal can do, the window can do too. When a feature is added to the terminal app, the window has it as well.
+
+![An edit waiting for approval in the desktop app, with the diff](images/desktop-approval.png)
 
 - **Every command.** Type `/` in the message box for the same commands and suggestions as in the terminal, with their arguments (`/mode p` suggests `plan`). `!cmd` runs a shell command, `#note` saves a memory. `Ctrl/⌘ K` opens a searchable list of all commands. What a command prints (for example `/status`, `/loop`, `/tokens`) appears in the conversation in the terminal's colours, with a Copy button.
 - **Every dialog.** Approvals, pickers (`/model`, `/resume`, `/theme`…), questions and help open as windows: the same dialogs as in the terminal. Press `1`–`9` to choose; in a list, type to search. If you say no to an approval, Amness asks what to do instead. When Amness shows a plan, **Yes, after I edit the plan** opens it in an editor first.

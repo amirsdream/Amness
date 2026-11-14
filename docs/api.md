@@ -60,6 +60,9 @@ The desktop window shows the running server instead of starting an agent on this
 
 ## Use it from your phone or another computer
 
+<img src="images/serve-phone.png" alt="Amness in a phone-sized browser" width="300">
+
+
 ```bash
 amness serve --host 0.0.0.0 --root ~/code
 ```

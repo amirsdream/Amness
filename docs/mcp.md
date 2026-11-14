@@ -4,6 +4,8 @@ An MCP server is a program that gives the agent more tools: GitHub, a database, 
 
 The same servers work everywhere: in the terminal app, in the desktop app, in `amness run`, and in editors that use Amness through ACP.
 
+![The /mcp view: two connected servers and one from .mcp.json waiting for trust](images/mcp.png)
+
 ## Add a server
 
 ```bash
