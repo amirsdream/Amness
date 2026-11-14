@@ -104,6 +104,18 @@ function singleToDouble(s: string): string {
  * optional property sent as null removed. Missing required values are never guessed. Returns the new value
  * and one line per change.
  */
+/** Words models often use for a status value, mapped to the one the schema may list instead. */
+const ENUM_SYNONYMS: Record<string, string[]> = {
+  done: ["completed", "complete", "finished", "resolved", "closed"], completed: ["done", "complete", "finished"],
+  in_progress: ["inprogress", "doing", "active", "started", "ongoing", "wip"], pending: ["todo", "to_do", "open", "not_started", "planned"],
+};
+/** The schema's enum value that a near miss means: the same apart from case, spaces and hyphens, or a common synonym of it. */
+function enumValue(x: string, allowed: unknown[]): unknown {
+  const norm = (v: string) => v.trim().toLowerCase().replace(/[\s-]+/g, "_"), n = norm(x);
+  const same = allowed.find((a) => typeof a === "string" && norm(a) === n); if (same !== undefined) return same;
+  return allowed.find((a) => typeof a === "string" && (ENUM_SYNONYMS[norm(a)] ?? []).includes(n));
+}
+
 export function coerce(v: unknown, s: Schema, path = "$"): { value: unknown; fixes: string[] } {
   const fixes: string[] = [];
   const go = (x: unknown, sc: Schema, p: string): unknown => {
@@ -114,6 +126,7 @@ export function coerce(v: unknown, s: Schema, path = "$"): { value: unknown; fix
     if ((sc.type === "number" || sc.type === "integer") && t === "string" && /^\s*-?\d+(\.\d+)?([eE][-+]?\d+)?\s*$/.test(x as string)) {
       const n = Number(x); if (sc.type === "number" || Number.isInteger(n)) { fixes.push(`${p}: "${x}" → ${n}`); return n; }
     }
+    if (sc.enum && t === "string" && !sc.enum.includes(x)) { const e = enumValue(x as string, sc.enum); if (e !== undefined) { fixes.push(`${p}: "${x}" → "${e}"`); return e; } }
     if (sc.type === "boolean" && t === "string" && /^(true|false)$/i.test((x as string).trim())) { const b = (x as string).trim().toLowerCase() === "true"; fixes.push(`${p}: "${x}" → ${b}`); return b; }
     if (sc.type === "array" && t !== "array" && t !== "null" && x !== undefined) {
       const item = sc.items ? go(x, sc.items, `${p}[0]`) : x;

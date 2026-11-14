@@ -14,8 +14,21 @@ export function redact(text: string): Redacted {
   let count = 0; const kinds = new Set<string>(); let out = text;
   for (const [kind, re] of PATTERNS) out = out.replace(re, () => { count++; kinds.add(kind); return `[REDACTED:${kind}]`; });
   out = out.replace(BEARER, (_m, pre) => { count++; kinds.add("bearer-token"); return `${pre}[REDACTED:bearer-token]`; });
-  out = out.replace(ASSIGN, (m, pre: string, val: string) => { if (/^\[REDACTED|^\$\{?\w+\}?$|^<[^>]+>$|^(?:true|false|null|undefined|none)$/i.test(val) || /^(?:process\.env|os\.environ|getenv|ENV\[)/.test(val)) return m; count++; kinds.add("credential-assignment"); return `${pre}[REDACTED:credential]`; });
+  out = out.replace(ASSIGN, (m, pre: string, val: string, at: number, all: string) => {
+    if (/^\[REDACTED|^\$\{?\w+\}?$|^<[^>]+>$|^(?:true|false|null|undefined|none)$/i.test(val) || /^(?:process\.env|os\.environ|getenv|ENV\[)/.test(val)) return m;
+    if (!/["'`]$/.test(pre) && isCode(val, all.slice(at + m.length))) return m;
+    count++; kinds.add("credential-assignment"); return `${pre}[REDACTED:credential]`;
+  });
   return { text: out, count, kinds: [...kinds] };
+}
+
+/**
+ * An unquoted value that is source code, not a secret: a call, an index, a negation (`validatePassword(x)`, `!touched.password`),
+ * a property path (`formData.password`), a camelCase variable (`passwordError`), or a value an operator continues
+ * (`validation = …`). Masking these broke the code the model read, so its edits stopped matching the file.
+ */
+function isCode(val: string, after: string): boolean {
+  return /[()[\]!]/.test(val) || /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(val) || /^[a-z]+(?:[A-Z][a-z]+)+$/.test(val) || /^[ \t]*[=(.?&|+*/<>-]/.test(after) && /^[A-Za-z_$][\w$]*$/.test(val) && !/\d/.test(val);
 }
 
 /** `redact` applied to every string inside a JSON-like value (used before anything is written to a trace). */

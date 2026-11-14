@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fixed: secret masking broke ordinary code.** Lines such as `const passwordStrength = getPasswordStrength(password)` reached the model as `… = [REDACTED:credential]`, so it read broken code and its edits on those lines did not match the file. Values that are code (a call, an index, a negation, a property path, a camelCase variable, a value an operator continues) are no longer masked; quoted values and `.env`-style secrets still are.
+- **A near-miss enum value is corrected instead of rejected** (case, spaces, hyphens, and common synonyms such as `completed` → `done`), so `todo_write` with `"completed"` works the first time.
 - **Tool search costs fewer tokens.** With many deferred tools (MCP servers), the `tool_search` list shows names grouped by server, not a description for each tool: 487 tokens instead of about 1,840 for 91 tools, in every request. Search ranks with BM25 (names and descriptions, snake_case and camelCase split), loads exact names when the model gives them, and loads only the hits that score close to the best one. A search result no longer repeats the schemas that the tool list now carries. In a measured 12-turn session with two searches, the tool-search part of each request fell from about 3,360 to 1,540 tokens.
 
 ## 0.10.1 (2026-11-14)

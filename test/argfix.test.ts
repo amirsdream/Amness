@@ -109,3 +109,10 @@ test("chaos argshape: every shape it produces is repaired back to the original",
     assert.deepEqual(coerce((r as any).args, edit.schema).value, orig, String(i));
   }
 });
+
+test("coerce: an enum near miss (case, spaces, a common synonym) becomes the listed value; an unknown word is left for the error", () => {
+  const s = { type: "object", properties: { todos: { type: "array", items: { type: "object", properties: { status: { type: "string", enum: ["pending", "in_progress", "done"] } } } } } } as const;
+  const r = coerce({ todos: [{ status: "completed" }, { status: "In Progress" }, { status: "todo" }, { status: "DONE" }, { status: "blocked" }] }, s as any);
+  assert.deepEqual((r.value as any).todos.map((t: any) => t.status), ["done", "in_progress", "pending", "done", "blocked"]);
+  assert.equal(r.fixes.length, 4);
+});

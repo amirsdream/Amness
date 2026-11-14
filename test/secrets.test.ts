@@ -20,3 +20,13 @@ test("childEnv: Amness's own keys never reach commands; strict mode also drops c
   process.env.OPENAI_API_KEY = "sk-should-not-leak"; process.env.MY_BUILD_FLAG = "yes";
   const out = await runShell('echo "[$OPENAI_API_KEY] [$MY_BUILD_FLAG]"', tmpdir(), 5000); assert.match(out, /\[\] \[yes\]/);
 });
+
+test("redact: source code that names a password is left alone; secret values next to it are still masked", () => {
+  const code = [
+    "const passwordStrength = getPasswordStrength(password)", "const isPasswordValid = !touched.password || !errors.password",
+    "setErrors(prev => ({ ...prev, password: validatePassword(formData.password) }))", "if (passwordError) newErrors.password = passwordError",
+    "case 'password': validation = validatePassword(value); break", "token = tokens[i]", "const apiKey = config.apiKey",
+  ].join("\n");
+  assert.equal(redact(code).count, 0); assert.equal(redact(code).text, code);
+  for (const s of ["PASSWORD=changeme", "PASSWORD=changeme\nX=1", "password: hunter2hunter2", 'const password = "correcthorse"', "DB_PASSWORD=Sup3rS3cret", "api_key = abcd1234efgh"]) assert.equal(redact(s).count, 1, s);
+});
