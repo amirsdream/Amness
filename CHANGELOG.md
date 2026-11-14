@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed: `amness doctor` failed careful models on "corrects a call after an error".** The check told the model, in a tool result, to store a different number than the one the user asked for. Current models such as Claude Sonnet 5.5 rightly refuse an instruction from a tool result and ask the user, so they were marked not fit for the main and edit jobs (and `--write` set them to the local tier). Now the error is a missing argument whose right value is in the user's request.
+
 ## 0.9.0 (2026-11-13)
 
 - **Desktop: the window opens at once.** Amness now starts the window first and shows a start screen (the logo, the name, a moving line) while the agent loads, then fades into the app. Before, nothing showed until everything had loaded.

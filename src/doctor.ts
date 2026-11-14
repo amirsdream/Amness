@@ -24,6 +24,9 @@ const T_RECORD = spec("probe_record", "Record a set of typed values.", RECORD);
 const T_ECHO = spec("probe_echo", "Echo a number back.", { type: "object", required: ["x"], properties: { x: { type: "integer" } } });
 const T_STEP = (k: number) => spec(`step_${k}`, `Step ${k} of a chain. Needs the token from the previous step.`, { type: "object", required: ["token"], properties: { token: { type: "string" } } });
 const T_RANGE = spec("probe_range", "Store a number between 1 and 10.", { type: "object", required: ["n"], properties: { n: { type: "integer" } } });
+// The schema shows only `value`; the scripted tool then says `unit` is missing. The right fix follows from the user's own words ("kilograms"),
+// so a model that refuses instructions planted in tool results (as current models are trained to) still passes. See check 6.
+const T_WEIGHT = spec("probe_weight", "Record a weight.", { type: "object", required: ["value"], properties: { value: { type: "number" } } });
 const SYS = "You are being tested on tool use. Follow the instructions exactly. Use the tools when asked.";
 
 type Call = { name: string; args: unknown; how: "native" | "text"; repaired: boolean };
@@ -101,16 +104,22 @@ export async function runDoctor(model: Model, o: { stated?: number; onCheck?: (c
   // 5 is the native-or-text observation made in every check above.
   add({ id: "format", title: "calls arrive as structured tool_calls", pass: nativeSeen || !textSeen, detail: textSeen && !nativeSeen ? "calls came as text in the answer: turn on textToolCalls" : textSeen ? "mostly native, some as text" : nativeSeen ? "native" : "no call was seen" });
 
-  // 6. Recovery: one deliberate error; is the next call corrected?
+  // 6. Recovery: the first call fails with a harness-style argument error; is the next call corrected?
+  // The fix must agree with what the user asked. An earlier version told the model to store a different number than the user's,
+  // and careful models rightly refused to follow an instruction from a tool result (claude-sonnet-5-5 asked the user instead).
   let recoverOk = false;
   await safely("recover", "corrects a call after an error", async () => {
-    const msgs: Message[] = [{ role: "system", content: SYS }, { role: "user", content: "Store the number 42 with probe_range." }];
-    const { m } = await ask(msgs, [T_RANGE]); const c = callsOf(m, [T_RANGE])[0];
+    const msgs: Message[] = [{ role: "system", content: SYS }, { role: "user", content: "Record a weight of 7 kilograms with probe_weight." }];
+    const { m } = await ask(msgs, [T_WEIGHT]); const c = callsOf(m, [T_WEIGHT]).find((x) => x.name === "probe_weight");
     if (!c) return { pass: false, detail: "no first call" };
+    const first = c.args as { value?: unknown; unit?: unknown } | undefined;
+    if (first?.value === 7 && first.unit === "kg") { recoverOk = true; return { pass: true, detail: "sent the unit without being asked (no error to correct)" }; }
     const id = m.tool_calls?.[0]?.id ?? "r1";
-    msgs.push(m.tool_calls?.length ? m : { role: "assistant", content: null, tool_calls: [{ id, function: { name: c.name, arguments: JSON.stringify(c.args) } }] }, { role: "tool", tool_call_id: id, content: "ERROR: n must be between 1 and 10. Store 7 instead." });
-    const r2 = await ask(msgs, [T_RANGE]), c2 = callsOf(r2.m, [T_RANGE])[0], n = (c2?.args as { n?: unknown })?.n;
-    recoverOk = n === 7; return { pass: recoverOk, detail: c2 ? `second call n = ${JSON.stringify(n)}` : "no second call" };
+    msgs.push(m.tool_calls?.length ? m : { role: "assistant", content: null, tool_calls: [{ id, function: { name: c.name, arguments: JSON.stringify(c.args) } }] },
+      { role: "tool", tool_call_id: id, content: 'ERROR: invalid arguments: missing required property "unit" (one of "kg", "lb"). Nothing was recorded.' });
+    const r2 = await ask(msgs, [T_WEIGHT]), c2 = callsOf(r2.m, [T_WEIGHT]).find((x) => x.name === "probe_weight"), a2 = c2?.args as { value?: unknown; unit?: unknown } | undefined;
+    recoverOk = a2?.value === 7 && a2.unit === "kg";
+    return { pass: recoverOk, detail: c2 ? `second call ${JSON.stringify(c2.args)}` : `no second call (said: ${(r2.m.content ?? "").replace(/\s+/g, " ").slice(0, 80)})` };
   });
 
   // 7. Window: what the server states. Silent truncation is watched for during every session (see the harness).

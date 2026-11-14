@@ -21,10 +21,11 @@ const scripted = (st: Style = {}): Model => async (msgs, tools, opts) => {
     if (next) return mk(next[1], { token: next[2] });
     return st.noStop ? mk("step_1", { token: "start" }) : { role: "assistant", content: "DONE" };
   }
-  if (t.includes("probe_range")) {
-    if (last.role === "tool") return mk("probe_range", { n: st.noRecover ? 42 : 7 });
-    return mk("probe_range", { n: /42/.test(user) ? 42 : 3 });
+  if (t.includes("probe_weight")) {
+    if (last.role === "tool") return st.noRecover ? mk("probe_weight", { value: 7 }) : mk("probe_weight", { value: 7, unit: "kg" });
+    return mk("probe_weight", { value: 7 });
   }
+  if (t.includes("probe_range")) return mk("probe_range", { n: /42/.test(user) ? 42 : 3 });
   return { role: "assistant", content: "?" };
 };
 
