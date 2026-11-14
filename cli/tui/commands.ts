@@ -695,12 +695,15 @@ export function buildCommands(): Cmd[] {
           out.push(`  ${dot(r.status)} ${bold(r.name)}  ${dim(`${SCOPE_TEXT[r.scope]} · ${r.transport}${r.era ? ` ${r.era}` : ""} · ${r.status === "connected" ? `${r.tools} tools` : r.status === "pending" ? "waits for /trust" : r.status}`)}`);
           out.push(`    ${dim(r.target.slice(0, a.width - 6))}`);
           if (r.error) out.push(`    ${red(r.error.slice(0, a.width - 6))}`);
+          if (r.changed.length) out.push(`    ${yellow(`${r.changed.length} changed tool(s) held back: /mcp approve ${r.name}`)}`);
+          if (Object.keys(r.warnings).length) out.push(`    ${red(`⚠ ${Object.keys(r.warnings).length} tool description(s) look suspicious: /mcp tools ${r.name}`)}`);
         }
         for (const m of a.mcp) out.push(`  ${green("●")} ${m.cmd}  ${dim(`this session · ${m.tools.length} tools`)}`);
         for (const n of a.mcpNotes) out.push(`  ${yellow("!")} ${dim(n)}`);
         if (!rows.length && !a.mcp.length) out.push(dim("  no MCP servers attached or configured."), dim("  /mcp add github https://api.githubcopilot.com/mcp/ · /mcp add fs npx -y @modelcontextprotocol/server-filesystem ."), dim("  or a .mcp.json in the project (Claude Code's format) · amness mcp --help"));
         return void a.commit(out);
       }
+      if (sub === "approve") { const r = a.mcpHub?.rows().find((x) => x.name === words[1]); if (!r) return void a.say("usage: /mcp approve <name>", dim); a.mcpHub!.approve(r.name); a.syncMcpTools(); return void a.say(`${r.name}: its current tools are approved`, dim); }
       if (sub === "off") { a.mcp.splice(0).forEach((m) => m.close()); a.buildAgent(); return void a.say("MCP servers detached", dim); }
       if (sub === "reconnect") { a.note("reconnecting…", 60_000); await a.mcpHub?.reconnect(words[1]); a.noticeUntil = 0; return void a.dispatch("/mcp"); }
       if (sub === "enable" || sub === "disable") {
@@ -710,7 +713,8 @@ export function buildCommands(): Cmd[] {
       }
       if (sub === "tools") {
         const h = words[1] ? a.mcpHub?.handle(words[1]) : undefined; if (!h) return void a.say(words[1] ? `${words[1]} is not connected (/mcp)` : "usage: /mcp tools <name>", dim);
-        return void a.commit(["", bold(`  ${words[1]}: ${h.tools.length} tools`), ...h.tools.map((t) => `  ${cyan(t.name)} ${t.risky ? yellow("asks") : dim("read-only")} ${dim(t.description.split("\n")[0].slice(0, a.width - t.name.length - 14))}`)]);
+        const row = a.mcpHub!.rows().find((x) => x.name === words[1])!, held = new Set(row.changed.map((c) => c.tool));
+        return void a.commit(["", bold(`  ${words[1]}: ${h.tools.length} tools`), ...h.listed.flatMap((d, i) => { const t = h.tools[i]; return [`  ${cyan(t.name)} ${held.has(d.name) ? red("held: changed since you approved it") : t.risky ? yellow("asks") : dim("read-only")} ${dim(t.description.split("\n")[0].slice(0, Math.max(20, a.width - t.name.length - 14)))}`, ...(row.warnings[d.name] ?? []).map((w) => `    ${red("⚠ " + w)}`)]; })]);
       }
       if (sub === "remove") {
         if (!words[1]) return void a.say("usage: /mcp remove <name>", dim);

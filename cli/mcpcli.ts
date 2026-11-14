@@ -1,7 +1,7 @@
 // `amness mcp …`: manage the MCP servers Amness connects to (the same files the TUI's /mcp and the desktop use).
 import { resolve } from "node:path";
-import { connectMcp, projectConfigFingerprint, type McpServerConfig } from "../src/index.ts";
-import { addServer, mcpEntries, mcpFile, parseMcpJson, readServers, removeServer, setDisabled, SCOPE_TEXT, type FileScope } from "./mcpconfig.ts";
+import { connectMcp, McpHub, projectConfigFingerprint, type McpServerConfig } from "../src/index.ts";
+import { addServer, hubOptions, mcpEntries, mcpFile, parseMcpJson, readServers, removeServer, setDisabled, SCOPE_TEXT, type FileScope } from "./mcpconfig.ts";
 import { loadState } from "./state.ts";
 import { bold, cyan, dim, green, red, yellow } from "./ui.ts";
 
@@ -20,6 +20,8 @@ export const MCP_HELP = `amness mcp <command>   MCP servers for Amness (terminal
   get <name>                                   one server's settings and tools
   remove [--scope …] <name>
   enable <name> · disable <name>               switch one off or on for this project only
+  check [name]                                 connect, time it, and look for hidden instructions in tool descriptions
+  approve <name>                               accept tools that changed since you approved the server (they are held back until then)
 
 Values may use \${VAR} and \${VAR:-default}. Servers from .mcp.json start only after you trust the project
 (the terminal asks; /trust asks again). In amness run they need --trust-project or --mcp-config.`;
@@ -66,6 +68,25 @@ export async function runMcpCli(argv: string[], o: { cwd?: string } = {}): Promi
       console.log(`${green("✓")} removed ${bold(name)} ${dim(`(${SCOPE_TEXT[from]})`)}`); return 0;
     }
     if (cmd === "enable" || cmd === "disable") { if (!rest[0]) throw new Error("which server?"); setDisabled(cwd, rest[0], cmd === "disable"); console.log(`${rest[0]} ${cmd === "disable" ? "switched off" : "switched on"} for ${cwd}`); return 0; }
+    if (cmd === "check" || cmd === "approve") {
+      const { entries } = mcpEntries(cwd, { trusted: trusted() }), pick = entries.filter((e) => (rest[0] ? e.name === rest[0] : true) && !e.disabled);
+      if (!pick.length) { console.error(rest[0] ? `no server "${rest[0]}" (amness mcp list)` : "no MCP servers"); return 1; }
+      if (cmd === "approve" && !rest[0]) throw new Error("which server?");
+      let bad = 0;
+      for (const e of pick) {
+        if (e.pending) { console.log(`${yellow("⏸")} ${bold(e.name)}  ${dim("from .mcp.json: trust the project first (open it in amness, or /trust)")}`); continue; }
+        const hub = new McpHub(hubOptions(cwd, { probeMs: 8000, timeoutMs: 20_000 })), t0 = Date.now();
+        await hub.start([e]); const r = hub.rows()[0], ms = Date.now() - t0;
+        if (r.status !== "connected") { console.log(`${red("✗")} ${bold(e.name)}  ${red(r.error ?? r.status)}`); hub.close(); bad++; continue; }
+        if (cmd === "approve") { hub.approve(e.name); console.log(`${green("✓")} ${bold(e.name)}: ${r.tools} tools approved${r.changed.length ? ` (${r.changed.length} had changed)` : ""}`); hub.close(); continue; }
+        console.log(`${Object.keys(r.warnings).length || r.changed.length ? yellow("!") : green("●")} ${bold(e.name)}  ${dim(`${r.transport} ${r.era} · ${r.tools} tools · connected in ${ms} ms`)}`);
+        for (const c of r.changed) console.log(`    ${yellow(c.kind === "new" ? "+ new tool" : "~ changed")} ${c.tool}  ${dim("held back until: amness mcp approve " + e.name)}`);
+        for (const [tool, w] of Object.entries(r.warnings)) { bad++; console.log(`    ${red("⚠")} ${tool}: ${w.join("; ")}`); }
+        if (!r.changed.length && !Object.keys(r.warnings).length) console.log(dim("    no hidden instructions found in the tool descriptions (a heuristic: read them yourself with amness mcp get)"));
+        hub.close();
+      }
+      return bad ? 1 : 0;
+    }
     if (cmd === "list" || cmd === "get") {
       const { entries, notes } = mcpEntries(cwd, { trusted: trusted() });
       const pick = cmd === "get" ? entries.filter((e) => e.name === rest[0]) : entries;

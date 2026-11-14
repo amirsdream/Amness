@@ -23,6 +23,8 @@ In the chat, `/mcp add <name> <url or command>` does the same. `/mcp` shows ever
 | `amness mcp get <name>` | One server's settings and its tools. |
 | `amness mcp remove <name>` | Removes it. |
 | `amness mcp enable <name>`, `disable <name>` | Switches one on or off for this project only. |
+| `amness mcp check [name]` | Connects, says how long it took, and looks for hidden instructions in the tool descriptions. |
+| `amness mcp approve <name>` | Accepts tools that changed since you approved the server. |
 
 Options for `add`: `--scope local|project|user` (see below), `-e KEY=value` (stdio), `-H "Name: value"` (HTTP), `--headers-helper <command>`, `--timeout <ms>`.
 
@@ -34,7 +36,8 @@ In the chat:
 | `/mcp add [--scope …] <name> <url or command…>`, `/mcp remove <name>` | Adds or removes a server, then connects. |
 | `/mcp enable <name>`, `/mcp disable <name>` | On or off for this project. |
 | `/mcp reconnect [name]` | Connects again (after the server restarted, or after you signed in). |
-| `/mcp tools <name>` | The server's tools, and which ones ask before they run. |
+| `/mcp tools <name>` | The server's tools, which ones ask before they run, which are held back, and warnings about their descriptions. |
+| `/mcp approve <name>` | Accepts tools that changed since you approved the server. |
 | `/mcp <command…>` or `/mcp <url>` | Attaches a server for this session only. `/mcp off` detaches those. |
 
 ## Where servers are saved
@@ -69,6 +72,9 @@ The files use the `mcpServers` format of Claude Code and Claude Desktop:
 - **A project's servers need your yes.** The servers in a cloned project's `.mcp.json` start only after you trust the project. The terminal app asks once, together with the project's hooks and permission rules. If the file changes, it asks again. `/trust` shows the state and asks again. Until then, `/mcp` shows them as waiting.
 - **Your API keys stay yours.** In a remote server's address or headers, the keys of your model providers (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and the others) are always empty. So a project file cannot send them to a server it names.
 - **The agent cannot add servers.** `.mcp.json` is protected like `.amness/hooks.json`: the agent may read it, but it may not write it.
+- **A changed tool waits for you.** The first time a server connects, Amness remembers what each tool says about itself (its description and its input schema). If that changes later, or a new tool appears, the tool is held back: the model does not see it. The terminal and the desktop app show the old and the new text and ask. `amness run` and editors leave the tool out and say so. `/mcp approve <name>` or `amness mcp approve <name>` accepts the new versions. This protects you from a server that changes its descriptions after you trusted it (a "rug pull").
+- **Suspicious descriptions are flagged.** Amness looks for signs of hidden instructions in tool descriptions: invisible characters, "ignore previous instructions", tags like `<IMPORTANT>`, requests to hide something from you, mentions of key files such as `~/.ssh/id_rsa`, and requests to send data somewhere. `/mcp` and `amness mcp check` show what it found. This is a heuristic: read the descriptions yourself with `amness mcp get <name>`.
+- **Very long results go to a file.** A result longer than 40,000 characters would fill the context. The model gets the first part and the path of a file in `.amness/mcp-output/` with the whole result, and can read the parts it needs. The folder has its own `.gitignore`, so it is never committed.
 - **Tools that change things ask first.** A tool the server marks as destructive, or does not mark as read-only, needs your approval. Your permission rules work on MCP tools too (the name is `<server>__<tool>`).
 - **Answers are data.** What an MCP tool returns is marked as untrusted. The taint check and quarantine (see [safety](safety.md)) apply to it.
 - **A stdio server runs as you.** It gets your environment plus the `env` you give it. Only add servers you trust.

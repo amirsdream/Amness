@@ -1,6 +1,6 @@
 // `amness acp`: serve the Agent Client Protocol on stdin/stdout so an editor can host Amness. stdout carries only protocol messages; everything else goes to stderr.
 import { Budget, createCodeAgent, McpHub, projectConfigFingerprint, serveAcp, type Model } from "../src/index.ts";
-import { acpEntries, mcpEntries } from "./mcpconfig.ts";
+import { acpEntries, hubOptions, mcpEntries } from "./mcpconfig.ts";
 import { loadState } from "./state.ts";
 
 export const ACP_HELP = `usage: amness acp
@@ -18,9 +18,9 @@ export async function runAcp(deps: { model: () => Model; version: string; maxTok
       const fp = projectConfigFingerprint(cwd), trusted = !!fp && loadState().hookTrust?.[cwd] === fp;
       const { entries, notes } = mcpEntries(cwd, { trusted, extra: acpEntries(mcpServers) });
       for (const n of notes) process.stderr.write(`amness acp: ${n}\n`);
-      const hub = new McpHub({ cwd, warn: (m) => process.stderr.write(`amness acp: MCP ${m}\n`) });
+      const hub = new McpHub(hubOptions(cwd, { warn: (m) => process.stderr.write(`amness acp: MCP ${m}\n`) }));
       await hub.start(entries);
-      for (const r of hub.rows()) if (r.error) process.stderr.write(`amness acp: MCP ${r.name}: ${r.error}\n`);
+      for (const r of hub.rows()) { if (r.error) process.stderr.write(`amness acp: MCP ${r.name}: ${r.error}\n`); if (r.changed.length) process.stderr.write(`amness acp: MCP ${r.name}: changed tools left out (amness mcp approve ${r.name})\n`); }
       agent.registry.add(...hub.tools());
       return { chat: agent.chat.bind(agent), close: () => hub.close() };
     },

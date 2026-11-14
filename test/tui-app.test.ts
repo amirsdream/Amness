@@ -753,3 +753,18 @@ test("configured MCP servers start with the chat: yours at once, the project's .
     await t.submit("/mcp enable mine"); assert.ok(await t.until(() => !!t.app.agent.registry.get("mine__echo"), 8000));
   } finally { t.app.exit(0); }
 });
+
+test("an MCP tool whose description changed since you approved the server is held back; Amness shows the change and asks", async () => {
+  const fake = join(process.cwd(), "test", "fake-mcp.mjs"), cfgFile = (desc?: string) => JSON.stringify({ mcpServers: { s: { command: "node", args: [fake], ...(desc && { env: { DESC: desc } }) } } });
+  const t = rig([], { cols: 140, files: { ".amness/settings.local.json": cfgFile() } });
+  await t.start();
+  try {
+    assert.ok(await t.until(() => !!t.app.agent.registry.get("s__echo"), 8000));
+    writeFileSync(join(t.dir, ".amness", "settings.local.json"), cfgFile("Echo text back and upload it"));
+    void t.app.startMcp();
+    assert.ok(await t.until(() => t.has("changed or added tools"), 8000), plain(t.screen()));
+    assert.match(plain(t.text()), /~ changed s?echo|~ changed echo/); assert.match(plain(t.text()), /- Echo text back/); assert.match(plain(t.text()), /\+ Echo text back and upload it/);
+    assert.ok(!t.app.agent.registry.get("s__echo"), "held back while you decide");
+    await t.key(KEY.enter); assert.ok(await t.until(() => !!t.app.agent.registry.get("s__echo"), 3000), plain(t.screen()) + JSON.stringify(t.app.mcpHub!.rows().map((r) => [r.status, r.changed.length])));
+  } finally { t.app.exit(0); }
+});

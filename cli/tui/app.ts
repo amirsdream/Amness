@@ -7,7 +7,7 @@ import { onRateLimitWait } from "../model.ts";
 import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
-import { mcpEntries } from "../mcpconfig.ts";
+import { hubOptions, mcpEntries } from "../mcpconfig.ts";
 import { McpHub } from "../../src/mcp.ts";
 import { PROVIDERS, applyTeam, forProject, home, keyFor, keyIdOf, layerNotes, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
@@ -974,12 +974,32 @@ export class App {
     const { entries, notes } = mcpEntries(this.cwd, { trusted: this.projectTrusted() });
     this.mcpNotes = notes; for (const n of notes) this.note(n);
     if (!entries.length && !this.mcpHub) return;
-    this.mcpHub ??= new McpHub({ cwd: this.cwd, warn: (m) => this.note(`MCP: ${m}`), onChange: () => { this.syncMcpTools(); this.render(); } });
+    this.mcpHub ??= new McpHub(hubOptions(this.cwd, { warn: (m) => this.note(`MCP: ${m}`), onChange: () => { this.syncMcpTools(); this.render(); void this.reviewMcpChanges(); } }));
     await this.mcpHub.start(entries);
     const failed = this.mcpHub.rows().filter((r) => r.status === "failed" || r.status === "needs-login");
     if (failed.length) this.note(`MCP: ${failed.map((r) => `${r.name} ${r.status === "needs-login" ? "needs sign-in" : "failed"}`).join(", ")} (/mcp for details)`);
     const pend = this.mcpHub.rows().filter((r) => r.status === "pending");
     if (pend.length) this.note(`MCP: ${pend.map((r) => r.name).join(", ")} from .mcp.json wait until you trust this project (/trust)`);
+    const warned = this.mcpHub.rows().filter((r) => Object.keys(r.warnings).length); if (warned.length) this.note(`MCP: check the tool descriptions of ${warned.map((r) => r.name).join(", ")} (/mcp tools <name>)`);
+    await this.reviewMcpChanges();
+  }
+  private mcpAsked = new Set<string>();
+  /** A server whose tools changed since you approved it (or that has new tools): show what changed and ask before the model sees them. */
+  async reviewMcpChanges() {
+    for (const r of this.mcpHub?.rows() ?? []) {
+      if (!r.changed.length) continue;
+      const key = r.name + ":" + r.changed.map((c) => c.tool + c.now.length).join(","); if (this.mcpAsked.has(key)) continue; this.mcpAsked.add(key);
+      const lines = ["", bold(`  MCP server ${r.name}: ${r.changed.length} tool(s) changed since you approved it`)];
+      for (const c of r.changed.slice(0, 8)) {
+        lines.push(`  ${c.kind === "new" ? green("+ new") : yellow("~ changed")} ${bold(c.tool)}${r.warnings[c.tool]?.length ? "  " + red("⚠ " + r.warnings[c.tool].join("; ")) : ""}`);
+        if (c.before !== undefined && c.before !== c.now) lines.push(`    ${red("- " + c.before.replace(/\s+/g, " ").slice(0, 300))}`);
+        lines.push(`    ${green("+ " + c.now.replace(/\s+/g, " ").slice(0, 300))}`);
+      }
+      this.commit(lines);
+      const ok = await this.pick(`The MCP server "${r.name}" changed or added tools. A changed description can carry new instructions for the model. Use the new versions?`, [{ label: "Yes, use them", value: "y" }, { label: "No, keep these tools off for now", value: "n" }]);
+      if (ok === "y") { this.mcpHub!.approve(r.name); this.syncMcpTools(); this.say(`${r.name}: the new tools are in use`, dim); }
+      else this.say(`${r.name}: the changed tools stay off (/mcp approve ${r.name} to use them)`, dim);
+    }
   }
   /** Put the hub's connected tools in the registry and take out the ones of servers that went away. */
   syncMcpTools() {

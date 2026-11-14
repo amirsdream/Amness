@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { cachedModel } from "../src/respcache.ts";
 import { promptPlugin, harnessCard, quarantineReader, Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
 import { McpHub } from "../src/mcp.ts";
-import { cliEntries, mcpEntries } from "./mcpconfig.ts";
+import { cliEntries, hubOptions, mcpEntries } from "./mcpconfig.ts";
 import { PROVIDERS, keyFor, loadConfig, ready, useServer, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
 import { wireModels, type Wired } from "./roles.ts";
@@ -197,14 +197,18 @@ export async function runHeadless(argv: string[]): Promise<number> {
     onEvent: (e: Event) => { if (e.kind === "turn") { usage.prompt += e.prompt; usage.completion += e.completion; usage.cached += e.cached; usage.requests++; } live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
   const mcpExtra: string[] = []; for (let v = val("--mcp-config"); v !== undefined; v = val("--mcp-config")) mcpExtra.push(v);
-  const mcp = new McpHub({ cwd, warn: (m) => console.error(`MCP: ${m}`) });
+  const mcp = new McpHub(hubOptions(cwd, { warn: (m) => console.error(`MCP: ${m}`) }));
   if (!bool("--no-mcp")) {
     let extra; try { extra = cliEntries(mcpExtra, cwd); } catch (e) { console.error(`--mcp-config: ${(e as Error).message}`); return 2; }
     const { entries, notes } = mcpEntries(cwd, { trusted: trustHooks, extra, strict: bool("--strict-mcp-config") });
     for (const n of notes) console.error(`note: ${n}`);
     const pend = entries.filter((e) => e.pending); if (pend.length) console.error(`note: MCP server(s) ${pend.map((e) => e.name).join(", ")} from .mcp.json not started; pass --trust-project to start them`);
     await mcp.start(entries);
-    for (const r of mcp.rows()) if (r.status === "failed" || r.status === "needs-login") console.error(`MCP ${r.name}: ${r.error}`);
+    for (const r of mcp.rows()) {
+      if (r.status === "failed" || r.status === "needs-login") console.error(`MCP ${r.name}: ${r.error}`);
+      if (r.changed.length) console.error(`MCP ${r.name}: ${r.changed.map((c) => c.tool).join(", ")} changed since you approved the server and are left out (amness mcp approve ${r.name})`);
+      for (const [tool, w] of Object.entries(r.warnings)) console.error(`MCP ${r.name}: the description of ${tool} looks suspicious: ${w.join("; ")}`);
+    }
     agent.registry.add(...mcp.tools());
   }
   try {

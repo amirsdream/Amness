@@ -3,6 +3,9 @@
 // Legacy = the initialize handshake (2025-11-25 and earlier; on HTTP with an Mcp-Session-Id). HTTP+SSE (2024-11-05) is deprecated but still met in the wild.
 // Era detection follows the spec's "Backward Compatibility" sections: try the modern request first, fall back only when the answer is not a modern JSON-RPC error.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Registry, Tool } from "./harness.ts";
 
 export const MCP_MODERN = "2026-07-28", MCP_LEGACY = "2025-11-25";
@@ -34,6 +37,8 @@ export type McpConnectOptions = {
   warn?: (msg: string) => void;
   /** a server said its tool list changed (legacy notification); the hub reloads */
   onListChanged?: () => void;
+  /** results longer than this go to a file under <cwd>/.amness/mcp-output and the model gets the start and the path (default 40 000 characters) */
+  maxResultChars?: number;
 };
 export type McpServerInfo = { name?: string; version?: string; instructions?: string; capabilities?: Record<string, any> };
 export type McpHandle = {
@@ -348,9 +353,22 @@ function mcpTool(t: any, prefix: string, count: number, o: McpConnectOptions, rp
     run: async (args) => {
       const r = await rpc("tools/call", { name: t.name, arguments: args });
       if (r?.resultType === "input_required") throw new Error(`MCP ${t.name}: the server asked for more input (elicitation or sampling), which Amness does not support yet`);
-      return mcpResultText(r);
+      return spill(mcpResultText(r), `${prefix}-${t.name}`, o);
     },
   };
+}
+
+let spilled = 0;
+/** A very long result would fill the context: keep the start, save the whole of it in the project, and say where (the model can read the rest with read_file). */
+function spill(text: string, label: string, o: McpConnectOptions): string {
+  const max = o.maxResultChars ?? 40_000; if (text.length <= max || !o.cwd) return text;
+  const dir = join(o.cwd, ".amness", "mcp-output"), name = `${label.replace(/[^\w.-]+/g, "_").slice(0, 60)}-${Date.now().toString(36)}${(++spilled).toString(36)}.txt`;
+  try {
+    mkdirSync(dir, { recursive: true }); if (!existsSync(join(dir, ".gitignore"))) writeFileSync(join(dir, ".gitignore"), "*\n");   // never committed
+    writeFileSync(join(dir, name), text);
+  } catch { return text.slice(0, max) + `\n… [cut: ${text.length} characters in all]`; }
+  const lines = text.split("\n").length;
+  return `${text.slice(0, 4000)}\n…\n[The full result is ${text.length} characters (${lines} lines), more than fits here. It is saved in .amness/mcp-output/${name}: read the parts you need with read_file.]`;
 }
 
 /** A tools/call result as text for the model. Errors (isError) throw, so the model sees them as a failed call it can correct. */
@@ -372,15 +390,34 @@ export async function loadMcp(command: string, args: string[] = [], o: McpConnec
 }
 
 // ------------------------------------------------------------------------------------------------ hub
+/** A fingerprint of what the model reads about a tool: a change after you approved the server can carry new instructions (a "rug pull"). */
+export const toolFingerprint = (t: any) => createHash("sha256").update(JSON.stringify({ n: t?.name, t: t?.title ?? "", d: t?.description ?? "", s: t?.inputSchema ?? null, o: t?.outputSchema ?? null, a: t?.annotations ?? null })).digest("hex").slice(0, 16);
+/** Signs of instructions hidden in a tool's description or schema (tool poisoning). Heuristic: a finding means "read it yourself", not proof. */
+export function scanTool(t: any): string[] {
+  const text = `${t?.title ?? ""}\n${t?.description ?? ""}\n${JSON.stringify(t?.inputSchema ?? {})}`, out: string[] = [];
+  if (/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]|[\u{E0000}-\u{E007F}]/u.test(text)) out.push("invisible or direction-changing characters");
+  if (/ignore (all |any )?(previous|prior|above|other) (instructions|rules)|disregard (the|your) (instructions|rules)|you must (always|never)\b.*\b(tool|call)/i.test(text)) out.push("tells the model to ignore its instructions");
+  if (/<\s*(important|system|instructions?|secret)\s*>/i.test(text)) out.push("hidden-instruction tags (<IMPORTANT>, <system>…)");
+  if (/(do not|don't|never) (tell|mention|show|inform|reveal)\b.*\b(user|human)/i.test(text)) out.push("asks to hide something from you");
+  if (/(~\/\.ssh|id_rsa|id_ed25519|\.aws\/credentials|\.env\b|api[_ -]?keys?\b|private key|password|\.netrc|\.npmrc|keychain)/i.test(t?.description ?? "")) out.push("mentions secrets or key files");
+  if (/before (using|calling) (this|any) tool,? (first )?(read|call|send|fetch)|(send|post|upload) (it|them|the (contents?|file|result)s?) to (https?:|the url)/i.test(text)) out.push("asks for extra steps that move data");
+  if ((t?.description ?? "").length > 4000) out.push(`a very long description (${(t.description as string).length} characters)`);
+  return out;
+}
+export type McpPin = { h: string; d: string };
+/** Where the hub remembers the approved tool fingerprints (state.json in the CLI). */
+export type McpPinStore = { get: (key: string) => Record<string, McpPin> | undefined; set: (key: string, pins: Record<string, McpPin>) => void };
+export type McpChange = { tool: string; kind: "changed" | "new"; before?: string; now: string };
+
 export type McpScope = "local" | "project" | "user" | "cli" | "editor" | "session";
 export type McpEntry = { name: string; config: McpServerConfig; scope: McpScope; file?: string; pending?: boolean; disabled?: boolean };
 export type McpStatus = "connecting" | "connected" | "failed" | "pending" | "disabled" | "needs-login";
-export type McpRow = { name: string; scope: McpScope; status: McpStatus; error?: string; tools: number; transport: string; era?: McpEra; file?: string; target: string };
+export type McpRow = { name: string; scope: McpScope; status: McpStatus; error?: string; tools: number; transport: string; era?: McpEra; file?: string; target: string; /** tools held back because they changed since you approved them (or are new) */ changed: McpChange[]; /** tool → findings of scanTool */ warnings: Record<string, string[]> };
 
-export type McpHubOptions = McpConnectOptions & { onChange?: () => void; tokenFor?: (name: string, cfg: McpServerConfig) => (() => Promise<string | undefined>) | undefined };
+export type McpHubOptions = McpConnectOptions & { onChange?: () => void; tokenFor?: (name: string, cfg: McpServerConfig) => (() => Promise<string | undefined>) | undefined; /** remember approved tool descriptions; without it nothing is pinned */ pins?: McpPinStore; pinKey?: (e: McpEntry) => string };
 /** All the MCP servers of a session: connects them in parallel, keeps each one's status, gives their tools. */
 export class McpHub {
-  private servers = new Map<string, { entry: McpEntry; status: McpStatus; error?: string; handle?: McpHandle }>();
+  private servers = new Map<string, { entry: McpEntry; status: McpStatus; error?: string; handle?: McpHandle; changed?: McpChange[]; warnings?: Record<string, string[]> }>();
   private o: McpHubOptions;
   constructor(o: McpHubOptions = {}) { this.o = o; }
 
@@ -406,6 +443,8 @@ export class McpHub {
       const handle = await connectMcp(e.config, { ...this.o, name: e.name, prefix: e.name, token: this.o.tokenFor?.(e.name, e.config) ?? this.o.token, timeoutMs: e.config.timeout ?? this.o.timeoutMs, onListChanged: () => void this.reload(e.name) });
       const cur = this.servers.get(e.name); if (!cur || cur.entry !== e) { handle.close(); return; }     // replaced or removed while connecting
       cur.handle = handle; cur.status = "connected"; cur.error = undefined;
+      cur.warnings = Object.fromEntries(handle.listed.map((d) => [d.name, scanTool(d)]).filter(([, w]) => (w as string[]).length));
+      cur.changed = this.compare(e, handle);
     } catch (err) {
       const cur = this.servers.get(e.name); if (!cur || cur.entry !== e) return;
       const x = err as McpError; cur.status = x.status === 401 ? "needs-login" : "failed"; cur.error = x.message;
@@ -418,14 +457,39 @@ export class McpHub {
     for (const s of list) s.handle?.close();
     await Promise.all(list.map((s) => this.connect(s.entry)));
   }
+  private keyOf(e: McpEntry) { return this.o.pinKey?.(e) ?? `${e.scope}:${e.name}:${e.config.url ?? [e.config.command, ...(e.config.args ?? [])].join(" ")}`; }
+  /** First connection: remember every tool. Later: tools whose description or schema changed, and new tools, are held back until approve(). */
+  private compare(e: McpEntry, h: McpHandle): McpChange[] {
+    const store = this.o.pins; if (!store) return [];
+    const key = this.keyOf(e), old = store.get(key), now: Record<string, McpPin> = Object.fromEntries(h.listed.map((d) => [d.name, { h: toolFingerprint(d), d: String(d.description ?? "").slice(0, 4000) }]));
+    if (!old) { store.set(key, now); return []; }
+    const out: McpChange[] = [];
+    for (const [tool, p] of Object.entries(now)) if (!old[tool]) out.push({ tool, kind: "new", now: p.d }); else if (old[tool].h !== p.h) out.push({ tool, kind: "changed", before: old[tool].d, now: p.d });
+    if (!out.length) { const removed = Object.keys(old).some((k) => !now[k]); if (removed) store.set(key, now); }   // a tool that went away: nothing to approve
+    return out;
+  }
+  /** Accept a server's current tools (after you read the changes). */
+  approve(name: string) {
+    const s = this.servers.get(name); if (!s?.handle || !this.o.pins) return;
+    this.o.pins.set(this.keyOf(s.entry), Object.fromEntries(s.handle.listed.map((d) => [d.name, { h: toolFingerprint(d), d: String(d.description ?? "").slice(0, 4000) }])));
+    s.changed = []; this.o.onChange?.();
+  }
   private async reload(name: string) { const s = this.servers.get(name); if (s?.status === "connected") await this.connect(s.entry); }
-  tools(): Tool[] { return [...this.servers.values()].flatMap((s) => (s.status === "connected" ? s.handle!.tools : [])); }
+  /** The usable tools: of connected servers, without the ones held back for approval. */
+  tools(): Tool[] {
+    return [...this.servers.values()].flatMap((s) => {
+      if (s.status !== "connected") return [];
+      const held = new Set((s.changed ?? []).map((c) => c.tool)); if (!held.size) return s.handle!.tools;
+      return s.handle!.tools.filter((t, i) => !held.has(s.handle!.listed[i]?.name));
+    });
+  }
   handle(name: string): McpHandle | undefined { return this.servers.get(name)?.handle; }
   rows(): McpRow[] {
     return [...this.servers.values()].map((s) => ({
       name: s.entry.name, scope: s.entry.scope, status: s.status, error: s.error, tools: s.handle?.tools.length ?? 0,
       transport: s.handle?.transport ?? (s.entry.config.type === "sse" ? "sse" : s.entry.config.url && !s.entry.config.command ? "http" : "stdio"),
       era: s.handle?.era, file: s.entry.file, target: s.entry.config.url ?? [s.entry.config.command, ...(s.entry.config.args ?? [])].join(" "),
+      changed: s.changed ?? [], warnings: s.warnings ?? {},
     }));
   }
   get size() { return this.servers.size; }

@@ -6,7 +6,7 @@
 // The same name in two places: the higher one is used as a whole (no field-by-field merge).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { mcpConfigProblem, type McpEntry, type McpScope, type McpServerConfig } from "../src/index.ts";
+import { mcpConfigProblem, type McpEntry, type McpHubOptions, type McpPinStore, type McpScope, type McpServerConfig } from "../src/index.ts";
 import { home, projectFile, readJson, tracked, writeProjectFile } from "./config.ts";
 import { loadState, saveState } from "./state.ts";
 
@@ -120,3 +120,12 @@ export function acpEntries(list: unknown): McpEntry[] {
     return [{ name: String(s.name).replace(/[^\w.-]+/g, "_"), config, scope: "editor" }];
   });
 }
+
+/** Approved tool descriptions live in ~/.amness/state.json: your servers by name and target, the others per project. */
+export const pinStore = (): McpPinStore => ({
+  get: (k) => loadState().mcpPins?.[k],
+  set: (k, v) => { const st = loadState(); st.mcpPins = { ...st.mcpPins, [k]: v }; saveState(st); },
+});
+export const pinKeyFor = (cwd: string) => (e: McpEntry) => `${e.scope === "user" ? "user" : `${cwd}|${e.scope}`}|${e.name}|${e.config.url ?? [e.config.command, ...(e.config.args ?? [])].join(" ")}`;
+/** The hub options every front end uses (pins, cwd). */
+export const hubOptions = (cwd: string, more: McpHubOptions = {}): McpHubOptions => ({ cwd, pins: pinStore(), pinKey: pinKeyFor(cwd), ...more });
