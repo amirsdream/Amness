@@ -495,7 +495,7 @@ export function buildCommands(): Cmd[] {
       }
       const r = a.rules.rules();
       a.report("Permission rules", [...(["deny", "ask", "allow"] as const).flatMap((k) => r[k].map((x) => `  ${(k === "deny" ? red : k === "ask" ? yellow : green)(k.padEnd(6))} ${x}`)), ...(!r.deny.length && !r.ask.length && !r.allow.length ? [dim("  no rules yet")] : []),
-        "", dim("  always on, in every mode including yolo: no recursive delete of / or ~, no force-push to main, no editing .git or these rule files; curl|sh and force-pushes always ask"), dim("  precedence: that floor > deny > ask > allow > permission mode")]);
+        "", dim("  always on, in every mode including yolo: no recursive delete of / or ~, no force-push to main, nothing that kills Amness itself (every program on a port, every node process), no editing .git or these rule files; curl|sh and force-pushes always ask"), dim("  precedence: that floor > deny > ask > allow > permission mode")]);
     } },
     { name: "budget", help: "show or set the token cap per turn (cached input counts a tenth)", args: "[tokens, e.g. 500k]", run: (a, arg) => {
       const b = a.budget, used = Math.round(b.effective);

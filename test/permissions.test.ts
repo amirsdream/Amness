@@ -83,3 +83,15 @@ test("floor and risk see through quoting, escapes, $'..' decoding, ${IFS}, neste
   assert.equal(floorCheck("sh", { cmd: "npm test && ls" }, cwd).action, "none"); assert.equal(floorCheck("sh", { cmd: 'git commit -m "rm everything later"' }, cwd).action, "none");
   assert.ok(commandViews("sh -c 'a; b'").some((v) => v === "a; b"));
 });
+
+test("floor: killing by port without a LISTEN filter, fuser -k on a port, and pkill/killall node are refused (they stop Amness itself)", async () => {
+  const { floorCheck } = await import("../src/index.ts");
+  const deny = [
+    "lsof -ti:8000 | xargs kill -9 2>/dev/null; sleep 1; cd backend && python manage.py runserver 8000",   // the command that killed Amness while it used a model server on :8000
+    "kill -9 $(lsof -t -i:3000)", "lsof -i :5173 -t | xargs -r kill", "fuser -k 8000/tcp", "sudo fuser -k -n tcp 8000", "pkill node", "killall -9 node", "pkill -f amness",
+    "bash -c 'lsof -ti:8000 | xargs kill'",
+  ];
+  for (const cmd of deny) { const v = floorCheck("sh", { cmd }, "/p"); assert.equal(v.action, "deny", cmd); assert.equal(v.floor, true); }
+  assert.match(floorCheck("sh", { cmd: deny[0] }, "/p").reason!, /-sTCP:LISTEN/, "the refusal says how to do it safely");
+  for (const cmd of ["lsof -ti tcp:8000 -sTCP:LISTEN | xargs kill -9", "lsof -i:8000", "kill 4242", "pkill -f 'manage.py runserver'", "ps aux | grep node"]) assert.equal(floorCheck("sh", { cmd }, "/p").action, "none", cmd);
+});

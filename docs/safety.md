@@ -62,7 +62,7 @@ Notes about the provider:
 | The agent can | The agent cannot (tested in `test/permissions.test.ts`, `test/sandbox.test.ts`, `test/taint.test.ts`, `test/secrets.test.ts`) |
 |---|---|
 | Read and edit files inside the workspace, after it has read them | Edit a file outside the workspace with its file tools (`path escapes the workspace`) |
-| Run shell commands you approve, or that a rule allows | Run `rm -rf /`, `rm -rf ~`, `mkfs`, a fork bomb, or force-push to `main` or `master`. This is the *floor*. The floor holds in every mode, also `yolo` |
+| Run shell commands you approve, or that a rule allows | Run `rm -rf /`, `rm -rf ~`, `mkfs`, a fork bomb, force-push to `main` or `master`, or stop Amness itself: kill every program on a port (`lsof -ti:8000 \| xargs kill`, `fuser -k 8000/tcp`; these also hit Amness when its model server uses that port) or every node process (`pkill node`). Killing only the listener (`lsof -ti tcp:8000 -sTCP:LISTEN \| xargs kill`) is allowed. This is the *floor*. The floor holds in every mode, also `yolo` |
 | Run read-only commands such as `ls`, `cat`, `git status` without asking | Edit `.git` files with file tools |
 | Start background processes with `sh_start` | Edit `.amness/hooks.json` or `.amness/permissions.json`, with file tools or with shell commands |
 | Use tools from an MCP server you attached | Skip your `deny` rules |

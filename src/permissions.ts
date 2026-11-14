@@ -73,6 +73,21 @@ const FLOOR_ASK: [RegExp, string][] = [
   [/\b(?:Invoke-WebRequest|iwr|Invoke-RestMethod|irm|curl|wget)\b[^|;\n]*\|\s*(?:Invoke-Expression|iex)\b/i, "downloads and runs a script"],
   [/(?:^|[\s;&|])-(?:EncodedCommand|enc|ec)\s+\S+|\bFromBase64String\b[^;\n]*\b(?:Invoke-Expression|iex)\b/i, "runs an encoded command"],
 ];
+/**
+ * A command that stops processes found by port or by name in a way that also hits Amness: `lsof -ti:8000` lists every process with a
+ * connection on that port, clients included, so `lsof -ti:8000 | xargs kill -9` killed Amness while it talked to a model server on port
+ * 8000; `fuser -k 8000/tcp` does the same; `pkill node` / `killall node` stop Amness itself. Returns why, or undefined.
+ */
+export function killsAmness(cmd: string): string | undefined {
+  const kills = /\bxargs\b[^|;&\n]*\bkill\b|\bkill\b[^|;&\n]*(?:\$\(|`)\s*(?:sudo\s+)?lsof\b/.test(cmd);
+  if (kills) for (const m of cmd.matchAll(/\blsof\b([^|;&)`\n]*)/g)) {
+    const a = m[1];
+    if (/(?:^|\s)-[A-Za-z]*i/.test(a) && /:\s*\d+|tcp:\w+/i.test(a) && !/LISTEN/i.test(a)) return "lsof -i:PORT lists every program connected to that port, clients included (Amness itself, when its model server uses the port), so killing them all can stop Amness. Free a port by killing only its listener: lsof -ti tcp:PORT -sTCP:LISTEN | xargs kill";
+  }
+  if (/\bfuser\b[^|;&\n]*\s-[A-Za-z]*k/.test(cmd) && /\d+\/(?:tcp|udp)|-n\s+(?:tcp|udp)/.test(cmd)) return "fuser -k on a port kills every program connected to it, clients included (Amness itself, when its model server uses the port). Kill only the listener: lsof -ti tcp:PORT -sTCP:LISTEN | xargs kill";
+  if (/\b(?:pkill|killall)\b(?:\s+-\S+)*\s+["']?(?:node|nodejs|amness|electron)\b/i.test(cmd)) return "this stops every node process, and Amness itself runs on node. Stop the one program by its process id (from sh_start, or lsof -ti tcp:PORT -sTCP:LISTEN)";
+  return undefined;
+}
 const WRITES_PROTECTED = /\.amness\/(?:hooks|permissions|settings|settings\.local)\.json|(?:^|[\s\/"'=>])\.mcp\.json/;
 const READONLY_VERB = /^\s*(?:cat|head|tail|less|grep|rg|ls|wc|stat|file|diff)\b/;
 
@@ -92,6 +107,7 @@ export function floorCheck(tool: string, args: Record<string, any>, cwd: string)
     if (WRITES_PROTECTED.test(cmd) && !splitCommand(cmd).parts.every((p) => READONLY_VERB.test(p))) return { action: "deny", floor: true, reason: "the agent may not change its own hooks, permission rules, settings or MCP servers" };
     const views = commandViews(cmd);
     for (const [re, why] of FLOOR_DENY) if (views.some((v) => re.test(v))) return { action: "deny", floor: true, reason: why };
+    for (const v of views) { const why = killsAmness(v); if (why) return { action: "deny", floor: true, reason: why }; }
     for (const [re, why] of FLOOR_ASK) if (views.some((v) => re.test(v))) return { action: "ask", floor: true, reason: why };
     if (OBFUSCATED_EXEC.test(cmd) || OBFUSCATED_EXEC.test(views[1] ?? "")) return { action: "ask", floor: true, reason: "decodes or downloads a payload and runs it" };
   }
