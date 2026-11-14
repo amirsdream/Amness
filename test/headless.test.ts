@@ -131,3 +131,32 @@ test("amness run: options never leak into the task text, wherever they are read 
     assert.match(viaStdin.seen[0].messages.find((m: any) => m.role === "user").content, /^the task from stdin/);   // the Harbor adapter's shape: options, then "-"
   } finally { viaStdin.close(); }
 });
+
+test("MCP: amness run --mcp-config and amness acp with the editor's servers both give the model the server's tools", async () => {
+  const fake = join(process.cwd(), "test", "fake-mcp.mjs");
+  const api = await mockOpenAI([tc("1", "t__echo", { text: "from-run" }), { role: "assistant", content: "done" }]);
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "amness-mcp-run-"));
+    const r = await cli(["run", "--provider", "custom", "--base-url", api.url, "--model", "m", "--cwd", dir, "--max-tokens", "100000", "--mcp-config", JSON.stringify({ mcpServers: { t: { command: "node", args: [fake] } } }), "say it"]);
+    assert.notEqual(r.code, 2, r.err);                                                                  // 1 = ended without finish, fine here
+    assert.ok(api.seen[0].tools.some((x: any) => x.function.name === "t__echo"));
+    assert.ok(api.seen[1].messages.some((m: any) => m.role === "tool" && /echo:from-run/.test(m.content)));
+  } finally { api.close(); }
+  const api2 = await mockOpenAI([tc("1", "ed__echo", { text: "from-editor" }), { role: "assistant", content: "ok" }]);
+  try {
+    const home = mkdtempSync(join(tmpdir(), "amness-h-")), dir = mkdtempSync(join(tmpdir(), "amness-mcp-acp-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ provider: "custom", baseUrl: api2.url, model: "m", maxTokens: 100000 }));
+    const p = spawn("node", ["--no-warnings", "cli/amness.ts", "acp"], { env: { ...process.env, AMNESS_HOME: home, NO_COLOR: "1" } });
+    const lines: any[] = []; let buf = "";
+    p.stdout.on("data", (d) => { buf += d; let i; while ((i = buf.indexOf("\n")) >= 0) { lines.push(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); } });
+    const send = (m: any) => p.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...m }) + "\n");
+    const until = async (f: () => boolean) => { for (let i = 0; i < 600 && !f(); i++) await new Promise((r) => setTimeout(r, 20)); assert.ok(f(), JSON.stringify(lines)); };
+    send({ id: 1, method: "initialize", params: { protocolVersion: 1 } }); await until(() => lines.some((l) => l.id === 1));
+    assert.deepEqual(lines.find((l) => l.id === 1).result.agentCapabilities.mcpCapabilities, { http: true, sse: true });
+    send({ id: 2, method: "session/new", params: { cwd: dir, mcpServers: [{ name: "ed", command: "node", args: [fake], env: [] }] } }); await until(() => lines.some((l) => l.id === 2));
+    send({ id: 3, method: "session/prompt", params: { sessionId: lines.find((l) => l.id === 2).result.sessionId, prompt: [{ type: "text", text: "go" }] } });
+    await until(() => lines.some((l) => l.id === 3));
+    assert.ok(api2.seen[1].messages.some((m: any) => m.role === "tool" && /echo:from-editor/.test(m.content)));
+    p.stdin.end(); await new Promise((r) => p.on("close", r));
+  } finally { api2.close(); }
+});

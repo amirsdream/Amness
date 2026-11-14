@@ -67,7 +67,7 @@ export function argOptions(a: App, cmd: string, words: string[]): ArgResult {
       if (words.length === 1 && words[0] === "add") return { options: [], open: true };
       return ok([]);
     }
-    case "mcp": return first ? ok([{ value: "list" }, { value: "off" }]) : ok([]);
+    case "mcp": return first ? ok(["list", "add", "remove", "enable", "disable", "reconnect", "tools", "off"].map((value) => ({ value }))) : ok((a.mcpHub?.rows() ?? []).map((r) => ({ value: r.name, hint: r.status })));
     case "budget": return first ? { options: opts(["100k"], ["300k", "the default"], ["500k"], ["1m"], ["2m"]), open: true } : ok([]);
     case "check": case "verify": return first ? { options: [{ value: "off", detail: "switch it off" }], open: true } : ok([]);
     default: return ok([]);

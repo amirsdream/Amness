@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **MCP servers everywhere, saved like in Claude Code.** `amness mcp add|list|get|remove|enable|disable` and `/mcp` save servers for this project (`.amness/settings.local.json`, kept out of git), for the team (`.mcp.json`, Claude Code's file, so existing ones just work) or for all your projects (`~/.amness/config.json`). They start in the terminal, the desktop app, `amness run` (`--mcp-config`, `--strict-mcp-config`, `--no-mcp`) and in editors over ACP (the editor's own servers too). Remote servers over Streamable HTTP (protocol 2026-07-28 with its required headers, and the older session and HTTP+SSE versions), static headers and `headersHelper`, `${VAR:-default}` values. A project's `.mcp.json` starts only after you trust the project, your provider keys never go to a remote server, and the agent may not write `.mcp.json`. See docs/mcp.md.
 - **Fixed: `amness doctor` failed careful models on "corrects a call after an error".** The check told the model, in a tool result, to store a different number than the one the user asked for. Current models such as Claude Sonnet 5.5 rightly refuse an instruction from a tool result and ask the user, so they were marked not fit for the main and edit jobs (and `--write` set them to the local tier). Now the error is a missing argument whose right value is in the user's request.
 
 ## 0.9.0 (2026-11-13)

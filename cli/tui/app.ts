@@ -7,6 +7,8 @@ import { onRateLimitWait } from "../model.ts";
 import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
 import { onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
+import { mcpEntries } from "../mcpconfig.ts";
+import { McpHub } from "../../src/mcp.ts";
 import { PROVIDERS, applyTeam, forProject, home, keyFor, keyIdOf, layerNotes, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { editExternally, editorCommand, readClipboardImage, savePastedImage } from "./external.ts";
@@ -90,6 +92,8 @@ export class App {
   private argPending = new Set<string>();
   private builtin: Cmd[]; private customAt = 0; private customCmds: Cmd[] = [];
   mcp: { cmd: string; tools: Tool[]; close: () => void }[] = [];
+  /** Configured MCP servers (.amness/settings.local.json, .mcp.json once trusted, ~/.amness/config.json); /mcp shows them. */
+  mcpHub?: McpHub; mcpNotes: string[] = []; private mcpNamesAdded = new Set<string>();
   notice = ""; noticeUntil = 0;
   pendingContext: string[] = []; modeNotice = "";
   branch: string | undefined; live: Awaited<ReturnType<typeof startLive>> | undefined;
@@ -163,6 +167,7 @@ export class App {
       signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, exploreRanges: this.cfg.exploreRanges || undefined, stableTools: this.cfg.stableTools || undefined, advisor: nativeAdvisor(this.cfg) ? "native" : w.advisor, ladder: w.ladder, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer ? (w.approve ? { model: w.approve } : true) : undefined, quarantine: this.cfg.quarantine ? (w.quarantine ? quarantineReader(w.quarantine) : true) : undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
+    this.mcpNamesAdded.clear(); this.syncMcpTools();
     if (!windowFor(this.cfg)) void detectWindow({ provider: this.cfg.provider, baseUrl: this.cfg.baseUrl, apiKey: this.cfg.apiKey, model: this.cfg.model }).then((w) => { if (w && !windowFor(this.cfg)) { rememberWindow(this.cfg, w); this.notify("info", `context window detected: ${w.toLocaleString()} tokens`, [dim(`  context window detected: ${w.toLocaleString()} tokens`)]); } });   // a local server states it
   }
   get width() { return Math.max(24, this.screen.cols - 1); }
@@ -222,7 +227,7 @@ export class App {
     this.saveSession(); this.restore();
     const hint = this.session.turns.length ? dim(`Resume this conversation with: amness -c   (session ${this.session.id})`) : "";
     this.io.output.write(`\r\n${dim("bye 👋")}${hint ? "\r\n" + hint : ""}\r\n`);
-    this.mcp.splice(0).forEach((m) => m.close());
+    this.mcp.splice(0).forEach((m) => m.close()); this.mcpHub?.close();
     void this.live?.close(); this.resolveDone(code);
   }
 
@@ -955,12 +960,33 @@ export class App {
   async askHookTrust() {
     const { fp, trusted } = this.loadHooks();
     await this.askPluginTrust();
-    if (!fp || trusted || !this.persist) { this.buildAgent(); return; }
-    if (loadState().hookDeclined?.[this.cwd] === fp) { this.note("project hooks and permission rules are ignored: you said no to these files (/trust asks again)"); this.buildAgent(); return; }
-    const ok = await this.pick("This project has its own hooks, permission rules and/or team settings (.amness/hooks.json, permissions.json, settings.json). Hooks run commands on your machine, allow-rules skip prompts, and settings change how the agent works. Trust them?", [{ label: "Yes, trust this version of the files", value: "y" }, { label: "No, ignore them (deny and ask rules still apply)", value: "n" }]);
+    if (!fp || trusted || !this.persist) { this.buildAgent(); void this.startMcp(); return; }
+    if (loadState().hookDeclined?.[this.cwd] === fp) { this.note("project hooks and permission rules are ignored: you said no to these files (/trust asks again)"); this.buildAgent(); void this.startMcp(); return; }
+    const ok = await this.pick("This project has its own hooks, permission rules, team settings and/or MCP servers (.amness/hooks.json, permissions.json, settings.json, .mcp.json). Hooks and MCP servers run programs on your machine, allow-rules skip prompts, and settings change how the agent works. Trust them?", [{ label: "Yes, trust this version of the files", value: "y" }, { label: "No, ignore them (deny and ask rules still apply)", value: "n" }]);
     if (ok === "y") { const st = loadState(); st.hookTrust = { ...(st.hookTrust ?? {}), [this.cwd]: fp }; if (st.hookDeclined) delete st.hookDeclined[this.cwd]; saveState(st); this.loadHooks(); applyTeam(this.cfg); }
     else if (ok === "n") { const st = loadState(); st.hookDeclined = { ...(st.hookDeclined ?? {}), [this.cwd]: fp }; saveState(st); }
-    this.buildAgent();
+    this.buildAgent(); void this.startMcp();
+  }
+  /** Whether this project's own files (hooks, rules, team settings, .mcp.json) are trusted in this exact version. */
+  projectTrusted() { const fp = projectConfigFingerprint(this.cwd); return !!fp && loadState().hookTrust?.[this.cwd] === fp; }
+  /** (Re)start the configured MCP servers. Project servers (.mcp.json) wait until the project is trusted. Connecting runs in the background. */
+  async startMcp() {
+    const { entries, notes } = mcpEntries(this.cwd, { trusted: this.projectTrusted() });
+    this.mcpNotes = notes; for (const n of notes) this.note(n);
+    if (!entries.length && !this.mcpHub) return;
+    this.mcpHub ??= new McpHub({ cwd: this.cwd, warn: (m) => this.note(`MCP: ${m}`), onChange: () => { this.syncMcpTools(); this.render(); } });
+    await this.mcpHub.start(entries);
+    const failed = this.mcpHub.rows().filter((r) => r.status === "failed" || r.status === "needs-login");
+    if (failed.length) this.note(`MCP: ${failed.map((r) => `${r.name} ${r.status === "needs-login" ? "needs sign-in" : "failed"}`).join(", ")} (/mcp for details)`);
+    const pend = this.mcpHub.rows().filter((r) => r.status === "pending");
+    if (pend.length) this.note(`MCP: ${pend.map((r) => r.name).join(", ")} from .mcp.json wait until you trust this project (/trust)`);
+  }
+  /** Put the hub's connected tools in the registry and take out the ones of servers that went away. */
+  syncMcpTools() {
+    if (!this.agent) return;
+    const now = new Set<string>(); for (const t of this.mcpHub?.tools() ?? []) { now.add(t.name); this.agent.registry.add(t); }
+    for (const n of this.mcpNamesAdded) if (!now.has(n)) this.agent.registry.remove(n);
+    this.mcpNamesAdded = now;
   }
   /** Shell snapshots: before the first command of a turn that may change files, remember the working tree so /undo can put it back. */
   snaps!: Snapshots;

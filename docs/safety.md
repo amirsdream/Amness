@@ -28,7 +28,7 @@ Amness is a terminal coding agent. A *model provider* is the company or server t
 | A second model call that reads a risky command | The same provider (or the model you name with `/models approve`) | Only when `approvalReviewer` is on |
 | The work of a job you give another model (explorer, compaction, reviewer, router, ladder): its messages, the files it reads, command output | The provider or saved server of that model, with that model's own key | Only when you set a model for that job (`/models`, `ladder`) |
 | A short summary of your task and work (the task, your rules, the files changed, the diff, the last failure) | The advisor's provider | Only when `/models advisor` is set. With Claude advising Claude, the advisor sees the whole conversation inside Anthropic's API |
-| Tool calls and tool results | An MCP server you start with `/mcp <command>`. It runs on your machine as a child process | Only when you attach one. The server can contact other hosts. Amness cannot see that |
+| Tool calls and tool results | An MCP server you add (`amness mcp add`, `/mcp`), or one in the project's `.mcp.json`. A stdio server runs on your machine as a child process | Yours: when you add it. The project's: only after you trust the project (asked with its hooks; again when `.mcp.json` changes). The server can contact other hosts. Amness cannot see that |
 
 Notes about the provider:
 
@@ -55,7 +55,7 @@ Notes about the provider:
 - Amness does not write keys into a project folder.
 - Commands the agent runs do not get your Amness keys. The variables `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `TAVILY_API_KEY`, `OPENROUTER_API_KEY` and `AMNESS_OTLP` are removed from their environment (`childEnv` in `src/secrets.ts`).
 - Hooks run with an even smaller environment. Any variable whose name contains `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL` or `AUTH` is removed (`scrubbedEnv` in `src/hooks.ts`).
-- An MCP server gets your full environment (`loadMcp` passes `process.env`). Pass `env` and review what you start.
+- A stdio MCP server gets your full environment plus its `env`. Review what you start. In a remote server's address and headers, your model providers' keys are always empty, so a project file cannot send them away. The agent may not write `.mcp.json` (see [MCP servers](mcp.md)).
 
 ## See what the agent can and cannot do
 

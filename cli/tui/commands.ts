@@ -10,7 +10,8 @@ import { join, resolve, sep } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { approveDraft, fetchSource, inspectSource, installSkills, listDrafts, rejectDraft, scaffoldSkill, trashSkill } from "../../src/index.ts";
-import { collectFiles, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
+import { collectFiles, connectMcp, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
+import { addServer as addMcpServer, removeServer as removeMcpServer, setDisabled, SCOPE_TEXT, type FileScope } from "../mcpconfig.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, forgetServer, keyFor, serverKey, serverName, storeKey, useServer, type Connection, type Layer, type ProviderId, type Server } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { fetchModels, prefixCacheRate } from "../models.ts";
@@ -685,13 +686,53 @@ export function buildCommands(): Cmd[] {
       const { execFile } = await import("node:child_process");
       execFile(process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open", [l.url], () => {});
     } },
-    { name: "mcp", help: "attach an MCP server: /mcp <command…> · /mcp list · /mcp off", args: "<command>", run: async (a, arg) => {
-      if (!arg || arg === "list") return void a.commit(["", ...(a.mcp.length ? a.mcp.map((m) => `  ${cyan("●")} ${m.cmd}  ${dim(m.tools.length + " tools")}`) : [dim("  no MCP servers attached. /mcp npx -y @modelcontextprotocol/server-filesystem .")])]);
-      if (arg === "off") { a.mcp.splice(0).forEach((m) => m.close()); a.buildAgent(); return void a.say("MCP servers detached", dim); }
-      const [command, ...rest] = arg.split(/\s+/);
-      const prefix = (rest.find((x) => !x.startsWith("-")) ?? command).split("/").pop()!.replace(/\.\w+$/, "").replace(/[^\w]+/g, "_");
+    { name: "mcp", help: "MCP servers: /mcp (status) · add [--scope user|project|local] <name> <command…|url> · remove · enable · disable · reconnect · tools <name> · <command…|url> (attach for this session) · off", args: "<command>", run: async (a, arg) => {
+      const words = arg.trim().split(/\s+/).filter(Boolean), sub = words[0] ?? "";
+      if (!sub || sub === "list") {
+        const rows = a.mcpHub?.rows() ?? [], dot = (st: string) => st === "connected" ? green("●") : st === "connecting" ? yellow("◌") : st === "disabled" ? dim("○") : st === "pending" ? yellow("⏸") : red("✗");
+        const out = ["", bold("  MCP servers")];
+        for (const r of rows) {
+          out.push(`  ${dot(r.status)} ${bold(r.name)}  ${dim(`${SCOPE_TEXT[r.scope]} · ${r.transport}${r.era ? ` ${r.era}` : ""} · ${r.status === "connected" ? `${r.tools} tools` : r.status === "pending" ? "waits for /trust" : r.status}`)}`);
+          out.push(`    ${dim(r.target.slice(0, a.width - 6))}`);
+          if (r.error) out.push(`    ${red(r.error.slice(0, a.width - 6))}`);
+        }
+        for (const m of a.mcp) out.push(`  ${green("●")} ${m.cmd}  ${dim(`this session · ${m.tools.length} tools`)}`);
+        for (const n of a.mcpNotes) out.push(`  ${yellow("!")} ${dim(n)}`);
+        if (!rows.length && !a.mcp.length) out.push(dim("  no MCP servers attached or configured."), dim("  /mcp add github https://api.githubcopilot.com/mcp/ · /mcp add fs npx -y @modelcontextprotocol/server-filesystem ."), dim("  or a .mcp.json in the project (Claude Code's format) · amness mcp --help"));
+        return void a.commit(out);
+      }
+      if (sub === "off") { a.mcp.splice(0).forEach((m) => m.close()); a.buildAgent(); return void a.say("MCP servers detached", dim); }
+      if (sub === "reconnect") { a.note("reconnecting…", 60_000); await a.mcpHub?.reconnect(words[1]); a.noticeUntil = 0; return void a.dispatch("/mcp"); }
+      if (sub === "enable" || sub === "disable") {
+        if (!words[1]) return void a.say(`usage: /mcp ${sub} <name>`, dim);
+        setDisabled(a.cwd, words[1], sub === "disable"); await a.startMcp();
+        return void a.say(`${words[1]} ${sub === "disable" ? "switched off" : "switched on"} for this project`, dim);
+      }
+      if (sub === "tools") {
+        const h = words[1] ? a.mcpHub?.handle(words[1]) : undefined; if (!h) return void a.say(words[1] ? `${words[1]} is not connected (/mcp)` : "usage: /mcp tools <name>", dim);
+        return void a.commit(["", bold(`  ${words[1]}: ${h.tools.length} tools`), ...h.tools.map((t) => `  ${cyan(t.name)} ${t.risky ? yellow("asks") : dim("read-only")} ${dim(t.description.split("\n")[0].slice(0, a.width - t.name.length - 14))}`)]);
+      }
+      if (sub === "remove") {
+        if (!words[1]) return void a.say("usage: /mcp remove <name>", dim);
+        const from = removeMcpServer(a.cwd, words[1]); if (!from) return void a.say(`no server called ${words[1]} in your files or .mcp.json`, dim);
+        await a.startMcp(); return void a.say(`removed ${words[1]} (${SCOPE_TEXT[from]})`, dim);
+      }
+      if (sub === "add") {
+        let scope: FileScope = "local"; const rest = words.slice(1);
+        const si = rest.findIndex((w) => w === "--scope" || w.startsWith("--scope=")); if (si >= 0) { const v = rest[si].includes("=") ? rest[si].split("=")[1] : rest[si + 1]; rest.splice(si, rest[si].includes("=") ? 1 : 2); if (v !== "user" && v !== "project" && v !== "local") return void a.say("--scope is user, project or local", dim); scope = v; }
+        const [name, target, ...args] = rest; if (!name || !target) return void a.say("usage: /mcp add [--scope user|project|local] <name> <command…|url>", dim);
+        const cfg = /^https?:\/\//.test(target) ? { type: "http" as const, url: target } : { command: target, args };
+        try { const file = addMcpServer(scope, a.cwd, name, cfg); a.say(`${green("✓")} ${name} saved in ${file.replace(homedir(), "~")} (${SCOPE_TEXT[scope]})`); } catch (e) { return void a.say(`✗ ${(e as Error).message}`, red); }
+        if (scope === "project") { a.say("a project server needs your trust before it starts: /trust", dim); }
+        a.note("connecting…", 60_000); await a.startMcp(); a.noticeUntil = 0;
+        const r = a.mcpHub?.rows().find((x) => x.name === name);
+        if (r) a.say(r.status === "connected" ? `${green("●")} ${name}: ${r.tools} tools` : `${r.status === "pending" ? yellow("⏸") : red("✗")} ${name}: ${r.error ?? r.status}`, r.status === "connected" ? undefined : dim);
+        return;
+      }
+      const url = /^https?:\/\//.test(sub);
+      const prefix = url ? new URL(sub).hostname.split(".").slice(-2, -1)[0]?.replace(/[^\w]+/g, "_") || "remote" : (words.slice(1).find((x) => !x.startsWith("-")) ?? sub).split("/").pop()!.replace(/\.\w+$/, "").replace(/[^\w]+/g, "_");
       a.note("connecting…", 60_000);
-      const h = await loadMcp(command, rest, { prefix }); a.noticeUntil = 0;
+      const h = await (url ? connectMcp({ type: "http", url: sub }, { prefix, name: prefix, cwd: a.cwd }) : loadMcp(sub, words.slice(1), { prefix, cwd: a.cwd })).finally(() => { a.noticeUntil = 0; });
       a.mcp.push({ cmd: arg, tools: h.tools, close: h.close }); a.agent.registry.add(...h.tools);
       a.say(`${green("✓")} ${arg}\n${dim(h.tools.length + " tools: " + h.tools.slice(0, 6).map((t) => t.name).join(", ") + (h.tools.length > 6 ? "…" : "") + ". Tools that change things will ask first.")}`);
     } },

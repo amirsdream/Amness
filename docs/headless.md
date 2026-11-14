@@ -68,7 +68,8 @@ The values are an example. The field `stopped` is missing when the run ends norm
 | `--cwd <dir>` | The workspace. The default is `.`. |
 | `--verify <cmd>` | A command that must exit 0 before the agent may finish. |
 | `--check <cmd>` | A fast command that runs after every edit. The agent sees failures at once. |
-| `--trust-project` | Runs this project's `.amness/hooks.json` and plugins, and honours its allow rules. They run code, so they are off by default in headless runs. `--trust-hooks` is an older name for the same flag. |
+| `--mcp-config <file or JSON>`, `--strict-mcp-config`, `--no-mcp` | MCP servers for this run (the `mcpServers` format, repeatable); only those; or none. Your own servers (`amness mcp add`) start by default. See [MCP servers](mcp.md). |
+| `--trust-project` | Runs this project's `.amness/hooks.json`, plugins and `.mcp.json` servers, and honours its allow rules. They run code, so they are off by default in headless runs. `--trust-hooks` is an older name for the same flag. |
 | `--sandbox <mode>` | Runs shell commands under an OS sandbox: `workspace` (write only in the project and temp folders) or `strict` (also no network). The same limits apply as in the chat: **Windows has no OS sandbox**. |
 | `--provider`, `--model`, `--base-url`, `--effort`, `--api` | Model selection. `--effort` accepts `none`, `low`, `medium`, `high`, `xhigh` or `max`. `--api` accepts `auto`, `responses` or `chat`. |
 | `--yes` | Approves risky commands automatically. The default is to deny them. |

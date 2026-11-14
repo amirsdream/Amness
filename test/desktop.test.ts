@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Message, Model } from "../src/index.ts";
 import { startDesktopServer } from "../cli/desktop/server.ts";
 import { electronBinary } from "../cli/desktop.ts";
@@ -13,7 +13,7 @@ import { call, say, sleep } from "./helpers/apprig.ts";
 async function boot(replies: Message[], files: Record<string, string> = { "a.txt": "one\ntwo\n" }, o: { cfg?: Record<string, unknown>; realModel?: boolean; persist?: boolean } = {}) {
   process.env.AMNESS_HOME = mkdtempSync(join(tmpdir(), "amness-home-"));
   const dir = mkdtempSync(join(tmpdir(), "amness-desk-"));
-  for (const [f, c] of Object.entries(files)) writeFileSync(join(dir, f), c);
+  for (const [f, c] of Object.entries(files)) { mkdirSync(dirname(join(dir, f)), { recursive: true }); writeFileSync(join(dir, f), c); }
   const queue = [...replies];
   const model: Model = async (_m, _s, o) => { const r = queue.shift() ?? say("(done)"); if (r.content && o?.onText) o.onText(r.content); return r; };
   const srv = await startDesktopServer({ cfg: { provider: "custom", baseUrl: "http://127.0.0.1:9/v1", model: "test-model", maxTokens: 100000, ...o.cfg } as any, cwd: dir, version: "0.0.0", persist: o.persist ?? false, makeModel: o.realModel ? undefined : () => model });
@@ -290,4 +290,17 @@ test("desktop start: the window shows its own start screen at once (a local page
   assert.match(ui("splash.html"), /http-equiv="Content-Security-Policy" content="default-src 'none'/); assert.match(ui("splash.html"), />A<\/span>/);
   assert.match(main, /AMNESS_DESKTOP_WAIT/); assert.match(main, /loadFile\(path\.join\(__dirname, "ui", "splash\.html"\)\)/);
   assert.match(ui("index.html"), /id="boot"/); assert.match(ui("app.js"), /bootDone\(\)/);
+});
+
+test("desktop: configured MCP servers connect for the chat; /mcp lists them in the window and the panel counts them", async () => {
+  const fake = join(process.cwd(), "test", "fake-mcp.mjs");
+  const d = await boot([], { "a.txt": "x\n", ".amness/settings.local.json": JSON.stringify({ mcpServers: { mine: { command: "node", args: [fake] } } }) });
+  try {
+    const count = async () => { const st = (await d.api("/api/state")).json; return st.panel?.mcp ?? st.sidebar?.mcp; };
+    let n; for (let i = 0; i < 200 && (n = await count()) !== 1; i++) await sleep(40);
+    assert.equal(n, 1, "the panel counts the connected server");
+    await d.api("/api/send", { text: "/mcp" });
+    const lines = () => d.events.filter((e) => e.type === "block" && e.block.kind === "raw").flatMap((e) => e.block.lines as string[]).map((l) => l.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
+    assert.ok(await d.until(() => /mine\s+only you, this project · stdio legacy · 2 tools/.test(lines()), 8000), lines());
+  } finally { await d.close(); }
 });

@@ -229,7 +229,21 @@ mcp.close();
 
 Tools from the server get the prefix of the command name, then `__`, then the tool name. Tools that the server marks as changing things need approval. The server gets your full environment, and the output is treated as untrusted.
 
-**Protocol versions.** Amness speaks both generations of MCP over stdio. It first asks the server `server/discover` (protocol `2026-07-28`). A current server answers, and then every request carries the protocol version, client name and capabilities in `_meta`, with no handshake. An older server answers with an error or not at all (Amness waits up to 10 seconds, `probeMs`), and Amness falls back to the `initialize` handshake (`2025-11-25`). `mcp.era` says which one the server speaks. A server that asks for more input in the middle of a call (elicitation or sampling, `resultType: "input_required"`) gets a clear error: Amness does not answer such requests yet. HTTP servers are not supported yet. Tested with fake servers of both kinds in `test/dynamic.test.ts`; not yet tried against the official SDKs.
+**Protocol versions.** Amness speaks both generations of MCP over stdio. It first asks the server `server/discover` (protocol `2026-07-28`). A current server answers, and then every request carries the protocol version, client name and capabilities in `_meta`, with no handshake. An older server answers with an error or not at all (Amness waits up to 10 seconds, `probeMs`), and Amness falls back to the `initialize` handshake (`2025-11-25`). `mcp.era` says which one the server speaks. A server that asks for more input in the middle of a call (elicitation or sampling, `resultType: "input_required"`) gets a clear error: Amness does not answer such requests yet. Tested with fake servers of both kinds in `test/dynamic.test.ts` and `test/mcp.test.ts`; not yet tried against the official SDKs.
+
+**HTTP servers and several at once.** `connectMcp(config, options)` takes one entry in the `mcpServers` format: `{ command, args, env }` for stdio, `{ type: "http", url, headers }` for Streamable HTTP, `{ type: "sse", url }` for the old HTTP+SSE transport. `McpHub` connects a list of servers in parallel and keeps each one's status:
+
+```ts
+import { createCodeAgent, McpHub, openai } from "amness";
+
+const hub = new McpHub();
+await hub.start([
+  { name: "files", scope: "user", config: { command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "."] } },
+  { name: "issues", scope: "user", config: { type: "http", url: "https://issues.example.com/mcp", headers: { Authorization: `Bearer ${process.env.ISSUES_TOKEN}` } } },
+]);
+console.log(hub.rows());                 // name, status (connected, failed, needs-login…), tools, transport, era
+const agent = createCodeAgent({ model: openai(), cwd: ".", tools: hub.tools() });
+```
 
 ## Compare harness variants
 

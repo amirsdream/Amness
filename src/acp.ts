@@ -1,16 +1,16 @@
 // Agent Client Protocol server: lets an editor (Zed, JetBrains, ...) host Amness as its coding agent. JSON-RPC 2.0, one JSON message per line over stdio.
-// Implemented: initialize, session/new, session/prompt (streams text and tool calls back as session/update), session/cancel, and session/request_permission for risky calls.
+// Implemented: initialize, session/new (with the editor's MCP servers: stdio, http, sse), session/prompt (streams text and tool calls back as session/update), session/cancel, and session/request_permission for risky calls.
 // Not implemented: session/load, authenticate, fs/* and terminal/* (Amness reads and runs things itself), non-text prompt content other than images and embedded resources.
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import type { Approve, Event, Message } from "./harness.ts";
 
 type Json = any;
-export type AcpAgent = { chat: (history: Message[], text: string, extra?: { images?: { mime: string; data: string }[] }) => Promise<{ messages: Message[]; text: string; stopped?: string; finished: boolean }>; };
+export type AcpAgent = { chat: (history: Message[], text: string, extra?: { images?: { mime: string; data: string }[] }) => Promise<{ messages: Message[]; text: string; stopped?: string; finished: boolean }>; /** called when the editor goes away (closes MCP servers) */ close?: () => void };
 export type AcpOptions = {
   input: Readable; output: Writable; version: string;
   /** Build an agent for a session. `onEvent` and `approve` must be wired into it; `signal` is aborted by session/cancel. */
-  makeAgent: (s: { cwd: string; onEvent: (e: Event) => void; approve: Approve; signal: () => AbortSignal | undefined }) => AcpAgent;
+  makeAgent: (s: { cwd: string; onEvent: (e: Event) => void; approve: Approve; signal: () => AbortSignal | undefined; /** the MCP servers the editor passed in session/new, as sent */ mcpServers?: unknown[] }) => AcpAgent | Promise<AcpAgent>;
 };
 const KIND: Record<string, string> = { read_file: "read", list_dir: "read", grep: "search", find_refs: "search", repo_map: "search", write_file: "edit", edit_file: "edit", apply_patch: "edit", sh: "execute", sh_start: "execute", web_fetch: "fetch", web_search: "fetch" };
 
@@ -21,7 +21,7 @@ export function serveAcp(o: AcpOptions): Promise<void> {
   const call = (method: string, params: Json) => new Promise<Json>((res) => { const id = nextId++; waiting.set(id, res); send({ id, method, params }); });
   const update = (sessionId: string, u: Json) => send({ method: "session/update", params: { sessionId, update: u } });
 
-  const newSession = (cwd: string) => {
+  const newSession = async (cwd: string, mcpServers?: unknown[]) => {
     const id = `sess_${Date.now().toString(36)}${(++n).toString(36)}`, s: { cwd: string; history: Message[]; ac?: AbortController; agent: AcpAgent } = { cwd, history: [], agent: undefined as any };
     const onEvent = (e: Event) => {
       if (e.kind === "text") update(id, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: e.delta } });
@@ -35,7 +35,7 @@ export function serveAcp(o: AcpOptions): Promise<void> {
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "reject", name: "Reject", kind: "reject_once" }] });
       const out = r?.outcome; return out?.outcome === "selected" && out.optionId === "allow" ? true : "the user rejected this in the editor";
     };
-    s.agent = o.makeAgent({ cwd, onEvent, approve, signal: () => s.ac?.signal }); sessions.set(id, s); return id;
+    s.agent = await o.makeAgent({ cwd, onEvent, approve, signal: () => s.ac?.signal, mcpServers }); sessions.set(id, s); return id;
   };
 
   const toText = (blocks: Json[]): { text: string; images: { mime: string; data: string }[] } => {
@@ -53,8 +53,8 @@ export function serveAcp(o: AcpOptions): Promise<void> {
     const ok = (result: Json) => send({ id: m.id, result }), fail = (code: number, message: string) => send({ id: m.id, error: { code, message } });
     try {
       switch (m.method) {
-        case "initialize": return ok({ protocolVersion: 1, agentCapabilities: { loadSession: false, promptCapabilities: { image: true, embeddedContext: true }, mcpCapabilities: { http: false, sse: false } }, agentInfo: { name: "amness", title: "Amness", version: o.version }, authMethods: [] });
-        case "session/new": return ok({ sessionId: newSession(m.params?.cwd || process.cwd()) });
+        case "initialize": return ok({ protocolVersion: 1, agentCapabilities: { loadSession: false, promptCapabilities: { image: true, embeddedContext: true }, mcpCapabilities: { http: true, sse: true } }, agentInfo: { name: "amness", title: "Amness", version: o.version }, authMethods: [] });
+        case "session/new": return ok({ sessionId: await newSession(m.params?.cwd || process.cwd(), Array.isArray(m.params?.mcpServers) ? m.params.mcpServers : undefined) });
         case "session/prompt": {
           const s = sessions.get(m.params?.sessionId); if (!s) return fail(-32602, "unknown session");
           if (s.ac) return fail(-32000, "a turn is already running in this session");
@@ -78,6 +78,6 @@ export function serveAcp(o: AcpOptions): Promise<void> {
       if (!line.trim()) return; let m: Json; try { m = JSON.parse(line); } catch { return send({ id: null, error: { code: -32700, message: "parse error" } }); }
       if (m.method) void handle(m); else if (m.id !== undefined) { waiting.get(m.id)?.(m.result ?? { error: m.error }); waiting.delete(m.id); }
     });
-    rl.on("close", () => { for (const s of sessions.values()) s.ac?.abort(); for (const w of waiting.values()) w({}); resolve(); });
+    rl.on("close", () => { for (const s of sessions.values()) { s.ac?.abort(); try { s.agent.close?.(); } catch { /* best effort */ } } for (const w of waiting.values()) w({}); resolve(); });
   });
 }

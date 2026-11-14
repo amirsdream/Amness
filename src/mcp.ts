@@ -1,0 +1,438 @@
+// MCP client: stdio, Streamable HTTP and the old HTTP+SSE transport, for both protocol eras.
+// Modern = 2026-07-28 (stateless: no handshake, version and client info in every request's _meta, server/discover, required Mcp-Method/Mcp-Name headers on HTTP).
+// Legacy = the initialize handshake (2025-11-25 and earlier; on HTTP with an Mcp-Session-Id). HTTP+SSE (2024-11-05) is deprecated but still met in the wild.
+// Era detection follows the spec's "Backward Compatibility" sections: try the modern request first, fall back only when the answer is not a modern JSON-RPC error.
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import type { Registry, Tool } from "./harness.ts";
+
+export const MCP_MODERN = "2026-07-28", MCP_LEGACY = "2025-11-25";
+const CLIENT = { name: "amness", version: "1" };
+
+/** One server entry, in the `mcpServers` shape Claude Code and Claude Desktop use (`.mcp.json`). */
+export type McpServerConfig = {
+  type?: "stdio" | "http" | "streamable-http" | "sse";
+  command?: string; args?: string[]; env?: Record<string, string>; cwd?: string;
+  url?: string; headers?: Record<string, string>;
+  /** a command that prints a JSON object of extra headers (run on connect and again after a 401/403) */
+  headersHelper?: string;
+  /** per-call timeout in ms (default 10 minutes) */
+  timeout?: number;
+  disabled?: boolean;
+  /** OAuth settings for servers that need sign-in (see `amness mcp login`) */
+  oauth?: { clientId?: string; scopes?: string; callbackPort?: number; authServerMetadataUrl?: string };
+};
+export type McpEra = "modern" | "legacy" | "sse";
+export type McpConnectOptions = {
+  prefix?: string; risky?: (t: any) => boolean; deferAbove?: number; timeoutMs?: number; probeMs?: number;
+  /** extra environment for a stdio server (merged over the config's env) */
+  env?: Record<string, string>;
+  /** root folder offered to legacy servers that ask for roots */
+  cwd?: string;
+  /** a bearer token (from `amness mcp login`), sent on HTTP */
+  token?: () => string | undefined | Promise<string | undefined>;
+  /** non-fatal problems (a tool dropped for an invalid x-mcp-header, a server log line) */
+  warn?: (msg: string) => void;
+  /** a server said its tool list changed (legacy notification); the hub reloads */
+  onListChanged?: () => void;
+};
+export type McpServerInfo = { name?: string; version?: string; instructions?: string; capabilities?: Record<string, any> };
+export type McpHandle = {
+  tools: Tool[]; close: () => void;
+  /** which protocol generation the server speaks: modern (2026-07-28, stateless) or legacy (initialize handshake); "sse" is legacy over the old HTTP+SSE transport */
+  era: McpEra; transport: "stdio" | "http" | "sse"; server: McpServerInfo;
+  /** the raw tool definitions as listed (for description pinning) */
+  listed: any[];
+  rpc: (method: string, params?: Record<string, unknown>) => Promise<any>;
+};
+
+export class McpError extends Error {
+  code?: number; data?: any; status?: number;
+  /** true when the reply was a JSON-RPC error from the protocol itself (not a bare HTTP error page): the server speaks some MCP */
+  rpc?: boolean;
+  /** the WWW-Authenticate header of a 401/403 */
+  auth?: string;
+  constructor(message: string, o: { code?: number; data?: any; status?: number; rpc?: boolean; auth?: string } = {}) { super(message); Object.assign(this, o); }
+}
+
+type Rpc = (method: string, params?: Record<string, unknown>, ms?: number) => Promise<any>;
+type Transport = { rpc: Rpc; notify: (method: string, params?: Record<string, unknown>) => Promise<void>; close: () => void; kind: "stdio" | "http" | "sse"; setEra: (e: McpEra, version?: string) => void };
+
+const meta = () => ({ "io.modelcontextprotocol/protocolVersion": MCP_MODERN, "io.modelcontextprotocol/clientInfo": CLIENT, "io.modelcontextprotocol/clientCapabilities": {} });
+
+/** Answers to the few requests a legacy server may send us. Elicitation and sampling are refused for now (MRTR-era servers ask through results instead). */
+function serverRequest(method: string, cwd: string | undefined): { result?: unknown; error?: { code: number; message: string } } {
+  if (method === "ping") return { result: {} };
+  if (method === "roots/list") return { result: { roots: cwd ? [{ uri: "file://" + cwd.replace(/\\/g, "/").replace(/^(?=[A-Za-z]:)/, "/"), name: "project" }] : [] } };
+  return { error: { code: -32601, message: `Amness does not support ${method}` } };
+}
+
+// ------------------------------------------------------------------------------------------------ stdio
+function quoteWin(a: string) { return /^[\w\-.:\\/=@]+$/.test(a) ? a : `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`; }
+function killTree(child: ChildProcess) {
+  if (child.exitCode !== null || child.killed) return;
+  if (process.platform === "win32" && child.pid) { try { spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }); return; } catch { /* fall through */ } }
+  try { child.kill("SIGTERM"); } catch { /* gone */ }
+}
+
+function stdioTransport(cfg: McpServerConfig, o: McpConnectOptions): Transport {
+  const env = { ...process.env, ...cfg.env, ...o.env };
+  // On Windows, npx/uvx and friends are .cmd scripts that only start through a shell; quote each argument ourselves.
+  const child = process.platform === "win32"
+    ? spawn([cfg.command!, ...(cfg.args ?? [])].map(quoteWin).join(" "), { cwd: cfg.cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: true, windowsHide: true })
+    : spawn(cfg.command!, cfg.args ?? [], { cwd: cfg.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+  const pending = new Map<number, { ok: (v: any) => void; fail: (e: Error) => void }>();
+  let id = 0, buf = "", stderr = "", era: McpEra = "modern";
+  child.stderr!.on("data", (d) => { stderr = (stderr + d).slice(-2000); });                                  // kept for error messages; never printed over the UI
+  child.stdout!.on("data", (d) => {
+    buf += d;
+    for (let i; (i = buf.indexOf("\n")) >= 0; ) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line) continue;
+      let m: any; try { m = JSON.parse(line); } catch { continue; }                                         // not JSON-RPC: a stray log line
+      if (m.method && m.id !== undefined) { const r = serverRequest(m.method, o.cwd); child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, ...r }) + "\n"); continue; }
+      if (m.method) { if (/list_changed$/.test(m.method)) o.onListChanged?.(); continue; }
+      const p = pending.get(m.id); if (!p) continue; pending.delete(m.id);
+      m.error ? p.fail(new McpError(m.error.message, { code: m.error.code, data: m.error.data, rpc: true })) : p.ok(m.result);
+    }
+  });
+  const tail = () => (stderr.trim() ? `: ${stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 300)}` : "");
+  let gone: string | undefined;
+  const dead = (why: string) => { gone ??= why; for (const p of pending.values()) p.fail(new McpError(why)); pending.clear(); };
+  child.on("exit", (c) => dead(`MCP server exited (${c})${tail()}`));
+  child.on("error", (e) => dead(`MCP server failed to start: ${e.message}`));
+  child.stdin!.on("error", () => { /* the server went away; the exit handler reports it */ });
+  return {
+    kind: "stdio",
+    setEra: (e) => { era = e; },
+    rpc: (method, params, ms = o.timeoutMs ?? 600_000) => new Promise<any>((ok, fail) => {
+      if (gone) return fail(new McpError(gone));
+      const n = ++id;
+      const timer = setTimeout(() => { pending.delete(n); fail(new McpError(`MCP ${method} timed out after ${Math.round(ms / 1000)}s`)); }, ms); timer.unref?.();
+      pending.set(n, { ok: (v) => (clearTimeout(timer), ok(v)), fail: (e) => (clearTimeout(timer), fail(e)) });
+      const p = era === "modern" ? { ...params, _meta: { ...meta(), ...(params?._meta as object) } } : params;     // a modern server needs the per-request fields on every request
+      child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: n, method, params: p }) + "\n");
+    }),
+    notify: async (method, params) => { child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", method, ...(params && { params }) }) + "\n"); },
+    close: () => killTree(child),
+  };
+}
+
+// ------------------------------------------------------------------------------------------------ HTTP
+/** RFC 9110 header-safe value, or the spec's base64 sentinel. */
+export function headerValue(v: string): string {
+  const safe = /^[\x21-\x7e]([\x20-\x7e\t]*[\x21-\x7e])?$/.test(v) && !(v.startsWith("=?base64?") && v.endsWith("?="));
+  return safe ? v : `=?base64?${Buffer.from(v, "utf8").toString("base64")}?=`;
+}
+const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+/** The `x-mcp-header` annotations of a tool's input schema: [header name, property path]. Throws when one breaks the spec's rules (the tool must then be dropped). */
+export function mcpParamHeaders(schema: any): { name: string; path: string[] }[] {
+  const out: { name: string; path: string[] }[] = [], seen = new Set<string>();
+  const walk = (s: any, path: string[], reachable: boolean) => {
+    if (!s || typeof s !== "object") return;
+    if (s["x-mcp-header"] !== undefined) {
+      const h = s["x-mcp-header"];
+      if (!reachable || !path.length) throw new Error("x-mcp-header on a property that is not reachable through properties only");
+      if (typeof h !== "string" || !h || !TOKEN.test(h)) throw new Error(`x-mcp-header "${h}" is not a valid header name`);
+      if (!["string", "integer", "boolean"].includes(s.type)) throw new Error(`x-mcp-header "${h}" on a ${s.type ?? "untyped"} property (only string, integer, boolean)`);
+      if (seen.has(h.toLowerCase())) throw new Error(`x-mcp-header "${h}" is used twice`);
+      seen.add(h.toLowerCase()); out.push({ name: h, path });
+    }
+    for (const [k, v] of Object.entries(s)) {
+      if (k === "properties" && v && typeof v === "object") for (const [p, sub] of Object.entries(v)) walk(sub, [...path, p], reachable);
+      else if (v && typeof v === "object" && k !== "x-mcp-header") for (const sub of Array.isArray(v) ? v : [v]) walk(sub, path, false);   // items, anyOf, $defs, …: not statically reachable
+    }
+  };
+  walk(schema, [], true);
+  return out;
+}
+
+/** Read an SSE body: yields each event's data (joined lines). */
+async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<{ event: string; data: string }> {
+  const reader = body.getReader(), dec = new TextDecoder(); let buf = "", event = "message", data: string[] = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      for (let i; (i = buf.search(/\r?\n/)) >= 0; ) {
+        const line = buf.slice(0, i); buf = buf.slice(i + (buf[i] === "\r" ? 2 : 1));
+        if (line === "") { if (data.length) yield { event, data: data.join("\n") }; event = "message"; data = []; continue; }
+        if (line.startsWith(":")) continue;                                                                  // keep-alive comment
+        const c = line.indexOf(":"), field = c < 0 ? line : line.slice(0, c), val = c < 0 ? "" : line.slice(c + 1).replace(/^ /, "");
+        if (field === "event") event = val; else if (field === "data") data.push(val);
+      }
+    }
+  } finally { reader.releaseLock(); }
+}
+
+async function runHeadersHelper(cmd: string, env: Record<string, string>): Promise<Record<string, string>> {
+  const r = spawnSync(cmd, { shell: true, encoding: "utf8", timeout: 10_000, env: { ...process.env, ...env } });
+  if (r.status !== 0) throw new McpError(`headersHelper failed (${r.status ?? r.error?.message}): ${(r.stderr ?? "").slice(0, 200)}`);
+  const j = JSON.parse(r.stdout || "{}"); if (!j || typeof j !== "object" || Array.isArray(j)) throw new McpError("headersHelper must print a JSON object of headers");
+  return Object.fromEntries(Object.entries(j).map(([k, v]) => [k, String(v)]));
+}
+
+function httpTransport(cfg: McpServerConfig, o: McpConnectOptions, name: string): Transport & { headersFor: Map<string, { name: string; path: string[] }[]> } {
+  const url = cfg.url!; let era: McpEra = "modern", version = MCP_MODERN, session: string | undefined, id = 0, helper: Record<string, string> | undefined;
+  const headersFor = new Map<string, { name: string; path: string[] }[]>();
+  const acs = new Set<AbortController>();
+  const baseHeaders = async (retry: boolean) => {
+    if (cfg.headersHelper && (!helper || retry)) helper = await runHeadersHelper(cfg.headersHelper, { AMNESS_MCP_SERVER_NAME: name, AMNESS_MCP_SERVER_URL: url });
+    const h: Record<string, string> = { "content-type": "application/json", accept: "application/json, text/event-stream", ...cfg.headers, ...helper };
+    if (!Object.keys(h).some((k) => k.toLowerCase() === "authorization")) { const t = await o.token?.(); if (t) h.authorization = `Bearer ${t}`; }
+    return h;
+  };
+  const post = async (body: any, extra: Record<string, string>, ms: number, retry = false): Promise<Response> => {
+    const ac = new AbortController(); acs.add(ac); const timer = setTimeout(() => ac.abort(new McpError(`MCP ${body.method} timed out after ${Math.round(ms / 1000)}s`)), ms); timer.unref?.();
+    try {
+      const headers = { ...(await baseHeaders(retry)), ...extra };
+      if (era !== "sse") headers["mcp-protocol-version"] = version;
+      if (session) headers["mcp-session-id"] = session;
+      const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: ac.signal });
+      if ((r.status === 401 || r.status === 403) && !retry && cfg.headersHelper) { await r.body?.cancel(); return post(body, extra, ms, true); }
+      return r;
+    } catch (e) { throw ac.signal.aborted && ac.signal.reason instanceof McpError ? ac.signal.reason : new McpError(`MCP server ${url} unreachable: ${(e as Error).message}`); }
+    finally { clearTimeout(timer); acs.delete(ac); }
+  };
+  const readReply = async (r: Response, n: number, method: string): Promise<any> => {
+    const ct = r.headers.get("content-type") ?? "";
+    if (r.status === 401 || r.status === 403) { await r.body?.cancel(); throw new McpError(r.status === 401 ? `MCP server needs sign-in (run: amness mcp login ${name})` : "MCP server refused access (403: missing permission or scope)", { status: r.status, auth: r.headers.get("www-authenticate") ?? undefined }); }
+    if (ct.includes("text/event-stream") && r.body) {
+      for await (const ev of sseEvents(r.body)) {
+        let m: any; try { m = JSON.parse(ev.data); } catch { continue; }
+        if (m.id === n && !m.method) return m.error ? Promise.reject(new McpError(m.error.message, { code: m.error.code, data: m.error.data, status: r.status, rpc: true })) : m.result;
+        if (m.method && m.id === undefined && /list_changed$/.test(m.method)) o.onListChanged?.();
+      }
+      throw new McpError(`MCP ${method}: the response stream closed before the answer`, { status: r.status });
+    }
+    const text = await r.text(); let m: any; try { m = text ? JSON.parse(text) : undefined; } catch { /* not JSON */ }
+    if (m?.error) throw new McpError(m.error.message, { code: m.error.code, data: m.error.data, status: r.status, rpc: typeof m.error.code === "number" });
+    if (!r.ok) throw new McpError(`MCP ${method}: HTTP ${r.status}${text ? ` ${text.slice(0, 120)}` : ""}`, { status: r.status });
+    return m?.result;
+  };
+  return {
+    kind: "http", headersFor,
+    setEra: (e, v) => { era = e; if (v) version = v; },
+    rpc: async (method, params, ms = o.timeoutMs ?? 600_000) => {
+      const n = ++id, p = era === "modern" ? { ...params, _meta: { ...meta(), ...(params?._meta as object) } } : params;
+      const extra: Record<string, string> = {};
+      if (era === "modern") {
+        extra["mcp-method"] = method;
+        const nm = (params?.name ?? params?.uri) as string | undefined; if (nm !== undefined && /^(tools\/call|resources\/read|prompts\/get)$/.test(method)) extra["mcp-name"] = headerValue(String(nm));
+        if (method === "tools/call") for (const h of headersFor.get(String(params?.name)) ?? []) {
+          let v: any = params?.arguments; for (const k of h.path) v = v?.[k];
+          if (v !== undefined && v !== null) extra[`mcp-param-${h.name}`] = headerValue(typeof v === "boolean" ? String(v) : String(v));
+        }
+      }
+      const r = await post({ jsonrpc: "2.0", id: n, method, ...(p && { params: p }) }, extra, ms);
+      if (method === "initialize") session = r.headers.get("mcp-session-id") ?? undefined;
+      return readReply(r, n, method);
+    },
+    notify: async (method, params) => { const r = await post({ jsonrpc: "2.0", method, ...(params && { params }) }, era === "modern" ? { "mcp-method": method } : {}, 30_000); await r.body?.cancel(); },
+    close: () => {
+      for (const ac of acs) ac.abort(); acs.clear();
+      if (session) void fetch(url, { method: "DELETE", headers: { "mcp-session-id": session, "mcp-protocol-version": version } }).then((r) => r.body?.cancel(), () => {});   // legacy servers end the session
+    },
+  };
+}
+
+/** The deprecated HTTP+SSE transport (2024-11-05): a GET stream whose first event names the POST endpoint; answers come back on the stream. */
+async function sseTransport(cfg: McpServerConfig, o: McpConnectOptions, name: string): Promise<Transport> {
+  const ac = new AbortController(), pending = new Map<number, { ok: (v: any) => void; fail: (e: Error) => void }>();
+  let helper: Record<string, string> | undefined; if (cfg.headersHelper) helper = await runHeadersHelper(cfg.headersHelper, { AMNESS_MCP_SERVER_NAME: name, AMNESS_MCP_SERVER_URL: cfg.url! });
+  const headers = async () => { const h: Record<string, string> = { ...cfg.headers, ...helper }; if (!Object.keys(h).some((k) => k.toLowerCase() === "authorization")) { const t = await o.token?.(); if (t) h.authorization = `Bearer ${t}`; } return h; };
+  const r = await fetch(cfg.url!, { headers: { accept: "text/event-stream", ...(await headers()) }, signal: ac.signal }).catch((e) => { throw new McpError(`MCP server ${cfg.url} unreachable: ${e.message}`); });
+  if (r.status === 401) throw new McpError(`MCP server needs sign-in (run: amness mcp login ${name})`, { status: 401, auth: r.headers.get("www-authenticate") ?? undefined });
+  if (!r.ok || !r.body || !(r.headers.get("content-type") ?? "").includes("text/event-stream")) { await r.body?.cancel(); throw new McpError(`MCP server ${cfg.url} is not an HTTP+SSE server (HTTP ${r.status})`, { status: r.status }); }
+  let endpoint: string | undefined, id = 0; let ready!: (u: string) => void, broke!: (e: Error) => void;
+  const got = new Promise<string>((res, rej) => { ready = res; broke = rej; });
+  void (async () => {
+    try {
+      for await (const ev of sseEvents(r.body!)) {
+        if (ev.event === "endpoint") { endpoint = new URL(ev.data.trim(), cfg.url).href; ready(endpoint); continue; }
+        let m: any; try { m = JSON.parse(ev.data); } catch { continue; }
+        if (m.method && m.id !== undefined) { const a = serverRequest(m.method, o.cwd); void fetch(endpoint!, { method: "POST", headers: { "content-type": "application/json", ...(await headers()) }, body: JSON.stringify({ jsonrpc: "2.0", id: m.id, ...a }) }).then((x) => x.body?.cancel(), () => {}); continue; }
+        if (m.method) { if (/list_changed$/.test(m.method)) o.onListChanged?.(); continue; }
+        const p = pending.get(m.id); if (!p) continue; pending.delete(m.id);
+        m.error ? p.fail(new McpError(m.error.message, { code: m.error.code, data: m.error.data, rpc: true })) : p.ok(m.result);
+      }
+      throw new McpError("MCP server closed the event stream");
+    } catch (e) { const err = e instanceof McpError ? e : new McpError(`MCP event stream failed: ${(e as Error).message}`); broke(err); for (const p of pending.values()) p.fail(err); pending.clear(); }
+  })();
+  const t = setTimeout(() => broke(new McpError("MCP server sent no endpoint event")), o.probeMs ?? 10_000); t.unref?.();
+  await got.finally(() => clearTimeout(t));
+  return {
+    kind: "sse", setEra: () => {},
+    rpc: (method, params, ms = o.timeoutMs ?? 600_000) => new Promise<any>((ok, fail) => {
+      const n = ++id; const timer = setTimeout(() => { pending.delete(n); fail(new McpError(`MCP ${method} timed out after ${Math.round(ms / 1000)}s`)); }, ms); timer.unref?.();
+      pending.set(n, { ok: (v) => (clearTimeout(timer), ok(v)), fail: (e) => (clearTimeout(timer), fail(e)) });
+      void (async () => { try { const x = await fetch(endpoint!, { method: "POST", headers: { "content-type": "application/json", ...(await headers()) }, body: JSON.stringify({ jsonrpc: "2.0", id: n, method, ...(params && { params }) }) }); await x.body?.cancel(); if (!x.ok) { pending.delete(n); clearTimeout(timer); fail(new McpError(`MCP ${method}: HTTP ${x.status}`, { status: x.status })); } } catch (e) { pending.delete(n); clearTimeout(timer); fail(new McpError(`MCP ${method}: ${(e as Error).message}`)); } })();
+    }),
+    notify: async (method, params) => { await fetch(endpoint!, { method: "POST", headers: { "content-type": "application/json", ...(await headers()) }, body: JSON.stringify({ jsonrpc: "2.0", method, ...(params && { params }) }) }).then((x) => x.body?.cancel(), () => {}); },
+    close: () => ac.abort(),
+  };
+}
+
+// ------------------------------------------------------------------------------------------------ connect
+const isHttp = (c: McpServerConfig) => c.type === "http" || c.type === "streamable-http" || (!c.type && !!c.url && !c.command);
+/** Why a config cannot be used, or undefined when it can. */
+export function mcpConfigProblem(c: McpServerConfig): string | undefined {
+  if (!c || typeof c !== "object") return "not an object";
+  if (c.type && !["stdio", "http", "streamable-http", "sse"].includes(c.type)) return `unknown type "${c.type}" (stdio, http, sse)`;
+  if ((c.type === "stdio" || (!c.type && !c.url)) && !c.command) return "a stdio server needs a command";
+  if ((isHttp(c) || c.type === "sse") && !c.url) return `a ${c.type} server needs a url`;
+  if (c.url) { try { const u = new URL(c.url); if (!/^https?:$/.test(u.protocol)) return "the url must start with http:// or https://"; } catch { return `bad url "${c.url}"`; } }
+  return undefined;
+}
+
+/** Connect to one MCP server and list its tools. Names become `<prefix>__<tool>`. Tools the server marks destructive (or not read-only) need approval. */
+export async function connectMcp(cfg: McpServerConfig, o: McpConnectOptions & { name?: string } = {}): Promise<McpHandle> {
+  const bad = mcpConfigProblem(cfg); if (bad) throw new McpError(`MCP config: ${bad}`);
+  const name = o.name ?? o.prefix ?? "server";
+  let t: Transport = cfg.type === "sse" ? await sseTransport(cfg, o, name) : isHttp(cfg) ? httpTransport(cfg, o, name) : stdioTransport(cfg, o);
+  let era: McpEra = t.kind === "sse" ? "sse" : "modern"; const server: McpServerInfo = {};
+  const legacyInit = async () => {
+    t.setEra("legacy", MCP_LEGACY);
+    const r = await t.rpc("initialize", { protocolVersion: MCP_LEGACY, capabilities: { roots: {} }, clientInfo: CLIENT }, o.probeMs ? Math.max(o.probeMs, 15_000) : 30_000);
+    Object.assign(server, { name: r?.serverInfo?.name, version: r?.serverInfo?.version, instructions: r?.instructions, capabilities: r?.capabilities });
+    if (t.kind === "http" && r?.protocolVersion) t.setEra("legacy", r.protocolVersion);
+    await t.notify("notifications/initialized");
+  };
+  try {
+    if (era === "sse") { await legacyInit(); }
+    else {
+      try {
+        const d = await t.rpc("server/discover", { _meta: meta() }, o.probeMs ?? 10_000);
+        Object.assign(server, { ...d?._meta?.["io.modelcontextprotocol/serverInfo"], instructions: d?.instructions, capabilities: d?.capabilities });
+      } catch (e) {
+        const err = e as McpError;
+        if (err.code === -32022) throw new McpError(`MCP server does not support protocol ${MCP_MODERN} (it supports ${JSON.stringify(err.data?.supported ?? [])})`, err);
+        if (err.status === 401 || err.status === 403) throw err;
+        // Legacy: method not found, another error, a bare HTTP 400/404/405, or silence.
+        era = "legacy";
+        try { await legacyInit(); }
+        catch (e2) {
+          const e2s = (e2 as McpError).status;
+          if (t.kind === "http" && (e2s === 400 || e2s === 404 || e2s === 405) && !(e2 as McpError).rpc) {   // maybe the old HTTP+SSE transport at the same address
+            t.close(); t = await sseTransport(cfg, o, name); era = "sse"; await legacyInit();
+          } else throw e2;
+        }
+      }
+    }
+    if (era === "modern") t.setEra("modern");
+    const listed: any[] = [];
+    for (let cursor: string | undefined, pages = 0; pages < 50; pages++) {
+      const r = await t.rpc("tools/list", cursor ? { cursor } : {});
+      listed.push(...(r?.tools ?? [])); cursor = r?.nextCursor; if (!cursor) break;
+    }
+    const prefix = (o.prefix ?? name).replace(/[^\w-]+/g, "_");
+    const headersFor = (t as { headersFor?: Map<string, { name: string; path: string[] }[]> }).headersFor;
+    const usable = listed.filter((d) => {
+      if (!d || typeof d.name !== "string") return false;
+      try { const hs = mcpParamHeaders(d.inputSchema); if (headersFor && hs.length) headersFor.set(d.name, hs); return true; }
+      catch (e) { if (t.kind !== "http") return true; o.warn?.(`tool ${d.name} dropped: ${(e as Error).message}`); return false; }   // stdio may ignore x-mcp-header; HTTP clients MUST drop the tool
+    });
+    const rpc = (m: string, p?: Record<string, unknown>) => t.rpc(m, p);
+    const tools = usable.map((d): Tool => mcpTool(d, prefix, usable.length, o, rpc));
+    return { tools, close: () => t.close(), era, transport: t.kind, server, listed: usable, rpc };
+  } catch (e) { t.close(); throw e; }
+}
+
+/** One listed MCP tool as an Amness tool. */
+function mcpTool(t: any, prefix: string, count: number, o: McpConnectOptions, rpc: (m: string, p?: Record<string, unknown>) => Promise<any>): Tool {
+  const a = t.annotations ?? {};
+  const risky = o.risky ? o.risky(t) : a.destructiveHint === true || (t.annotations && a.readOnlyHint !== true && a.destructiveHint !== false);
+  return {
+    name: `${prefix}__${t.name}`.replace(/[^\w-]/g, "_").slice(0, 64), description: t.description ?? t.title ?? t.name,
+    schema: t.inputSchema ?? { type: "object" }, risky: risky ? () => `MCP tool ${t.name} may change external state` : false,
+    deferred: count > (o.deferAbove ?? 15), untrusted: true,
+    run: async (args) => {
+      const r = await rpc("tools/call", { name: t.name, arguments: args });
+      if (r?.resultType === "input_required") throw new Error(`MCP ${t.name}: the server asked for more input (elicitation or sampling), which Amness does not support yet`);
+      return mcpResultText(r);
+    },
+  };
+}
+
+/** A tools/call result as text for the model. Errors (isError) throw, so the model sees them as a failed call it can correct. */
+export function mcpResultText(r: any): string {
+  const parts = (r?.content ?? []).map((c: any) =>
+    c.type === "text" ? c.text
+      : c.type === "resource" ? (c.resource?.text !== undefined ? `<resource uri="${c.resource.uri}">\n${c.resource.text}\n</resource>` : `[resource ${c.resource?.uri ?? ""} (${c.resource?.mimeType ?? "binary"})]`)
+      : c.type === "resource_link" ? `[link ${c.uri}${c.name ? ` "${c.name}"` : ""}]`
+      : c.type === "image" ? `[image ${c.mimeType ?? ""}, ${Math.round(((c.data?.length ?? 0) * 3) / 4 / 1024)} KB]`
+      : c.type === "audio" ? `[audio ${c.mimeType ?? ""}]` : `[${c.type}]`);
+  const text = parts.join("\n");
+  if (r?.isError) throw new Error(text || "tool error");
+  return text || (r?.structuredContent !== undefined ? JSON.stringify(r.structuredContent) : "ok");
+}
+
+/** Old entry point: a stdio server from a command line. */
+export async function loadMcp(command: string, args: string[] = [], o: McpConnectOptions = {}): Promise<McpHandle> {
+  return connectMcp({ command, args }, { ...o, name: o.prefix ?? command.split(/[\\/]/).pop()!.replace(/\W+/g, "_") });
+}
+
+// ------------------------------------------------------------------------------------------------ hub
+export type McpScope = "local" | "project" | "user" | "cli" | "editor" | "session";
+export type McpEntry = { name: string; config: McpServerConfig; scope: McpScope; file?: string; pending?: boolean; disabled?: boolean };
+export type McpStatus = "connecting" | "connected" | "failed" | "pending" | "disabled" | "needs-login";
+export type McpRow = { name: string; scope: McpScope; status: McpStatus; error?: string; tools: number; transport: string; era?: McpEra; file?: string; target: string };
+
+export type McpHubOptions = McpConnectOptions & { onChange?: () => void; tokenFor?: (name: string, cfg: McpServerConfig) => (() => Promise<string | undefined>) | undefined };
+/** All the MCP servers of a session: connects them in parallel, keeps each one's status, gives their tools. */
+export class McpHub {
+  private servers = new Map<string, { entry: McpEntry; status: McpStatus; error?: string; handle?: McpHandle }>();
+  private o: McpHubOptions;
+  constructor(o: McpHubOptions = {}) { this.o = o; }
+
+  /** Replace the configured set and connect what is new or changed; servers no longer listed are closed. */
+  async start(entries: McpEntry[]): Promise<void> {
+    const want = new Map(entries.map((e) => [e.name, e]));
+    for (const [n, s] of this.servers) if (!want.has(n) || JSON.stringify(want.get(n)!.config) !== JSON.stringify(s.entry.config)) { s.handle?.close(); this.servers.delete(n); }
+    const jobs: Promise<void>[] = [];
+    for (const e of entries) {
+      const cur = this.servers.get(e.name);
+      if (cur && cur.status === "connected" && !e.disabled && !e.pending) { cur.entry = e; continue; }
+      cur?.handle?.close();
+      if (e.disabled) { this.servers.set(e.name, { entry: e, status: "disabled" }); continue; }
+      if (e.pending) { this.servers.set(e.name, { entry: e, status: "pending" }); continue; }
+      jobs.push(this.connect(e));
+    }
+    this.o.onChange?.();
+    await Promise.all(jobs);
+  }
+  async connect(e: McpEntry): Promise<void> {
+    this.servers.set(e.name, { entry: e, status: "connecting" }); this.o.onChange?.();
+    try {
+      const handle = await connectMcp(e.config, { ...this.o, name: e.name, prefix: e.name, token: this.o.tokenFor?.(e.name, e.config) ?? this.o.token, timeoutMs: e.config.timeout ?? this.o.timeoutMs, onListChanged: () => void this.reload(e.name) });
+      const cur = this.servers.get(e.name); if (!cur || cur.entry !== e) { handle.close(); return; }     // replaced or removed while connecting
+      cur.handle = handle; cur.status = "connected"; cur.error = undefined;
+    } catch (err) {
+      const cur = this.servers.get(e.name); if (!cur || cur.entry !== e) return;
+      const x = err as McpError; cur.status = x.status === 401 ? "needs-login" : "failed"; cur.error = x.message;
+    }
+    this.o.onChange?.();
+  }
+  /** Reconnect one server (or all) — after a login, a changed list, or a crash. */
+  async reconnect(name?: string): Promise<void> {
+    const list = [...this.servers.values()].filter((s) => (name ? s.entry.name === name : true) && s.status !== "disabled" && s.status !== "pending");
+    for (const s of list) s.handle?.close();
+    await Promise.all(list.map((s) => this.connect(s.entry)));
+  }
+  private async reload(name: string) { const s = this.servers.get(name); if (s?.status === "connected") await this.connect(s.entry); }
+  tools(): Tool[] { return [...this.servers.values()].flatMap((s) => (s.status === "connected" ? s.handle!.tools : [])); }
+  handle(name: string): McpHandle | undefined { return this.servers.get(name)?.handle; }
+  rows(): McpRow[] {
+    return [...this.servers.values()].map((s) => ({
+      name: s.entry.name, scope: s.entry.scope, status: s.status, error: s.error, tools: s.handle?.tools.length ?? 0,
+      transport: s.handle?.transport ?? (s.entry.config.type === "sse" ? "sse" : s.entry.config.url && !s.entry.config.command ? "http" : "stdio"),
+      era: s.handle?.era, file: s.entry.file, target: s.entry.config.url ?? [s.entry.config.command, ...(s.entry.config.args ?? [])].join(" "),
+    }));
+  }
+  get size() { return this.servers.size; }
+  close() { for (const s of this.servers.values()) s.handle?.close(); this.servers.clear(); }
+}
+
+/** Convenience: add a stdio MCP server's tools to a registry; returns the close function. */
+export async function mountMcp(reg: Registry, command: string, args?: string[], o?: McpConnectOptions) {
+  const h = await loadMcp(command, args, o); reg.add(...h.tools); return h.close;
+}

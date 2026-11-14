@@ -426,7 +426,7 @@ When you start the chat, Amness picks a first `/verify` command for you if it ca
 
 | Command | What it does |
 |---|---|
-| `/mcp <command>`, `/mcp list`, `/mcp off` | Attaches an MCP server (a program that gives the agent more tools), lists attached servers, or detaches them. |
+| `/mcp`, `/mcp add`, `/mcp remove`, `/mcp enable`, `/mcp disable`, `/mcp reconnect`, `/mcp tools <name>`, `/mcp <command or url>`, `/mcp off` | MCP servers (programs that give the agent more tools): shows each one's status, saves or removes one, switches one off for this project, or attaches one for this session. See [MCP servers](mcp.md). |
 | `/live` | Opens the browser live view. Diffs stream there. |
 
 ### Appearance and interface

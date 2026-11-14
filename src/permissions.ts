@@ -53,7 +53,7 @@ export function commandViews(cmd: string, depth = 0): string[] {
 export const OBFUSCATED_EXEC = /\b(?:base64|b64decode|xxd\s+-r|openssl\s+(?:enc|base64)\b)[^|;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b|\beval\s+["']?\$\(|\b(?:ba|z|da|k)?sh\s+<\(\s*(?:curl|wget)|\bpython3?\s+-c\s+["'][^"']*(?:base64|exec\(|__import__)/;
 
 // ---- the floor: refused or always-asked, whatever the mode ------------------------------------------------------------------------------
-const PROTECTED = /(^|\/)\.amness\/(hooks|permissions|settings|settings\.local)\.json$/;   // its own hooks, rules and settings (a sandbox it could switch off)
+const PROTECTED = /(^|\/)(\.amness\/(hooks|permissions|settings|settings\.local)|\.mcp)\.json$/;   // its own hooks, rules, settings (a sandbox it could switch off) and MCP servers (they start programs)
 const FLOOR_DENY: [RegExp, string][] = [
   [/\brm\s+(?:-\S+\s+)*-\S*[rRf]\S*\s+(?:-\S+\s+)*(?:\/\*?|~\/?\*?|\$HOME\/?\*?|\$\{HOME\}\/?\*?|\.\.(?:\/\S*)?)(?=\s|$)/, "recursive delete of the root, your home folder or a parent folder"],
   [/(?:^|[\s;&|])(?:sudo\s+)?mkfs(?:\.\w+)?\b/, "formatting a filesystem"],
@@ -73,7 +73,7 @@ const FLOOR_ASK: [RegExp, string][] = [
   [/\b(?:Invoke-WebRequest|iwr|Invoke-RestMethod|irm|curl|wget)\b[^|;\n]*\|\s*(?:Invoke-Expression|iex)\b/i, "downloads and runs a script"],
   [/(?:^|[\s;&|])-(?:EncodedCommand|enc|ec)\s+\S+|\bFromBase64String\b[^;\n]*\b(?:Invoke-Expression|iex)\b/i, "runs an encoded command"],
 ];
-const WRITES_PROTECTED = /\.amness\/(?:hooks|permissions|settings|settings\.local)\.json/;
+const WRITES_PROTECTED = /\.amness\/(?:hooks|permissions|settings|settings\.local)\.json|(?:^|[\s\/"'=>])\.mcp\.json/;
 const READONLY_VERB = /^\s*(?:cat|head|tail|less|grep|rg|ls|wc|stat|file|diff)\b/;
 
 /** The text of an apply_patch call: inline, or read from the patch file it names (so rules and the floor see the real paths). */
@@ -85,11 +85,11 @@ export function floorCheck(tool: string, args: Record<string, any>, cwd: string)
   if (kind === "edit" && typeof args.path === "string") {
     const rel = relative(cwd, resolve(cwd, args.path)).split("\\").join("/");
     if (rel === ".git" || rel.startsWith(".git/")) return { action: "deny", floor: true, reason: "the .git folder is protected: change history with git commands you can see, not by editing its files" };
-    if (PROTECTED.test(rel)) return { action: "deny", floor: true, reason: "the agent may not edit its own hooks, permission rules or settings" };
+    if (PROTECTED.test(rel)) return { action: "deny", floor: true, reason: "the agent may not edit its own hooks, permission rules, settings or MCP servers" };
   }
   if (kind === "sh" && typeof args.cmd === "string") {
     const cmd: string = args.cmd;
-    if (WRITES_PROTECTED.test(cmd) && !splitCommand(cmd).parts.every((p) => READONLY_VERB.test(p))) return { action: "deny", floor: true, reason: "the agent may not change its own hooks, permission rules or settings" };
+    if (WRITES_PROTECTED.test(cmd) && !splitCommand(cmd).parts.every((p) => READONLY_VERB.test(p))) return { action: "deny", floor: true, reason: "the agent may not change its own hooks, permission rules, settings or MCP servers" };
     const views = commandViews(cmd);
     for (const [re, why] of FLOOR_DENY) if (views.some((v) => re.test(v))) return { action: "deny", floor: true, reason: why };
     for (const [re, why] of FLOOR_ASK) if (views.some((v) => re.test(v))) return { action: "ask", floor: true, reason: why };
@@ -165,7 +165,7 @@ export class Permissions implements PermissionChecker {
 
 /** Fingerprint of the project files that can remove prompts or run commands (hooks and permission rules): approve once, re-approve when they change. */
 export function projectConfigFingerprint(cwd: string): string | undefined {
-  const files = [join(cwd, ".amness", "hooks.json"), Permissions.projectFile(cwd), join(cwd, ".amness", "settings.json")].filter(existsSync);   // the team settings file is approved with them
+  const files = [join(cwd, ".amness", "hooks.json"), Permissions.projectFile(cwd), join(cwd, ".amness", "settings.json"), join(cwd, ".mcp.json")].filter(existsSync);   // the team settings file and the project's MCP servers are approved with them
   if (!files.length) return undefined;
   const h = createHash("sha256"); for (const f of files) h.update(f).update(readFileSync(f)); return h.digest("hex").slice(0, 16);
 }

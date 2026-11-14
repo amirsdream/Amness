@@ -48,7 +48,7 @@ export function sidebarData(app: App, st: PanelState, t: Theme, now: number): Si
     skills: (app.agent.allSkills ?? []).map((s) => ({ name: s.name, uses: app.skillsUsed.get(s.name) ?? 0, off: app.agent.skillState.isOff(s.name) })),
     pluginStatus: app.pluginStatus(), budget: { used: Math.round(app.budget.effective), max: app.budget.maxTokens }, ctxPct: app.ctxPct, ctxUsed: app.lastPrompt, ctxMax: win, series: u.series ?? [], requests: (u.requests ?? []).map((r) => ({ ...r, cost: estimateCost(app.cfg.model, r.prompt, r.completion, r.cached) })), map: st.ctxCache.map,
     usage: { prompt: u.prompt, completion: u.completion, calls: u.calls, cached: u.cached ?? 0, reasoning: u.reasoning ?? 0 }, cost: estimateCost(app.cfg.model, u.prompt, u.completion, u.cached ?? 0),
-    todos: app.todos, changes: [...changes.values()].reverse(), tools: app.agent.registry.visible({ step: 0, messages: [] }).length, mcp: app.mcp.length, memory: app.memory?.list().length ?? 0,
+    todos: app.todos, changes: [...changes.values()].reverse(), tools: app.agent.registry.visible({ step: 0, messages: [] }).length, mcp: app.mcp.length + (app.mcpHub?.rows().filter((r) => r.status === "connected").length ?? 0), memory: app.memory?.list().length ?? 0,
     sandbox: app.cfg.sandbox,
     tasks: app.bg?.tasks.map((x) => ({ id: x.id, task: x.task.replace(/\s+/g, " "), status: x.status, secs: Math.round(((x.ended ?? now) - x.started) / 1000), changed: x.changed?.length ?? 0 })),
     procs: app.agent.procs?.list().map((p) => ({ id: p.id, name: p.name, status: p.status, secs: Math.round((now - p.startedAt) / 1000) })),

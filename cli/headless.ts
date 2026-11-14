@@ -4,6 +4,8 @@ const VERSION: string = (() => { for (const rel of ["../package.json", "../../pa
 import { join, resolve } from "node:path";
 import { cachedModel } from "../src/respcache.ts";
 import { promptPlugin, harnessCard, quarantineReader, Budget, Tracer, Hooks, Permissions, projectConfigFingerprint, createCodeAgent, startLive, setShell, loadPlugins, importPlugins, loadProfile, GUARD_NAMES, applySandboxEngine, modelJudge, rolloutSummary, withEarlier, type Guard, type Profile, readImage, visionLikely, bestOfN, parallelParts, isRepo, type Approve, type Event } from "../src/index.ts";
+import { McpHub } from "../src/mcp.ts";
+import { cliEntries, mcpEntries } from "./mcpconfig.ts";
 import { PROVIDERS, keyFor, loadConfig, ready, useServer, windowFor, type ProviderId } from "./config.ts";
 import { detectWindow } from "./models.ts";
 import { wireModels, type Wired } from "./roles.ts";
@@ -15,7 +17,8 @@ import { createModel, nativeAdvisor } from "./model.ts";
 export const HELP = `usage: amness run [flags] "task"
   --cwd <dir>          workspace (default .)
   --verify <cmd>       command that must exit 0 before the agent may finish
-  --trust-project      run this project's .amness/hooks.json and plugins and honour its allow rules (they execute code; off by default in headless runs)
+  --trust-project      run this project's .amness/hooks.json, plugins and .mcp.json servers and honour its allow rules (they execute code; off by default in headless runs)
+  --mcp-config <file|json>  MCP servers for this run ({"mcpServers": {…}}, repeatable); --strict-mcp-config uses only these; --no-mcp none
   --quarantine         dual LLM: untrusted tool output (web pages, MCP servers) is read by a separate model call with no tools; the agent sees only its digest
   --sandbox-engine <name>  which engine runs sandboxed commands: auto (Seatbelt/Bubblewrap), docker (AMNESS_SANDBOX_IMAGE, AMNESS_SANDBOX_RUNTIME=runsc for gVisor), or a plugin's
   --sandbox <mode>     run shell commands under an OS sandbox: workspace (write only in the project and temp folders) or strict (also no network)
@@ -62,9 +65,9 @@ export const HELP = `usage: amness run [flags] "task"
 exit code: 0 finished, 1 not finished, 2 usage/config error`;
 
 /** The options of `amness run` (keep in step with HELP). Anything else in the arguments is the task. */
-export const VALUE_FLAGS = new Set(["--cwd", "--verify", "--check", "--bundle", "--export", "--trace", "--sandbox", "--sandbox-engine", "--provider", "--model", "--base-url", "--effort", "--api", "--best-of", "--parts", "--image", "--max-tokens",
+export const VALUE_FLAGS = new Set(["--cwd", "--mcp-config", "--verify", "--check", "--bundle", "--export", "--trace", "--sandbox", "--sandbox-engine", "--provider", "--model", "--base-url", "--effort", "--api", "--best-of", "--parts", "--image", "--max-tokens",
   "--server", "--add-dir", "--max-steps", "--context-window", "--max-time", "--off", "--plugin", "--tool-choice", "--thinking-budget", "--request", "--local-weight", "--explore-model", "--compact-model", "--review-model", "--cheap-model", "--approve-model", "--quarantine-model", "--advisor-model", "--fallback", "--ladder", "--ladder-start"]);   // --live takes an optional port: it is read on its own, before the task
-export const BOOL_FLAGS = new Set(["--trust-project", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking", "--router", "--subagents", "--explore-ranges", "--stable-tools", "--background", "--here"]);
+export const BOOL_FLAGS = new Set(["--trust-project", "--strict-mcp-config", "--no-mcp", "--trust-hooks", "--review", "--approval-reviewer", "--yes", "--json", "--no-memory", "--plans", "--cache", "--best-of-all", "--quarantine", "--keep-thinking", "--router", "--subagents", "--explore-ranges", "--stable-tools", "--background", "--here"]);
 
 export async function runHeadless(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) { console.log(HELP); return 0; }       // asking for help must never start a model run
@@ -193,6 +196,17 @@ export async function runHeadless(argv: string[]): Promise<number> {
     model, models: wired.roles, modelById: (id) => wired.byRef(id), cwd, verify, plugins: loadedPlugins.plugins.length ? loadedPlugins.plugins : undefined, check, approve, record: !!tracer || undefined, sandbox, review: bool("--review") || undefined, approvalReviewer: bool("--approval-reviewer") ? (wired.approve ? { model: wired.approve } : true) : undefined, hooks: ((h) => { if (!trustHooks && projectConfigFingerprint(cwd)) console.error("note: ignoring the project's hooks and allow rules (pass --trust-project to use them)"); return h.count() ? h : undefined; })(Hooks.load(cwd, { trustProject: trustHooks })), rules: Permissions.load(cwd, { trustProject: trustHooks }), budget, memory: noMemory ? false : undefined, meta: { provider: cfg.provider, model: cfg.model },
     onEvent: (e: Event) => { if (e.kind === "turn") { usage.prompt += e.prompt; usage.completion += e.completion; usage.cached += e.cached; usage.requests++; } live?.onEvent(e); tracer?.event(e); if (json) console.log(JSON.stringify(e)); else { const l = formatEvent(e); if (l) console.error(l); } },
   });
+  const mcpExtra: string[] = []; for (let v = val("--mcp-config"); v !== undefined; v = val("--mcp-config")) mcpExtra.push(v);
+  const mcp = new McpHub({ cwd, warn: (m) => console.error(`MCP: ${m}`) });
+  if (!bool("--no-mcp")) {
+    let extra; try { extra = cliEntries(mcpExtra, cwd); } catch (e) { console.error(`--mcp-config: ${(e as Error).message}`); return 2; }
+    const { entries, notes } = mcpEntries(cwd, { trusted: trustHooks, extra, strict: bool("--strict-mcp-config") });
+    for (const n of notes) console.error(`note: ${n}`);
+    const pend = entries.filter((e) => e.pending); if (pend.length) console.error(`note: MCP server(s) ${pend.map((e) => e.name).join(", ")} from .mcp.json not started; pass --trust-project to start them`);
+    await mcp.start(entries);
+    for (const r of mcp.rows()) if (r.status === "failed" || r.status === "needs-login") console.error(`MCP ${r.name}: ${r.error}`);
+    agent.registry.add(...mcp.tools());
+  }
   try {
     const r = await agent.run(task, { bundle, images });
     if (exportTo) { await agent.exportBundle(r, exportTo); console.error(`session bundle: ${exportTo}`); }
@@ -205,5 +219,5 @@ export async function runHeadless(argv: string[]): Promise<number> {
     if (json) console.log(JSON.stringify({ kind: "error", message: (e as Error).message })); else console.error("error: " + (e as Error).message);
     finishBackground({ finished: false, text: `error: ${(e as Error).message}` });
     return 1;
-  } finally { for (const t of timers) clearTimeout(t); await agent.procs?.dispose(); await tracer?.close(); await live?.close(); }
+  } finally { mcp.close(); for (const t of timers) clearTimeout(t); await agent.procs?.dispose(); await tracer?.close(); await live?.close(); }
 }

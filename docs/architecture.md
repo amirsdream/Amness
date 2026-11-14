@@ -141,7 +141,8 @@ The table lists every file in `src/` and `cli/`. The text comes from the first c
 | `src/memory.ts` | Memory: ranked notes, merging, a light graph, learning from outcomes, an archive. |
 | `src/embed.ts` | Optional embeddings for memory search. |
 | `src/bundle.ts` | Portable session bundles: handoff note, memory and changed files. |
-| `src/dynamic.ts` | Tools the agent defines as shell commands, and the live tool registry (MCP). |
+| `src/dynamic.ts` | Tools the agent defines as shell commands. |
+| `src/mcp.ts` | The MCP client: stdio, Streamable HTTP and HTTP+SSE, both protocol eras, and `McpHub` (several servers with their status). |
 | `src/images.ts` | Reads an image file for models that accept images. |
 | `src/web.ts` | Web search and URL fetch tools. |
 | `src/worktree.ts` | Git worktrees: an isolated copy of the repository for an agent. |
@@ -177,6 +178,8 @@ The table lists every file in `src/` and `cli/`. The text comes from the first c
 | `cli/evalcli.ts` | `amness eval`: compare harness variants with statistics. |
 | `cli/schedulecli.ts` | `amness schedule`: recurring headless runs through cron. |
 | `cli/acpcli.ts` | `amness acp`: serve the Agent Client Protocol on stdin and stdout. |
+| `cli/mcpconfig.ts` | Where MCP servers come from (`.amness/settings.local.json`, `.mcp.json`, `~/.amness/config.json`, `--mcp-config`, the editor), `${VAR}` values, saving and removing. |
+| `cli/mcpcli.ts` | The `amness mcp` command. |
 
 ### `cli/tui/` : the chat interface
 

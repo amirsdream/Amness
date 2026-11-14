@@ -732,3 +732,24 @@ test("/models warns when amness doctor did not qualify the model for that job, a
   await t.submit("/models review server:box"); await t.settle();
   assert.ok(t.has("/doctor server:box checks how this model uses tools"));
 });
+
+test("configured MCP servers start with the chat: yours at once, the project's .mcp.json only after trust; /mcp shows each one's status", async () => {
+  const fake = join(process.cwd(), "test", "fake-mcp.mjs");
+  const t = rig([call("mine__echo", { text: "hey" }), say("done")], { cols: 140, files: {
+    ".amness/settings.local.json": JSON.stringify({ mcpServers: { mine: { command: "node", args: [fake], env: { MODE: "modern" } } } }),
+    ".mcp.json": JSON.stringify({ mcpServers: { team: { command: "node", args: [fake] } } }),
+  } });
+  await t.start();
+  try {
+    assert.ok(await t.until(() => t.app.mcpHub?.rows().find((r) => r.name === "mine")?.status === "connected", 8000));
+    assert.equal(t.app.mcpHub!.rows().find((r) => r.name === "team")!.status, "pending");
+    await t.submit("/mcp"); const s = plain(t.text());
+    assert.match(s, /mine\s+only you, this project · stdio modern · 2 tools/); assert.match(s, /team\s+shared with the project · stdio · waits for \/trust/);
+    await t.submit("use it"); assert.ok(await t.until(() => t.idle(), 5000));
+    assert.ok(t.seen[0].tools.includes("mine__echo") && !t.seen[0].tools.some((n) => n.startsWith("team__")));
+    assert.ok(t.seen.at(-1)!.msgs.some((m) => (m.content ?? "").includes("echo:hey")));
+    await t.submit("/mcp disable mine"); assert.ok(await t.until(() => t.app.mcpHub!.rows().find((r) => r.name === "mine")!.status === "disabled", 3000));
+    assert.ok(!t.app.agent.registry.get("mine__echo"));
+    await t.submit("/mcp enable mine"); assert.ok(await t.until(() => !!t.app.agent.registry.get("mine__echo"), 8000));
+  } finally { t.app.exit(0); }
+});

@@ -190,11 +190,11 @@ export const PROJECT_KEYS = new Set(["sandbox", "sandboxEngine", "sandboxImage",
 const SANDBOX_ORDER = ["off", "workspace", "strict"];
 
 export const projectFile = (root: string, layer: "project" | "team") => join(root, ".amness", layer === "team" ? "settings.json" : "settings.local.json");
-const readJson = (f: string): Record<string, unknown> | undefined => { try { if (!existsSync(f)) return undefined; const j = JSON.parse(readFileSync(f, "utf8")); return j && typeof j === "object" && !Array.isArray(j) ? j : undefined; } catch { return undefined; } };
+export const readJson = (f: string): Record<string, unknown> | undefined => { try { if (!existsSync(f)) return undefined; const j = JSON.parse(readFileSync(f, "utf8")); return j && typeof j === "object" && !Array.isArray(j) ? j : undefined; } catch { return undefined; } };
 const git = (root: string, args: string[]) => { try { const r = spawnSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); return r.status === 0 ? r.stdout.trim() : undefined; } catch { return undefined; } };
 /** A "local" file that git tracks came with the repository: it is not yours, so it is not used. */
-const tracked = (root: string, f: string) => git(root, ["ls-files", "--error-unmatch", f]) !== undefined;
-function writeProjectFile(root: string, layer: "project" | "team", f: Record<string, unknown>) {
+export const tracked = (root: string, f: string) => git(root, ["ls-files", "--error-unmatch", f]) !== undefined;
+export function writeProjectFile(root: string, layer: "project" | "team", f: Record<string, unknown>) {
   const file = projectFile(root, layer); mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(f, null, 2) + "\n");
   if (layer === "project") {                                                            // keep your file out of commits, as Claude Code does
@@ -206,6 +206,7 @@ function writeProjectFile(root: string, layer: "project" | "team", f: Record<str
 function applyLayer(c: Config, j: Record<string, unknown>, layer: "team" | "project", info: LayerInfo) {
   const cfg = c as Record<string, unknown>;
   for (const [k, v] of Object.entries(j)) {
+    if (k === "mcpServers") continue;                                                          // read on its own by cli/mcpconfig.ts (with its own trust rules)
     if (PERSONAL.has(k) || (layer === "team" && NOT_FROM_TEAM.has(k))) { info.notes.push(`${k} in ${layer === "team" ? ".amness/settings.json" : ".amness/settings.local.json"} is ignored: set it for yourself`); continue; }
     if (layer === "team" && k === "sandbox" && SANDBOX_ORDER.indexOf(String(v)) < SANDBOX_ORDER.indexOf(String(cfg.sandbox ?? "off"))) { info.notes.push(`the team file asks for a weaker sandbox (${v}); yours is kept`); continue; }
     if (layer === "team" && (k === "review" || k === "quarantine") && v !== true) continue;   // the team may only switch these checks on
