@@ -64,7 +64,7 @@ test("desktop: a new chat while one works keeps the first alive, in its own work
   const model: Model = async (m) => { const u = [...m].reverse().find((x) => x.role === "user")?.content ?? ""; if (/slow job/.test(u)) { await g.p; return say("slow job done"); } return say("quick answer"); };
   let b: DesktopBridge | undefined;
   t.after(() => { g.open(); b?.close(); });
-  b = new DesktopBridge({ cfg: { provider: "custom", baseUrl: "http://x/v1", model: "test-model", maxTokens: 100000 } as any, cwd: d, version: "0", persist: false, makeModel: () => model, emit: (e) => events.push(e) });
+  b = new DesktopBridge({ cfg: { provider: "custom", baseUrl: "http://127.0.0.1:9/v1", model: "test-model", maxTokens: 100000 } as any, cwd: d, version: "0", persist: false, makeModel: () => model, emit: (e) => events.push(e) });
   await sleep(80);
   b.send("please do the slow job"); assert.ok(await until(() => b.app.running));
   const first = b.app, firstId = first.session.id;

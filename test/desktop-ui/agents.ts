@@ -31,7 +31,7 @@ const model: Model = async (msgs, _s, o) => {
   await sleep(300);
   const r = lead.shift() ?? { role: "assistant", content: "ok", usage: u }; if (r.content) { o?.onThinking?.("Summarising what the agents found."); o?.onText?.(r.content); } return r;
 };
-const srv = await startDesktopServer({ cfg: { provider: "openai", baseUrl: "http://x/v1", model: "gpt-6.1-sol", maxTokens: 300000, apiKey: "sk" } as any, cwd: dir, version: "0.1.8", persist: false, makeModel: () => model });
+const srv = await startDesktopServer({ cfg: { provider: "openai", baseUrl: "http://127.0.0.1:9/v1", model: "gpt-6.1-sol", maxTokens: 300000, apiKey: "sk" } as any, cwd: dir, version: "0.1.8", persist: false, makeModel: () => model });
 const env: NodeJS.ProcessEnv = { ...process.env, AMNESS_DESKTOP_URL: srv.url, AMNESS_DESKTOP_EVAL: evalFile, ...(shot ? { AMNESS_DESKTOP_SCREENSHOT: shot } : {}) }; delete env.ELECTRON_RUN_AS_NODE;
 const ch = spawn(electronBinary()!, [fileURLToPath(new URL("../../cli/desktop/electron-main.cjs", import.meta.url))], { stdio: ["ignore", "pipe", "ignore"], env });
 let out = ""; ch.stdout.on("data", (d) => (out += d));

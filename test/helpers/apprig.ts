@@ -36,7 +36,9 @@ export function rig(replies: Reply[], o: { files?: Record<string, string>; cols?
     if (typeof r !== "function" && m.content && opts?.onText) { for (const part of m.content.match(/.{1,12}/gs) ?? []) { opts.onText(part); await sleep(1); } }
     return m;
   };
-  const app = new App({ ui: o.ui, cfg: { provider: "custom", baseUrl: "http://x/v1", model: o.model ?? "test-model", maxTokens: 100000, theme: o.theme, ...o.cfg } as any, cwd: dir, keepWarmMs: o.keepWarmMs, version: "0.0.0", input, output, makeModel: () => model, persist: o.persist ?? false, resume: o.resume, prompt: o.prompt });
+  // The App probes its server in the background (context window, model list). A closed local port fails at once; a made-up host name
+  // ("http://x") made Windows wait minutes on a name lookup that cannot be cancelled, holding the test process open.
+  const app = new App({ ui: o.ui, cfg: { provider: "custom", baseUrl: "http://127.0.0.1:9/v1", model: o.model ?? "test-model", maxTokens: 100000, theme: o.theme, ...o.cfg } as any, cwd: dir, keepWarmMs: o.keepWarmMs, version: "0.0.0", input, output, makeModel: () => model, persist: o.persist ?? false, resume: o.resume, prompt: o.prompt });
   const t = {
     dir, vt, app, seen, input,
     start: async () => { void app.start(); await sleep(40); },

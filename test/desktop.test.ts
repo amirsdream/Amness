@@ -16,7 +16,7 @@ async function boot(replies: Message[], files: Record<string, string> = { "a.txt
   for (const [f, c] of Object.entries(files)) writeFileSync(join(dir, f), c);
   const queue = [...replies];
   const model: Model = async (_m, _s, o) => { const r = queue.shift() ?? say("(done)"); if (r.content && o?.onText) o.onText(r.content); return r; };
-  const srv = await startDesktopServer({ cfg: { provider: "custom", baseUrl: "http://x/v1", model: "test-model", maxTokens: 100000, ...o.cfg } as any, cwd: dir, version: "0.0.0", persist: o.persist ?? false, makeModel: o.realModel ? undefined : () => model });
+  const srv = await startDesktopServer({ cfg: { provider: "custom", baseUrl: "http://127.0.0.1:9/v1", model: "test-model", maxTokens: 100000, ...o.cfg } as any, cwd: dir, version: "0.0.0", persist: o.persist ?? false, makeModel: o.realModel ? undefined : () => model });
   await sleep(50);
   const base = srv.url.split("/#")[0], events: any[] = [], ctrl = new AbortController();
   const es = await fetch(`${base}/events?t=${srv.token}`, { signal: ctrl.signal });

@@ -36,7 +36,7 @@ if (process.argv.includes("--chats")) {
   mk("Rename customer to account across the API", 40 * 24 * H, 9, ["Rename customer to account.", "Renamed in 41 files, with an alias."]);
   for (let d = 10; d < 18; d++) mk(`Older task from ${d} days ago`, d * 24 * H, 2, ["An older request.", "An older answer."]);   // always "Previous 30 days": folded, and more than the cap
 }
-const srv = await startDesktopServer({ cfg: { provider: "openai", baseUrl: "http://x/v1", model: "gpt-6.1-sol", maxTokens: 300000, apiKey: "sk-test" } as any, cwd: dir, version: "0.1.8", persist: process.argv.includes("--chats"), makeModel: () => model });
+const srv = await startDesktopServer({ cfg: { provider: "openai", baseUrl: "http://127.0.0.1:9/v1", model: "gpt-6.1-sol", maxTokens: 300000, apiKey: "sk-test" } as any, cwd: dir, version: "0.1.8", persist: process.argv.includes("--chats"), makeModel: () => model });
 const env: NodeJS.ProcessEnv = { ...process.env, AMNESS_DESKTOP_URL: srv.url, AMNESS_DESKTOP_EVAL: evalFile, ...(size ? { AMNESS_DESKTOP_SIZE: size } : {}), ...(shot ? { AMNESS_DESKTOP_SCREENSHOT: shot } : {}) }; delete env.ELECTRON_RUN_AS_NODE;
 const ch = spawn(electronBinary()!, [fileURLToPath(new URL("../../cli/desktop/electron-main.cjs", import.meta.url))], { stdio: ["ignore", "pipe", "ignore"], env });
 let out = ""; ch.stdout.on("data", (d) => (out += d));
