@@ -76,14 +76,49 @@ export class Registry {
   visible(s: { step: number; messages: Message[] }) {
     return [...this.tools.values()].filter((t) => (!this.allow || this.allow.has(t.name)) && (!this.isDeferred(t) || this.loaded.has(t.name)) && (!t.when || t.when(s)));
   }
-  /** Keyword-rank the not-yet-loaded deferred tools by name + description. */
+  /**
+   * Rank the not-yet-loaded deferred tools for a query: BM25 over the tool's name (counted twice: names are the strongest signal) and
+   * its description, with snake_case and camelCase split and plurals folded. A query that names tools exactly (`github__create_issue`, or
+   * `create_issue` when only one tool has that name) gets those first. Only hits that score close to the best one come back, so one search
+   * does not load a handful of tools that were never wanted (each loaded tool stays in every later request).
+   */
   search(q: string, n = 5) {
-    const words = q.toLowerCase().split(/\W+/).filter((w) => w.length > 1);
-    return [...this.tools.values()].filter((t) => this.isDeferred(t) && !this.loaded.has(t.name) && (!this.allow || this.allow.has(t.name)))
-      .map((t) => ({ t, score: words.filter((w) => `${t.name} ${t.description}`.toLowerCase().includes(w)).length }))
-      .filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.t.name.localeCompare(b.t.name)).slice(0, n).map((x) => x.t);
+    const pool = [...this.tools.values()].filter((t) => this.isDeferred(t) && !this.loaded.has(t.name) && (!this.allow || this.allow.has(t.name)));
+    const exact = q.split(/[\s,]+/).filter(Boolean).flatMap((w) => { const full = pool.find((t) => t.name === w); if (full) return [full]; const tail = pool.filter((t) => t.name.split("__").at(-1) === w); return tail.length === 1 ? tail : []; });
+    if (exact.length) return [...new Set(exact)].slice(0, n);
+    const words = [...new Set(searchWords(q))];
+    if (!words.length) return [];
+    const docs = pool.map((t) => { const name = searchWords(t.name); return { t, w: [...name, ...name, ...searchWords(t.description)] }; });
+    const avg = docs.reduce((a, d) => a + d.w.length, 0) / (docs.length || 1);
+    const idf = new Map(words.map((w) => { const df = docs.filter((d) => d.w.includes(w)).length; return [w, Math.log(1 + (docs.length - df + 0.5) / (df + 0.5))]; }));
+    const scored = docs.map((d) => ({ t: d.t, score: words.reduce((sum, w) => { const f = d.w.filter((x) => x === w).length; return f ? sum + idf.get(w)! * (f * 2.2) / (f + 1.2 * (0.25 + 0.75 * d.w.length / avg)) : sum; }, 0) }))
+      .filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.t.name.localeCompare(b.t.name));
+    const best = scored[0]?.score ?? 0;
+    return scored.filter((x) => x.score >= best * SEARCH_KEEP).slice(0, n).map((x) => x.t);
   }
 }
+
+/** A hit must score at least this share of the best hit to be loaded with it. */
+const SEARCH_KEEP = 0.5;
+/** Words for tool search: lower case, snake_case and camelCase split, a plural folded to its singular. */
+export function searchWords(s: string): string[] {
+  return s.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1)
+    .map((w) => (w.length > 4 && w.endsWith("ies") ? w.slice(0, -3) + "y" : w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w));
+}
+
+/**
+ * The list of not-yet-loaded tools in tool_search's description, sent with every request. A short list shows each tool with the start of its
+ * description; a long one (many MCP tools) shows only names, grouped by server, which costs a fraction of the tokens.
+ */
+export function toolMenu(menu: Tool[], namesOnly = false): string {
+  if (!namesOnly && menu.length <= MENU_DESCRIBED) return "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n");
+  const groups = new Map<string, string[]>();
+  for (const t of menu) { const i = t.name.indexOf("__"), g = i > 0 ? t.name.slice(0, i) : ""; groups.set(g, [...(groups.get(g) ?? []), i > 0 ? t.name.slice(i + 2) : t.name]); }
+  const lines = [...groups].sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b))).map(([g, ns]) => g ? `- ${g}__ (${ns.length}): ${ns.join(", ")}` : `- ${ns.join(", ")}`);
+  return "Load more tools before using them: search by keywords, or give exact names to load just those. Not yet loaded (a server's tools are named <server>__<tool>):\n" + lines.join("\n");
+}
+/** Up to this many not-yet-loaded tools are listed with descriptions; more are listed by name only. */
+const MENU_DESCRIBED = 15;
 
 export type Event =
   | { kind: "toolstart"; id: string; name: string; args: string }
@@ -467,12 +502,12 @@ export function createHarness(o: Options) {
       const hits = reg.search(query);
       if (o.stableTools) return hits.length ? "Found. Run one with call_tool({\"name\": ..., \"args\": {...}}):\n" + hits.map((t) => `- ${t.name}: ${t.description}\n  schema: ${JSON.stringify(t.schema)}`).join("\n") : `No match. Tools you can find: ${[...reg.tools.values()].filter((t) => reg.isDeferred(t)).map((t) => t.name).join(", ") || "(none)"}`;
       hits.forEach((t) => reg.loaded.add(t.name));
-      return hits.length ? "Loaded (callable from your next turn):\n" + hits.map((t) => `- ${t.name}: ${t.description}\n  schema: ${JSON.stringify(t.schema)}`).join("\n")
-        : `No match. Not yet loaded: ${[...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)).map((t) => t.name).join(", ") || "(none)"}`;
+      return hits.length ? "Loaded (callable from your next turn; their full definitions are now in your tool list):\n" + hits.map((t) => `- ${t.name}: ${t.description}`).join("\n")
+        : (() => { const rest = [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)); return rest.length ? "No match. " + toolMenu(rest, true) : "No match: every tool is already loaded."; })();
     },
   };
   /** The tool list of a request. In stable mode (`stableTools`) the list never changes in a session: tool_search only describes what it finds and `call_tool` runs it, so loading a tool does not break the prompt cache. */
-  const specsFor = (visible: Tool[], menu: Tool[]): ToolSpec[] => [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: reg.lean?.when() ? "Load more tools by keyword before using them. Not yet loaded: " + menu.map((t) => t.name).join(", ") : "Load more tools by keyword before using them. Not yet loaded:\n" + menu.map((t) => `- ${t.name}: ${t.description.slice(0, 60)}`).join("\n") }] : []), ...(menu.length && o.stableTools ? [CALL_TOOL] : []), FINISH];
+  const specsFor = (visible: Tool[], menu: Tool[]): ToolSpec[] => [...visible.map(spec).sort((a, b) => (a.name < b.name ? -1 : 1)), ...(menu.length ? [{ ...spec(searchTool), description: toolMenu(menu, !!reg.lean?.when()) }] : []), ...(menu.length && o.stableTools ? [CALL_TOOL] : []), FINISH];
   let meter: RiskMeter | undefined;
   const emit = (e: Event) => { meter?.observe(e); o.onEvent?.(e); };
   /** Run lifecycle hooks, report what they did, and fail open (a broken hook only warns). */

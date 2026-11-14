@@ -115,3 +115,26 @@ test("code agent selfExtend: tool created at runtime is usable and reloaded in a
   assert.ok(createCodeAgent({ model: s.model, cwd: dir, selfExtend: true }).registry.get("hello"));
   assert.equal(shellTool({ name: "z", description: "", command: "true", params: {} }, dir).name, "z");
 });
+
+test("tool search: many tools are listed by name and grouped by server; exact names load just those; results do not repeat the schema", async () => {
+  const many = Array.from({ length: 20 }, (_, i) => mk(`gh__tool_${i}`, `does thing number ${i} on github`, { deferred: true }));
+  const reg = new Registry([mk("core"), ...many, mk("slack__post_message", "post a message to a slack channel", { deferred: true, schema: { type: "object", properties: { channel: { type: "string" } } } })]);
+  const { model, specs, seen } = scripted(call(["tool_search", { query: "gh__tool_3 tool_7" }]), call(["tool_search", { query: "slack messages" }]), call(["finish", { summary: "." }]));
+  await createHarness({ model, tools: reg }).run("t");
+  const menu = specs[0].find((s) => s.name === "tool_search")!.description;
+  assert.match(menu, /- gh__ \(20\): tool_0, tool_1/); assert.match(menu, /- slack__ \(1\): post_message/); assert.doesNotMatch(menu, /does thing/);
+  const t = toolOut(seen);
+  assert.match(t[0], /gh__tool_3[\s\S]*gh__tool_7/); assert.equal((t[0].match(/^- /gm) ?? []).length, 2);
+  assert.match(t[1], /slack__post_message/); assert.doesNotMatch(t[1], /schema/);
+  assert.ok(names(specs[2]).includes("slack__post_message") && names(specs[2]).includes("gh__tool_3") && !names(specs[2]).includes("gh__tool_4"));
+});
+
+test("tool search ranks with BM25 and loads only hits close to the best one", () => {
+  const reg = new Registry([
+    mk("db__query", "run a read-only SQL query against the database", { deferred: true }), mk("db__list_tables", "list tables in the database", { deferred: true }),
+    mk("web__navigate", "open a URL in the browser", { deferred: true }), mk("web__click", "click an element on the page", { deferred: true }),
+  ]);
+  assert.deepEqual(reg.search("run sql query").map((t) => t.name), ["db__query"]);
+  assert.equal(reg.search("list database tables")[0].name, "db__list_tables");
+  assert.deepEqual(reg.search("nothing matches this"), []);
+});

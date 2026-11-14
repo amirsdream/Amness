@@ -144,3 +144,4 @@ Tested with the official MCP TypeScript SDK (version 1.32): its client used `amn
 - Older servers: Amness falls back to the `initialize` handshake (`2025-11-25`, with a session id on HTTP), and then to the old HTTP+SSE transport (`2024-11-05`), as the specification describes.
 - A server that answers 401 is shown as needing sign-in.
 - A server with more than 15 tools has them behind `tool_search`, so the prompt stays small.
+  When more than 15 tools wait there, the model sees only their names, grouped by server (`github__ (38): create_issue, …`). It loads tools by keywords or by exact names, and a search loads only the hits that rank close to the best one.
