@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 (2026-11-14)
 
+- **Desktop: no more `sandbox_extension_issue_file failed … Operation not permitted` at start.** Chromium prints this harmless line on macOS when Electron is installed under Homebrew; `amness-desktop` now drops it and passes Electron's other errors through.
 - **Reports open in a window, not in the conversation** (terminal and desktop). `/tokens`, `/tools`, `/status`, `/mcp`, `/hooks`, `/permissions`, `/skills`, `/memory` and the other reports show in a window you scroll and close with `Esc`. Typing closes the window and goes into the input. A one-line answer (`/lsp off`) is a short message that goes away by itself. The window fits its content and wraps long lines. New: `/inspect` lists every report. In the terminal you can click `≡ inspect` in the header or a sidebar title marked `›`. The desktop has an **Inspect** button (`Ctrl/⌘ I`), and its panel tiles and Workspace buttons open the reports. `/pr` and `/memory consolidate` show the draft and the question in one dialog. The API (`/api/command`, `amness serve` commands) still returns the lines.
 - **Fixed: secret masking broke ordinary code.** Lines such as `const passwordStrength = getPasswordStrength(password)` reached the model as `… = [REDACTED:credential]`, so it read broken code and its edits on those lines did not match the file. Values that are code (a call, an index, a negation, a property path, a camelCase variable, a value an operator continues) are no longer masked; quoted values and `.env`-style secrets still are.
 - **A near-miss enum value is corrected instead of rejected** (case, spaces, hyphens, and common synonyms such as `completed` → `done`), so `todo_write` with `"completed"` works the first time.
