@@ -8,7 +8,7 @@ import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, 
 import { onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { hubOptions, mcpEntries } from "../mcpconfig.ts";
-import { McpHub } from "../../src/mcp.ts";
+import { McpHub, type McpElicitation } from "../../src/mcp.ts";
 import { PROVIDERS, applyTeam, forProject, home, keyFor, keyIdOf, layerNotes, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { editExternally, editorCommand, readClipboardImage, savePastedImage } from "./external.ts";
@@ -149,7 +149,42 @@ export class App {
     const custom = this.customCmds.filter((c) => !names.has(c.name)), taken = new Set([...names, ...custom.map((c) => c.name)]);
     const ctx: PluginCtx = { cwd: this.cwd, say: (t) => this.say(t, dim), ask: (t) => this.dispatch(t), run: async (cmd, ms) => { const out = await runShell(cmd, this.cwd, ms ?? 60_000); const m = /^exit=(\w+)\n?/.exec(out); return { code: m && /^\d+$/.test(m[1]) ? Number(m[1]) : 1, output: out.replace(/^exit=\w+\n?/, "") }; } };
     const fromPlugins: Cmd[] = this.plugins.flatMap((p) => (p.commands ?? []).filter((c) => !taken.has(c.name)).map((c) => ({ name: c.name, help: `${c.help} (plugin ${p.name})`, args: c.args, run: async (_a: App, arg: string) => { try { await c.run(ctx, arg); } catch (e) { this.note(`plugin ${p.name}: /${c.name} failed: ${(e as Error).message}`); } } })));
-    return [...this.builtin, ...custom, ...fromPlugins];
+    const fromMcp: Cmd[] = (this.mcpHub?.prompts() ?? []).map(({ server, prompt, run }) => ({
+      name: `mcp__${server}__${prompt.name}`.toLowerCase().replace(/[^a-z0-9_-]+/g, "-"), args: (prompt.arguments ?? []).map((x) => (x.required ? `<${x.name}>` : `[${x.name}]`)).join(" ") || undefined,
+      help: `${prompt.title ?? prompt.description ?? prompt.name} (MCP ${server})`.slice(0, 120),
+      run: async (app: App, arg: string) => {
+        const names = (prompt.arguments ?? []).map((x) => x.name), words = arg.trim() ? arg.trim().split(/\s+/) : [];
+        const args: Record<string, string> = {}; names.forEach((n, i) => { if (words[i] !== undefined) args[n] = i === names.length - 1 ? words.slice(i).join(" ") : words[i]; });   // the last argument takes the rest
+        for (const a of prompt.arguments ?? []) if (a.required && !args[a.name]) { const v = await app.askText(`${a.name}${a.description ? ` (${a.description})` : ""}`); if (v === undefined) return; args[a.name] = v; }
+        try { const text = await run(args); if (!text.trim()) return void app.say("the prompt was empty", dim); await app.turn(text); } catch (e) { app.say(`✗ ${(e as Error).message}`, red); }
+      },
+    }));
+    return [...this.builtin, ...custom, ...fromPlugins, ...fromMcp];
+  }
+  /** A server's question during a call: a page to open, or a short form. Your answers go back to that server only. */
+  async mcpElicit(r: McpElicitation): Promise<{ action: "accept" | "decline" | "cancel"; content?: Record<string, unknown> }> {
+    if (r.mode === "url") {
+      let host = r.url ?? ""; try { host = new URL(r.url ?? "").host; } catch { /* shown as is */ }
+      const go = await this.pick(`MCP server "${r.server}" asks you to open ${host}: ${r.message}`, [{ label: `Open ${host}`, value: "open" }, { label: "No", value: "no" }]);
+      if (go !== "open") return { action: go === "no" ? "decline" : "cancel" };
+      const { openUrl } = await import("./openurl.ts"); await openUrl(r.url ?? "");
+      const done = await this.pick(`Finish in the browser, then continue. Done on ${host}?`, [{ label: "Done", value: "y" }, { label: "Cancel", value: "n" }]);
+      return { action: done === "y" ? "accept" : "cancel" };
+    }
+    const props = Object.entries(r.schema?.properties ?? {}), req = new Set(r.schema?.required ?? []);
+    const start = await this.pick(`MCP server "${r.server}" asks: ${r.message}`, [{ label: props.length ? "Answer" : "Yes", value: "y" }, { label: "No (decline)", value: "n" }]);
+    if (start !== "y") return { action: start === "n" ? "decline" : "cancel" };
+    const content: Record<string, unknown> = {};
+    for (const [k, p] of props) {
+      const label = `${p.title ?? k}${p.description ? ` (${p.description})` : ""}${req.has(k) ? "" : " · optional, empty to skip"}`;
+      const choices: string[] | undefined = Array.isArray(p.enum) ? p.enum.map(String) : Array.isArray(p.oneOf) ? p.oneOf.map((x: any) => String(x.const)) : undefined;
+      if (p.type === "boolean") { const v = await this.pick(label, [{ label: "Yes", value: true }, { label: "No", value: false }]); if (v === undefined) return { action: "cancel" }; content[k] = v; continue; }
+      if (choices) { const v = await this.pick(label, choices.map((c) => ({ label: c, value: c }))); if (v === undefined) return { action: "cancel" }; content[k] = v; continue; }
+      const v = await this.askText(label, { secret: p.format === "password" }); if (v === undefined) return { action: "cancel" };
+      if (!v && !req.has(k)) continue;
+      content[k] = p.type === "number" || p.type === "integer" ? Number(v) : v;
+    }
+    return { action: "accept", content };
   }
 
   // ------------------------------------------------------------------ agent plumbing
@@ -974,7 +1009,7 @@ export class App {
     const { entries, notes } = mcpEntries(this.cwd, { trusted: this.projectTrusted() });
     this.mcpNotes = notes; for (const n of notes) this.note(n);
     if (!entries.length && !this.mcpHub) return;
-    this.mcpHub ??= new McpHub(hubOptions(this.cwd, { warn: (m) => this.note(`MCP: ${m}`), onChange: () => { this.syncMcpTools(); this.render(); void this.reviewMcpChanges(); } }));
+    this.mcpHub ??= new McpHub(hubOptions(this.cwd, { elicit: (r) => this.mcpElicit(r), warn: (m) => this.note(`MCP: ${m}`), onChange: () => { this.syncMcpTools(); this.render(); void this.reviewMcpChanges(); } }));
     await this.mcpHub.start(entries);
     const failed = this.mcpHub.rows().filter((r) => r.status === "failed" || r.status === "needs-login");
     if (failed.length) this.note(`MCP: ${failed.map((r) => `${r.name} ${r.status === "needs-login" ? "needs sign-in" : "failed"}`).join(", ")} (/mcp for details)`);

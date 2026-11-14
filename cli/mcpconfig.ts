@@ -4,9 +4,10 @@
 //   user     ~/.amness/config.json         "mcpServers"   yours, every project
 // Plus servers from the command line (--mcp-config) or the editor (ACP session/new), which win over all three.
 // The same name in two places: the higher one is used as a whole (no field-by-field merge).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { mcpConfigProblem, type McpEntry, type McpHubOptions, type McpPinStore, type McpScope, type McpServerConfig } from "../src/index.ts";
+import { canonicalResource, mcpConfigProblem, oauthToken, type McpEntry, type McpHubOptions, type McpPinStore, type McpScope, type McpServerConfig, type OAuthStore, type OAuthTokens } from "../src/index.ts";
+import { backend, deleteSecret, getSecret, setSecret } from "./keystore.ts";
 import { home, projectFile, readJson, tracked, writeProjectFile } from "./config.ts";
 import { loadState, saveState } from "./state.ts";
 
@@ -127,5 +128,22 @@ export const pinStore = (): McpPinStore => ({
   set: (k, v) => { const st = loadState(); st.mcpPins = { ...st.mcpPins, [k]: v }; saveState(st); },
 });
 export const pinKeyFor = (cwd: string) => (e: McpEntry) => `${e.scope === "user" ? "user" : `${cwd}|${e.scope}`}|${e.name}|${e.config.url ?? [e.config.command, ...(e.config.args ?? [])].join(" ")}`;
-/** The hub options every front end uses (pins, cwd). */
-export const hubOptions = (cwd: string, more: McpHubOptions = {}): McpHubOptions => ({ cwd, pins: pinStore(), pinKey: pinKeyFor(cwd), ...more });
+/**
+ * MCP sign-in tokens: the system keychain when there is one (macOS Keychain, Windows DPAPI, Linux secret-tool), else ~/.amness/mcp-auth.json
+ * (owner-only), and only in memory in a container (where keys must not be written). Keyed by the server's canonical address.
+ */
+const memTokens = new Map<string, OAuthTokens>();
+const authFile = () => join(home(), "mcp-auth.json");
+const readAuth = (): Record<string, OAuthTokens> => { try { return JSON.parse(readFileSync(authFile(), "utf8")); } catch { return {}; } };
+export const oauthStore = (): OAuthStore => ({
+  get: (k) => { if (backend() === "none") return memTokens.get(k); const s = getSecret(`mcp-oauth:${k}`); if (s) { try { return JSON.parse(s); } catch { /* fall through */ } } return readAuth()[k]; },
+  set: (k, t) => {
+    if (backend() === "none") return void memTokens.set(k, t);
+    if (setSecret(`mcp-oauth:${k}`, JSON.stringify(t))) return;
+    const all = readAuth(); all[k] = t; mkdirSync(home(), { recursive: true }); writeFileSync(authFile(), JSON.stringify(all, null, 2), { mode: 0o600 }); try { chmodSync(authFile(), 0o600); } catch { /* Windows */ }
+  },
+  delete: (k) => { memTokens.delete(k); deleteSecret(`mcp-oauth:${k}`); const all = readAuth(); if (k in all) { delete all[k]; writeFileSync(authFile(), JSON.stringify(all, null, 2), { mode: 0o600 }); } },
+});
+/** The hub options every front end uses: pins, cwd, and the sign-in token of each remote server. */
+export const hubOptions = (cwd: string, more: McpHubOptions = {}): McpHubOptions => ({ cwd, pins: pinStore(), pinKey: pinKeyFor(cwd), tokenFor: (_n, c) => (c.url ? oauthToken(c.url, oauthStore()) : undefined), ...more });
+export const signedIn = (url: string) => !!oauthStore().get(canonicalResource(url));

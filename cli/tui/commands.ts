@@ -10,8 +10,8 @@ import { join, resolve, sep } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { approveDraft, fetchSource, inspectSource, installSkills, listDrafts, rejectDraft, scaffoldSkill, trashSkill } from "../../src/index.ts";
-import { collectFiles, connectMcp, effortsFor, loadMcp, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
-import { addServer as addMcpServer, removeServer as removeMcpServer, setDisabled, SCOPE_TEXT, type FileScope } from "../mcpconfig.ts";
+import { canonicalResource, collectFiles, connectMcp, effortsFor, loadMcp, oauthLogin, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
+import { addServer as addMcpServer, mcpEntries, oauthStore, removeServer as removeMcpServer, setDisabled, SCOPE_TEXT, type FileScope } from "../mcpconfig.ts";
 import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, forgetServer, keyFor, serverKey, serverName, storeKey, useServer, type Connection, type Layer, type ProviderId, type Server } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { fetchModels, prefixCacheRate } from "../models.ts";
@@ -668,7 +668,7 @@ export function buildCommands(): Cmd[] {
           return void a.commit(["", `  ${green("✓")} drafted ${cyan(d.name)}`, `    ${dim(d.description)}`, dim(`    saved to ${d.file}; it is NOT active. Read it, then /skills approve ${d.name} or /skills reject ${d.name}.`)]);
         }
         if (sub === "drafts") { const l = listDrafts(a.cwd); return void a.say(l.length ? l.map((d) => `${d.name}: ${d.description}`).join("\n") : "no drafts", dim); }
-        if (sub === "approve") { if (!name) return void a.say("usage: /skills approve <name>", red); approveDraft(a.cwd, name); return void done(`${name} is active now`); }
+      if (sub === "approve") { if (!name) return void a.say("usage: /skills approve <name>", red); approveDraft(a.cwd, name); return void done(`${name} is active now`); }
         if (sub === "reject") { if (!name) return void a.say("usage: /skills reject <name>", red); rejectDraft(a.cwd, name); return void a.say(`${name} deleted`, dim); }
         a.say(`unknown: /skills ${sub}. Try /skills, show, new, add, remove, on, off, draft`, red);
       } catch (e) { a.say((e as Error).message, red); }
@@ -695,6 +695,7 @@ export function buildCommands(): Cmd[] {
           out.push(`  ${dot(r.status)} ${bold(r.name)}  ${dim(`${SCOPE_TEXT[r.scope]} · ${r.transport}${r.era ? ` ${r.era}` : ""} · ${r.status === "connected" ? `${r.tools} tools` : r.status === "pending" ? "waits for /trust" : r.status}`)}`);
           out.push(`    ${dim(r.target.slice(0, a.width - 6))}`);
           if (r.error) out.push(`    ${red(r.error.slice(0, a.width - 6))}`);
+          if (r.status === "needs-login") out.push(`    ${yellow(`sign in: /mcp login ${r.name}`)}`);
           if (r.changed.length) out.push(`    ${yellow(`${r.changed.length} changed tool(s) held back: /mcp approve ${r.name}`)}`);
           if (Object.keys(r.warnings).length) out.push(`    ${red(`⚠ ${Object.keys(r.warnings).length} tool description(s) look suspicious: /mcp tools ${r.name}`)}`);
         }
@@ -702,6 +703,17 @@ export function buildCommands(): Cmd[] {
         for (const n of a.mcpNotes) out.push(`  ${yellow("!")} ${dim(n)}`);
         if (!rows.length && !a.mcp.length) out.push(dim("  no MCP servers attached or configured."), dim("  /mcp add github https://api.githubcopilot.com/mcp/ · /mcp add fs npx -y @modelcontextprotocol/server-filesystem ."), dim("  or a .mcp.json in the project (Claude Code's format) · amness mcp --help"));
         return void a.commit(out);
+      }
+      if (sub === "login" || sub === "logout") {
+      const r = a.mcpHub?.rows().find((x) => x.name === words[1]); if (!r) return void a.say(`usage: /mcp ${sub} <name> (a remote server from /mcp)`, dim);
+      const e = mcpEntries(a.cwd, { trusted: a.projectTrusted() }).entries.find((x) => x.name === r.name);
+      if (!e?.config.url) return void a.say(`${r.name} is a local server: it takes its keys from env, not a sign-in`, dim);
+      if (sub === "logout") { oauthStore().delete(canonicalResource(e.config.url)); await a.mcpHub!.reconnect(r.name); return void a.say(`forgot the sign-in for ${r.name}`, dim); }
+      try {
+        await oauthLogin(e.config.url, { store: oauthStore(), config: e.config.oauth, open: async (u) => { a.say(`sign in to ${r.name} in your browser: ${u}`, dim); const { openUrl } = await import("./openurl.ts"); await openUrl(u); } });
+        a.note("connecting…", 30_000); await a.mcpHub!.reconnect(r.name); a.noticeUntil = 0;
+        const now = a.mcpHub!.rows().find((x) => x.name === r.name); return void a.say(now?.status === "connected" ? `${green("●")} ${r.name}: signed in, ${now.tools} tools` : `${red("✗")} ${r.name}: ${now?.error ?? now?.status}`);
+      } catch (err) { return void a.say(`✗ sign-in failed: ${(err as Error).message}`, red); }
       }
       if (sub === "approve") { const r = a.mcpHub?.rows().find((x) => x.name === words[1]); if (!r) return void a.say("usage: /mcp approve <name>", dim); a.mcpHub!.approve(r.name); a.syncMcpTools(); return void a.say(`${r.name}: its current tools are approved`, dim); }
       if (sub === "off") { a.mcp.splice(0).forEach((m) => m.close()); a.buildAgent(); return void a.say("MCP servers detached", dim); }

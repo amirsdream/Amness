@@ -768,3 +768,21 @@ test("an MCP tool whose description changed since you approved the server is hel
     await t.key(KEY.enter); assert.ok(await t.until(() => !!t.app.agent.registry.get("s__echo"), 3000), plain(t.screen()) + JSON.stringify(t.app.mcpHub!.rows().map((r) => [r.status, r.changed.length])));
   } finally { t.app.exit(0); }
 });
+
+test("MCP prompts are slash commands, and a server's question during a call opens the app's own dialogs", async () => {
+  const fake = join(process.cwd(), "test", "fake-mcp.mjs");
+  const t = rig([say("reviewed"), call("s__ask", {}), say("got it")], { cols: 140, files: { ".amness/settings.local.json": JSON.stringify({ mcpServers: { s: { command: "node", args: [fake], env: { MODE: "modern", EXTRAS: "1", ASK: "1" } } } }) } });
+  await t.start();
+  try {
+    assert.ok(await t.until(() => t.app.cmds.some((c) => c.name === "mcp__s__review"), 8000));
+    await t.submit("/mcp__s__review a.ts"); assert.ok(await t.until(() => t.idle(), 5000));
+    assert.equal(t.seen[0].msgs.findLast((m) => m.role === "user")!.content, "Please review a.ts");
+    await t.submit("ask me");
+    assert.ok(await t.until(() => t.has('MCP server "s" asks: Pick a colour'), 5000), plain(t.screen()));
+    await t.key(KEY.enter);                                                                         // Answer
+    assert.ok(await t.until(() => t.has("blue"), 3000)); await t.key(KEY.down); await t.key(KEY.enter);   // colour: blue
+    assert.ok(await t.until(() => t.has("why"), 3000)); await t.type("sky"); await t.key(KEY.enter);
+    assert.ok(await t.until(() => t.idle(), 5000));
+    assert.ok(t.seen.at(-1)!.msgs.some((m) => m.role === "tool" && /answer:accept:\{"colour":"blue","why":"sky"\}/.test(m.content ?? "")), JSON.stringify(t.seen.at(-1)!.msgs.filter((m) => m.role === "tool")));
+  } finally { t.app.exit(0); }
+});

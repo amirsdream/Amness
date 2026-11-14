@@ -148,3 +148,47 @@ test("a very long tool result goes to a file the model can read; the model gets 
     assert.equal(readFileSync(join(d, m[1]), "utf8").length, 100000); assert.equal(readFileSync(join(d, ".amness", "mcp-output", ".gitignore"), "utf8"), "*\n");
   } finally { h.close(); }
 });
+
+test("prompts, resources and server questions (MRTR in 2026-07-28, a direct request from older servers)", async () => {
+  for (const MODE of ["modern", "legacy"]) {
+    const asked: any[] = [];
+    const h = await connectMcp({ command: "node", args: ["test/fake-mcp.mjs"], env: { MODE, EXTRAS: "1", ASK: "1" } }, { name: "x", elicit: async (r) => { asked.push(r); return { action: "accept", content: { colour: "blue" } }; } });
+    try {
+      assert.deepEqual(h.prompts.map((p) => p.name), ["review"]); assert.equal(await h.getPrompt("review", { file: "a.ts", focus: "bugs" }), "Please review a.ts for bugs");
+      assert.deepEqual(h.resources.map((r) => r.uri), ["mem://notes"]); assert.equal(await h.readResource("mem://notes"), "the team notes say: ship on Friday");
+      const out = await h.tools.find((t) => t.name === "x__ask")!.run({}, {} as any);
+      assert.match(String(out), /^answer:accept:\{"colour":"blue"\}/, MODE); if (MODE === "modern") assert.match(String(out), /:st1$/);        // the retry carried requestState
+      assert.equal(asked[0].message, "Pick a colour"); assert.deepEqual(asked[0].schema.required, ["colour"]);
+    } finally { h.close(); }
+  }
+  const noOne = await connectMcp({ command: "node", args: ["test/fake-mcp.mjs"], env: { MODE: "modern", ASK: "1" } }, { name: "y" });   // nobody to ask (amness run): decline
+  try { assert.match(String(await noOne.tools.find((t) => t.name === "y__ask")!.run({}, {} as any)), /^answer:decline/); } finally { noOne.close(); }
+  const hub = new McpHub(); await hub.start([{ name: "z", scope: "user", config: { command: "node", args: ["test/fake-mcp.mjs"], env: { EXTRAS: "1" } } }]);
+  try {
+    const tools = hub.tools(); assert.ok(tools.some((t) => t.name === "list_mcp_resources") && tools.some((t) => t.name === "read_mcp_resource"));
+    assert.match(String(await tools.find((t) => t.name === "list_mcp_resources")!.run({}, {} as any)), /z\s+mem:\/\/notes\s+notes — Team notes/);
+    assert.match(String(await tools.find((t) => t.name === "read_mcp_resource")!.run({ server: "z", uri: "mem://notes" }, {} as any)), /ship on Friday/);
+    assert.equal(hub.prompts()[0].server, "z");
+  } finally { hub.close(); }
+});
+
+test("OAuth 2.1 sign-in: discovery, registration, PKCE S256, resource, iss check; the token is used and refreshed", async () => {
+  const { oauthLogin, oauthToken, canonicalResource } = await import("../src/index.ts");
+  const { browser, fakeOAuth } = await import("./helpers/fake-oauth.ts");
+  const s = await fakeOAuth(); const mem = new Map<string, any>(), store = { get: (k: string) => mem.get(k), set: (k: string, v: any) => void mem.set(k, v), delete: (k: string) => void mem.delete(k) };
+  try {
+    const hub = new McpHub({ tokenFor: (_n, c) => oauthToken(c.url!, store) });
+    await hub.start([{ name: "locked", scope: "user", config: { type: "http", url: s.url } }]); assert.equal(hub.rows()[0].status, "needs-login");
+    const t = await oauthLogin(s.url, { store, open: browser });
+    assert.equal(t.access_token, "at1"); assert.equal(t.client_id, "c1"); assert.equal(t.issuer, `${s.base}/as`); assert.equal(mem.get(canonicalResource(s.url)).refresh_token, "rt1");
+    const a = s.seen.authorize[0]; assert.equal(a.code_challenge_method, "S256"); assert.equal(a.resource, s.url); assert.match(a.scope, /read/); assert.match(a.scope, /offline_access/);
+    assert.ok(s.seen.tokenForms[0].code_verifier && s.seen.tokenForms[0].resource === s.url);
+    await hub.reconnect("locked"); assert.equal(hub.rows()[0].status, "connected");
+    assert.equal(await hub.tools()[0].run({}, {} as any), "token at2");                                // at1 expires within the minute: refreshed with the resource parameter
+    assert.equal(s.seen.tokenForms.at(-1)!.grant_type, "refresh_token"); assert.equal(s.seen.tokenForms.at(-1)!.resource, s.url);
+    hub.close();
+  } finally { await s.close(); }
+  const bad = await fakeOAuth({ badIss: true });
+  try { await assert.rejects(oauthLogin(bad.url, { store, open: browser }), /another issuer \(iss\)/); assert.equal(bad.seen.tokenForms.length, 0, "the code is never redeemed after a wrong iss"); }
+  finally { await bad.close(); }
+});

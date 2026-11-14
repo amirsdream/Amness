@@ -103,7 +103,7 @@ test("MCP 2026-07-28: a modern server is probed with server/discover and used wi
   const legacy = await loadMcp("node", ["test/fake-mcp.mjs"], { prefix: "l" });
   try { assert.equal(legacy.era, "legacy"); assert.equal(await legacy.tools[0].run({ text: "yo" }, { registry: new Registry(), step: 0 }), "echo:yo"); } finally { legacy.close(); }
   const asks = await loadMcp("node", ["test/fake-mcp.mjs"], { prefix: "a", env: { MODE: "modern", INPUT: "1" } });
-  try { await assert.rejects(Promise.resolve(asks.tools[0].run({ text: "x" }, { registry: new Registry(), step: 0 })), /asked for more input/); } finally { asks.close(); }
+  try { await assert.rejects(Promise.resolve(asks.tools[0].run({ text: "x" }, { registry: new Registry(), step: 0 })), /kept asking for more input/); } finally { asks.close(); }
 });
 
 test("code agent selfExtend: tool created at runtime is usable and reloaded in a new agent", async () => {

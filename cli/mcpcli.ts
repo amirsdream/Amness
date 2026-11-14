@@ -1,7 +1,8 @@
 // `amness mcp …`: manage the MCP servers Amness connects to (the same files the TUI's /mcp and the desktop use).
 import { resolve } from "node:path";
-import { connectMcp, McpHub, projectConfigFingerprint, type McpServerConfig } from "../src/index.ts";
-import { addServer, hubOptions, mcpEntries, mcpFile, parseMcpJson, readServers, removeServer, setDisabled, SCOPE_TEXT, type FileScope } from "./mcpconfig.ts";
+import { canonicalResource, connectMcp, McpHub, oauthLogin, projectConfigFingerprint, type McpServerConfig } from "../src/index.ts";
+import { openUrl } from "./tui/openurl.ts";
+import { addServer, hubOptions, oauthStore, mcpEntries, mcpFile, parseMcpJson, readServers, removeServer, setDisabled, SCOPE_TEXT, type FileScope } from "./mcpconfig.ts";
 import { loadState } from "./state.ts";
 import { bold, cyan, dim, green, red, yellow } from "./ui.ts";
 
@@ -22,6 +23,9 @@ export const MCP_HELP = `amness mcp <command>   MCP servers for Amness (terminal
   enable <name> · disable <name>               switch one off or on for this project only
   check [name]                                 connect, time it, and look for hidden instructions in tool descriptions
   approve <name>                               accept tools that changed since you approved the server (they are held back until then)
+  login <name> [--no-browser]                  sign in to a remote server (OAuth 2.1; opens your browser, or prints the link)
+  logout <name>                                forget its sign-in
+      add options for sign-in: --client-id <id> --client-secret <secret> --callback-port <n> --scopes "a b"
 
 Values may use \${VAR} and \${VAR:-default}. Servers from .mcp.json start only after you trust the project
 (the terminal asks; /trust asks again). In amness run they need --trust-project or --mcp-config.`;
@@ -35,7 +39,7 @@ export async function runMcpCli(argv: string[], o: { cwd?: string } = {}): Promi
   try {
     if (cmd === "add" || cmd === "add-json") {
       const dash = rest.indexOf("--"), opts = dash >= 0 ? rest.slice(0, dash) : rest, after = dash >= 0 ? rest.slice(dash + 1) : [];
-      let scope: string | undefined, transport: string | undefined, helper: string | undefined, timeout: number | undefined; const env: Record<string, string> = {}, headers: Record<string, string> = {}, pos: string[] = [];
+      let scope: string | undefined, transport: string | undefined, helper: string | undefined, timeout: number | undefined; const oauth: NonNullable<McpServerConfig["oauth"]> = {}; const env: Record<string, string> = {}, headers: Record<string, string> = {}, pos: string[] = [];
       for (let i = 0; i < opts.length; i++) {
         const a = opts[i], val = () => { const v = a.includes("=") && a.startsWith("--") ? a.slice(a.indexOf("=") + 1) : opts[++i]; if (v === undefined) throw new Error(`${a} needs a value`); return v; };
         const flag = a.startsWith("--") ? a.split("=")[0] : a;
@@ -45,6 +49,7 @@ export async function runMcpCli(argv: string[], o: { cwd?: string } = {}): Promi
         else if (flag === "--header" || flag === "-H") { const hv = val(), k = hv.indexOf(":"); if (k < 1) throw new Error(`--header takes "Name: value" (got "${hv}")`); headers[hv.slice(0, k).trim()] = hv.slice(k + 1).trim(); }
         else if (flag === "--headers-helper") helper = val();
         else if (flag === "--timeout") timeout = Number(val());
+        else if (flag === "--client-id") oauth.clientId = val(); else if (flag === "--client-secret") oauth.clientSecret = val(); else if (flag === "--callback-port") oauth.callbackPort = Number(val()); else if (flag === "--scopes") oauth.scopes = val();
         else if (a.startsWith("-")) throw new Error(`unknown option ${a}`);
         else pos.push(a);
       }
@@ -56,6 +61,7 @@ export async function runMcpCli(argv: string[], o: { cwd?: string } = {}): Promi
       else if (pos[1]) cfg = { command: pos[1], args: pos.slice(2), ...(Object.keys(env).length && { env }) };
       else throw new Error("give a url, or -- and the command that starts the server");
       if (timeout) cfg.timeout = timeout;
+      if (Object.keys(oauth).length) cfg.oauth = oauth;
       const file = addServer(sc, cwd, name, cfg);
       console.log(`${green("✓")} ${bold(name)} saved in ${file} ${dim(`(${SCOPE_TEXT[sc]})`)}`);
       if (sc === "project") console.log(dim("  shared with everyone who clones the project; each person approves it once (the terminal asks)"));
@@ -68,6 +74,15 @@ export async function runMcpCli(argv: string[], o: { cwd?: string } = {}): Promi
       console.log(`${green("✓")} removed ${bold(name)} ${dim(`(${SCOPE_TEXT[from]})`)}`); return 0;
     }
     if (cmd === "enable" || cmd === "disable") { if (!rest[0]) throw new Error("which server?"); setDisabled(cwd, rest[0], cmd === "disable"); console.log(`${rest[0]} ${cmd === "disable" ? "switched off" : "switched on"} for ${cwd}`); return 0; }
+    if (cmd === "login" || cmd === "logout") {
+      const name = rest.find((a) => !a.startsWith("-")); if (!name) throw new Error("which server?");
+      const e = mcpEntries(cwd, { trusted: trusted() }).entries.find((x) => x.name === name); if (!e) { console.error(`no server "${name}" (amness mcp list)`); return 1; }
+      if (!e.config.url) { console.error(`${name} is a local (stdio) server: it takes its keys from env, not a sign-in`); return 2; }
+      if (cmd === "logout") { oauthStore().delete(canonicalResource(e.config.url)); console.log(`${green("✓")} forgot the sign-in for ${bold(name)}`); return 0; }
+      const browser = !rest.includes("--no-browser");
+      const t = await oauthLogin(e.config.url, { store: oauthStore(), config: e.config.oauth, open: async (u) => { console.log(`Sign in to ${bold(name)}: ${cyan(u)}`); if (browser) await openUrl(u); else console.log(dim("(open it on this computer: the answer comes back to 127.0.0.1; over SSH, forward the port shown in the link)")); } });
+      console.log(`${green("✓")} signed in to ${bold(name)}${t.scope ? dim(` (${t.scope})`) : ""}`); return 0;
+    }
     if (cmd === "check" || cmd === "approve") {
       const { entries } = mcpEntries(cwd, { trusted: trusted() }), pick = entries.filter((e) => (rest[0] ? e.name === rest[0] : true) && !e.disabled);
       if (!pick.length) { console.error(rest[0] ? `no server "${rest[0]}" (amness mcp list)` : "no MCP servers"); return 1; }

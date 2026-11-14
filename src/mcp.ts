@@ -22,9 +22,13 @@ export type McpServerConfig = {
   timeout?: number;
   disabled?: boolean;
   /** OAuth settings for servers that need sign-in (see `amness mcp login`) */
-  oauth?: { clientId?: string; scopes?: string; callbackPort?: number; authServerMetadataUrl?: string };
+  oauth?: { clientId?: string; clientSecret?: string; scopes?: string; callbackPort?: number; authServerMetadataUrl?: string };
 };
 export type McpEra = "modern" | "legacy" | "sse";
+/** A question a server asks during a call: a form (fields described by a flat JSON schema) or a page to open (mode "url"). */
+export type McpElicitation = { server: string; mode: "form" | "url"; message: string; schema?: { type?: string; properties?: Record<string, any>; required?: string[] }; url?: string };
+export type McpPrompt = { name: string; title?: string; description?: string; arguments?: { name: string; description?: string; required?: boolean }[] };
+export type McpResource = { uri: string; name?: string; title?: string; description?: string; mimeType?: string };
 export type McpConnectOptions = {
   prefix?: string; risky?: (t: any) => boolean; deferAbove?: number; timeoutMs?: number; probeMs?: number;
   /** extra environment for a stdio server (merged over the config's env) */
@@ -37,6 +41,11 @@ export type McpConnectOptions = {
   warn?: (msg: string) => void;
   /** a server said its tool list changed (legacy notification); the hub reloads */
   onListChanged?: () => void;
+  /**
+   * Answer a server's question (elicitation: a form, or a URL to open). Without it, Amness says it cannot ask a person (decline).
+   * Returns the MCP result: { action: "accept", content? } | { action: "decline" } | { action: "cancel" }.
+   */
+  elicit?: (r: McpElicitation) => Promise<{ action: "accept" | "decline" | "cancel"; content?: Record<string, unknown> }>;
   /** results longer than this go to a file under <cwd>/.amness/mcp-output and the model gets the start and the path (default 40 000 characters) */
   maxResultChars?: number;
 };
@@ -48,6 +57,10 @@ export type McpHandle = {
   /** the raw tool definitions as listed (for description pinning) */
   listed: any[];
   rpc: (method: string, params?: Record<string, unknown>) => Promise<any>;
+  /** the server's prompts (shown as /mcp__<server>__<prompt>) and resources (read with read_mcp_resource) */
+  prompts: McpPrompt[]; resources: McpResource[];
+  getPrompt: (name: string, args: Record<string, string>) => Promise<string>;
+  readResource: (uri: string) => Promise<string>;
 };
 
 export class McpError extends Error {
@@ -62,12 +75,19 @@ export class McpError extends Error {
 type Rpc = (method: string, params?: Record<string, unknown>, ms?: number) => Promise<any>;
 type Transport = { rpc: Rpc; notify: (method: string, params?: Record<string, unknown>) => Promise<void>; close: () => void; kind: "stdio" | "http" | "sse"; setEra: (e: McpEra, version?: string) => void };
 
-const meta = () => ({ "io.modelcontextprotocol/protocolVersion": MCP_MODERN, "io.modelcontextprotocol/clientInfo": CLIENT, "io.modelcontextprotocol/clientCapabilities": {} });
+const caps = (o?: McpConnectOptions) => (o?.elicit ? { elicitation: { form: {}, url: {} }, roots: {} } : { roots: {} });
+const meta = (o?: McpConnectOptions) => ({ "io.modelcontextprotocol/protocolVersion": MCP_MODERN, "io.modelcontextprotocol/clientInfo": CLIENT, "io.modelcontextprotocol/clientCapabilities": caps(o) });
 
-/** Answers to the few requests a legacy server may send us. Elicitation and sampling are refused for now (MRTR-era servers ask through results instead). */
-function serverRequest(method: string, cwd: string | undefined): { result?: unknown; error?: { code: number; message: string } } {
+const rootsOf = (cwd: string | undefined) => ({ roots: cwd ? [{ uri: "file://" + cwd.replace(/\\/g, "/").replace(/^(?=[A-Za-z]:)/, "/"), name: "project" }] : [] });
+/** One question from a server (a legacy request, or an MRTR input request): roots, elicitation; sampling is not offered (deprecated in 2026-07-28). */
+async function answerServer(method: string, params: any, o: McpConnectOptions, server: string): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
   if (method === "ping") return { result: {} };
-  if (method === "roots/list") return { result: { roots: cwd ? [{ uri: "file://" + cwd.replace(/\\/g, "/").replace(/^(?=[A-Za-z]:)/, "/"), name: "project" }] : [] } };
+  if (method === "roots/list") return { result: rootsOf(o.cwd) };
+  if (method === "elicitation/create") {
+    if (!o.elicit) return { result: { action: "decline" } };
+    const mode = params?.mode === "url" ? "url" : "form";
+    try { return { result: await o.elicit({ server, mode, message: String(params?.message ?? ""), schema: params?.requestedSchema, url: params?.url }) }; } catch { return { result: { action: "cancel" } }; }
+  }
   return { error: { code: -32601, message: `Amness does not support ${method}` } };
 }
 
@@ -94,7 +114,7 @@ function stdioTransport(cfg: McpServerConfig, o: McpConnectOptions): Transport {
       const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
       if (!line) continue;
       let m: any; try { m = JSON.parse(line); } catch { continue; }                                         // not JSON-RPC: a stray log line
-      if (m.method && m.id !== undefined) { const r = serverRequest(m.method, o.cwd); child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, ...r }) + "\n"); continue; }
+      if (m.method && m.id !== undefined) { void answerServer(m.method, m.params, o, o.prefix ?? "server").then((r) => child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, ...r }) + "\n")); continue; }
       if (m.method) { if (/list_changed$/.test(m.method)) o.onListChanged?.(); continue; }
       const p = pending.get(m.id); if (!p) continue; pending.delete(m.id);
       m.error ? p.fail(new McpError(m.error.message, { code: m.error.code, data: m.error.data, rpc: true })) : p.ok(m.result);
@@ -218,7 +238,7 @@ function httpTransport(cfg: McpServerConfig, o: McpConnectOptions, name: string)
     kind: "http", headersFor,
     setEra: (e, v) => { era = e; if (v) version = v; },
     rpc: async (method, params, ms = o.timeoutMs ?? 600_000) => {
-      const n = ++id, p = era === "modern" ? { ...params, _meta: { ...meta(), ...(params?._meta as object) } } : params;
+      const n = ++id, p = era === "modern" ? { ...params, _meta: { ...meta(o), ...(params?._meta as object) } } : params;
       const extra: Record<string, string> = {};
       if (era === "modern") {
         extra["mcp-method"] = method;
@@ -255,7 +275,7 @@ async function sseTransport(cfg: McpServerConfig, o: McpConnectOptions, name: st
       for await (const ev of sseEvents(r.body!)) {
         if (ev.event === "endpoint") { endpoint = new URL(ev.data.trim(), cfg.url).href; ready(endpoint); continue; }
         let m: any; try { m = JSON.parse(ev.data); } catch { continue; }
-        if (m.method && m.id !== undefined) { const a = serverRequest(m.method, o.cwd); void fetch(endpoint!, { method: "POST", headers: { "content-type": "application/json", ...(await headers()) }, body: JSON.stringify({ jsonrpc: "2.0", id: m.id, ...a }) }).then((x) => x.body?.cancel(), () => {}); continue; }
+        if (m.method && m.id !== undefined) { const a = await answerServer(m.method, m.params, o, name); void fetch(endpoint!, { method: "POST", headers: { "content-type": "application/json", ...(await headers()) }, body: JSON.stringify({ jsonrpc: "2.0", id: m.id, ...a }) }).then((x) => x.body?.cancel(), () => {}); continue; }
         if (m.method) { if (/list_changed$/.test(m.method)) o.onListChanged?.(); continue; }
         const p = pending.get(m.id); if (!p) continue; pending.delete(m.id);
         m.error ? p.fail(new McpError(m.error.message, { code: m.error.code, data: m.error.data, rpc: true })) : p.ok(m.result);
@@ -297,7 +317,7 @@ export async function connectMcp(cfg: McpServerConfig, o: McpConnectOptions & { 
   let era: McpEra = t.kind === "sse" ? "sse" : "modern"; const server: McpServerInfo = {};
   const legacyInit = async () => {
     t.setEra("legacy", MCP_LEGACY);
-    const r = await t.rpc("initialize", { protocolVersion: MCP_LEGACY, capabilities: { roots: {} }, clientInfo: CLIENT }, o.probeMs ? Math.max(o.probeMs, 15_000) : 30_000);
+    const r = await t.rpc("initialize", { protocolVersion: MCP_LEGACY, capabilities: caps(o), clientInfo: CLIENT }, o.probeMs ? Math.max(o.probeMs, 15_000) : 30_000);
     Object.assign(server, { name: r?.serverInfo?.name, version: r?.serverInfo?.version, instructions: r?.instructions, capabilities: r?.capabilities });
     if (t.kind === "http" && r?.protocolVersion) t.setEra("legacy", r.protocolVersion);
     await t.notify("notifications/initialized");
@@ -306,7 +326,7 @@ export async function connectMcp(cfg: McpServerConfig, o: McpConnectOptions & { 
     if (era === "sse") { await legacyInit(); }
     else {
       try {
-        const d = await t.rpc("server/discover", { _meta: meta() }, o.probeMs ?? 10_000);
+        const d = await t.rpc("server/discover", { _meta: meta(o) }, o.probeMs ?? 10_000);
         Object.assign(server, { ...d?._meta?.["io.modelcontextprotocol/serverInfo"], instructions: d?.instructions, capabilities: d?.capabilities });
       } catch (e) {
         const err = e as McpError;
@@ -338,8 +358,44 @@ export async function connectMcp(cfg: McpServerConfig, o: McpConnectOptions & { 
     });
     const rpc = (m: string, p?: Record<string, unknown>) => t.rpc(m, p);
     const tools = usable.map((d): Tool => mcpTool(d, prefix, usable.length, o, rpc));
-    return { tools, close: () => t.close(), era, transport: t.kind, server, listed: usable, rpc };
+    const list = async <T>(method: string, key: string): Promise<T[]> => {
+      const out: T[] = [];
+      try { for (let cursor: string | undefined, pages = 0; pages < 20; pages++) { const r = await t.rpc(method, cursor ? { cursor } : {}, 15_000); out.push(...((r?.[key] ?? []) as T[])); cursor = r?.nextCursor; if (!cursor) break; } }
+      catch { /* not offered */ }
+      return out;
+    };
+    const cap = server.capabilities ?? {};
+    const prompts = cap.prompts || !server.capabilities ? await list<McpPrompt>("prompts/list", "prompts") : [];
+    const resources = cap.resources || !server.capabilities ? await list<McpResource>("resources/list", "resources") : [];
+    return { tools, close: () => t.close(), era, transport: t.kind, server, listed: usable, rpc, prompts, resources,
+      getPrompt: async (nm: string, args: Record<string, string>) => {
+        const r = await mcpCall(rpc, "prompts/get", { name: nm, arguments: args }, o, prefix);
+        return ((r?.messages ?? []) as any[]).map((m) => (m.content?.type === "text" ? m.content.text : m.content?.type === "resource" ? m.content.resource?.text ?? "" : "")).filter(Boolean).join("\n\n");
+      },
+      readResource: async (uri: string) => {
+        const r = await mcpCall(rpc, "resources/read", { uri }, o, prefix);
+        return spill(((r?.contents ?? []) as any[]).map((c) => c.text ?? (c.blob ? `[binary ${c.mimeType ?? ""}, ${Math.round((c.blob.length * 3) / 4 / 1024)} KB]` : "")).join("\n"), `${prefix}-resource`, o);
+      } };
   } catch (e) { t.close(); throw e; }
+}
+
+/**
+ * A request that may come back as "input required" (MRTR, 2026-07-28): answer each input request (roots, elicitation) and retry with
+ * inputResponses and requestState, a few rounds at most. Earlier servers never do this, so the first answer is the result.
+ */
+export async function mcpCall(rpc: (m: string, p?: Record<string, unknown>) => Promise<any>, method: string, params: Record<string, unknown>, o: McpConnectOptions, server: string): Promise<any> {
+  let r = await rpc(method, params);
+  for (let round = 0; r?.resultType === "input_required" && round < 5; round++) {
+    const responses: Record<string, unknown> = {};
+    for (const [key, req] of Object.entries((r.inputRequests ?? {}) as Record<string, { method: string; params?: any }>)) {
+      const a = await answerServer(req.method, req.params, o, server);
+      if (a.error) throw new Error(`MCP ${server}: the server needs ${req.method}, which Amness does not support`);
+      responses[key] = a.result;
+    }
+    r = await rpc(method, { ...params, inputResponses: responses, ...(r.requestState !== undefined && { requestState: r.requestState }) });
+  }
+  if (r?.resultType === "input_required") throw new Error(`MCP ${server}: the server kept asking for more input`);
+  return r;
 }
 
 /** One listed MCP tool as an Amness tool. */
@@ -351,8 +407,7 @@ function mcpTool(t: any, prefix: string, count: number, o: McpConnectOptions, rp
     schema: t.inputSchema ?? { type: "object" }, risky: risky ? () => `MCP tool ${t.name} may change external state` : false,
     deferred: count > (o.deferAbove ?? 15), untrusted: true,
     run: async (args) => {
-      const r = await rpc("tools/call", { name: t.name, arguments: args });
-      if (r?.resultType === "input_required") throw new Error(`MCP ${t.name}: the server asked for more input (elicitation or sampling), which Amness does not support yet`);
+      const r = await mcpCall(rpc, "tools/call", { name: t.name, arguments: args }, o, prefix);
       return spill(mcpResultText(r), `${prefix}-${t.name}`, o);
     },
   };
@@ -475,13 +530,26 @@ export class McpHub {
     s.changed = []; this.o.onChange?.();
   }
   private async reload(name: string) { const s = this.servers.get(name); if (s?.status === "connected") await this.connect(s.entry); }
-  /** The usable tools: of connected servers, without the ones held back for approval. */
+  /** The usable tools: of connected servers, without the ones held back for approval; plus list_mcp_resources and read_mcp_resource when a server has resources. */
   tools(): Tool[] {
-    return [...this.servers.values()].flatMap((s) => {
+    const withRes = [...this.servers.values()].filter((s) => s.status === "connected" && s.handle!.resources.length);
+    const res: Tool[] = withRes.length ? [
+      { name: "list_mcp_resources", description: "List the resources (documents, records, files) that connected MCP servers offer. Read one with read_mcp_resource.", untrusted: true, risky: false,
+        schema: { type: "object", properties: { server: { type: "string", description: "only this server" } } },
+        run: async (a: any) => withRes.filter((s) => !a?.server || s.entry.name === a.server).flatMap((s) => s.handle!.resources.slice(0, 200).map((r) => `${s.entry.name}  ${r.uri}${r.name || r.title ? `  ${r.title ?? r.name}` : ""}${r.description ? ` — ${String(r.description).slice(0, 120)}` : ""}`)).join("\n") || "no resources" },
+      { name: "read_mcp_resource", description: "Read one resource of an MCP server by its URI (see list_mcp_resources).", untrusted: true, risky: false,
+        schema: { type: "object", required: ["server", "uri"], properties: { server: { type: "string" }, uri: { type: "string" } } },
+        run: async (a: any) => { const s = withRes.find((x) => x.entry.name === a?.server); if (!s) throw new Error(`no connected server "${a?.server}" with resources (${withRes.map((x) => x.entry.name).join(", ")})`); return s.handle!.readResource(String(a.uri)); } },
+    ] : [];
+    return [...res, ...[...this.servers.values()].flatMap((s) => {
       if (s.status !== "connected") return [];
       const held = new Set((s.changed ?? []).map((c) => c.tool)); if (!held.size) return s.handle!.tools;
       return s.handle!.tools.filter((t, i) => !held.has(s.handle!.listed[i]?.name));
-    });
+    })];
+  }
+  /** Every connected server's prompts. */
+  prompts(): { server: string; prompt: McpPrompt; run: (args: Record<string, string>) => Promise<string> }[] {
+    return [...this.servers.values()].flatMap((s) => (s.status === "connected" ? s.handle!.prompts.map((p) => ({ server: s.entry.name, prompt: p, run: (a: Record<string, string>) => s.handle!.getPrompt(p.name, a) })) : []));
   }
   handle(name: string): McpHandle | undefined { return this.servers.get(name)?.handle; }
   rows(): McpRow[] {

@@ -25,6 +25,7 @@ In the chat, `/mcp add <name> <url or command>` does the same. `/mcp` shows ever
 | `amness mcp enable <name>`, `disable <name>` | Switches one on or off for this project only. |
 | `amness mcp check [name]` | Connects, says how long it took, and looks for hidden instructions in the tool descriptions. |
 | `amness mcp approve <name>` | Accepts tools that changed since you approved the server. |
+| `amness mcp login <name>`, `logout <name>` | Signs in to a remote server in your browser (OAuth), or forgets the sign-in. `--no-browser` only prints the link. |
 
 Options for `add`: `--scope local|project|user` (see below), `-e KEY=value` (stdio), `-H "Name: value"` (HTTP), `--headers-helper <command>`, `--timeout <ms>`.
 
@@ -38,6 +39,7 @@ In the chat:
 | `/mcp reconnect [name]` | Connects again (after the server restarted, or after you signed in). |
 | `/mcp tools <name>` | The server's tools, which ones ask before they run, which are held back, and warnings about their descriptions. |
 | `/mcp approve <name>` | Accepts tools that changed since you approved the server. |
+| `/mcp login <name>`, `/mcp logout <name>` | Signs in to a remote server, or forgets the sign-in. |
 | `/mcp <command…>` or `/mcp <url>` | Attaches a server for this session only. `/mcp off` detaches those. |
 
 ## Where servers are saved
@@ -66,6 +68,22 @@ The files use the `mcpServers` format of Claude Code and Claude Desktop:
 - `headersHelper` is a command that prints a JSON object of headers, for example a token from your password manager. It runs when the server connects, and again after a 401 or 403 answer.
 - `timeout` is the limit for one call, in milliseconds (the default is 10 minutes).
 - `"disabled": true` keeps the entry but does not start it.
+
+## Sign in to a remote server
+
+Many remote servers need you to sign in (GitHub, Linear, Notion and others). When a server answers "401", `/mcp` shows it as needing sign-in. Run `amness mcp login <name>` or `/mcp login <name>`. Your browser opens the server's sign-in page. When you are done, Amness connects.
+
+- Amness follows the MCP sign-in rules (OAuth 2.1). It finds the server's sign-in service from the server itself, registers itself there if it can, and uses PKCE. It names the server the token is for (`resource`). It checks that the answer comes from the same sign-in service (`iss`) before it uses it.
+- The answer comes back to a short-lived local address (`http://127.0.0.1:<port>/callback`). Over SSH, use `amness mcp login <name> --no-browser`, forward the port shown in the link, and open the link on your own computer.
+- Tokens are saved in your system's key store (macOS Keychain, Windows DPAPI, the Linux keyring), else in `~/.amness/mcp-auth.json`, which only you can read. In a container they are kept in memory only. Amness renews a token before it runs out.
+- Some sign-in services need a client id that you register yourself: `amness mcp add <name> <url> --client-id <id> [--client-secret <secret>] [--callback-port <n>] [--scopes "a b"]`. In a shared `.mcp.json`, write the secret as `${VAR}`.
+- Not supported yet: Client ID Metadata Documents (they need a public web address for Amness). Amness uses dynamic registration or your client id instead.
+
+## Prompts, resources and questions
+
+- **Prompts.** A server's prompts become commands: `/mcp__<server>__<prompt> [arguments]`. They are listed in the `/` menu and the desktop command palette. Amness asks for any required argument you did not give. The prompt's text is sent as your message.
+- **Resources.** When a server offers resources (documents, records, files), the model gets two tools: `list_mcp_resources` and `read_mcp_resource`.
+- **Questions from a server.** During a call, a server can ask you something: a short form, or a page to open (for example to confirm a payment or to sign in to another service). The terminal and the desktop app show the question in their own dialog, and your answer goes to that server only. In `amness run` and in editors, nobody can answer, so Amness declines. Amness supports both ways of asking: the 2026-07-28 way (the answer comes with a repeat of the request) and the older way (a request from the server).
 
 ## Safety
 
