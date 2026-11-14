@@ -238,9 +238,10 @@ export class App {
   }
   note(text: string, ms = 3000) {
     if (this.remote) { this.remote.toast("info", text); return; }
-    if (this.full && ms <= 5000) { this.full.toast(text, "info", ms); this.render(); setTimeout(() => this.render(), ms + 40); return; }
+    if (this.full && ms <= 5000) { this.full.toast(text, "info", ms); this.render(); setTimeout(() => this.render(), ms + 40).unref(); return; }
     this.notice = text; this.noticeUntil = Date.now() + ms; this.render();
-    setTimeout(() => { if (Date.now() >= this.noticeUntil) this.render(); }, ms + 30);               // redraw when it expires so the footer returns to normal
+    // Redraw when it expires so the footer returns to normal; unref: a redraw must not keep the process alive.
+    setTimeout(() => { if (Date.now() >= this.noticeUntil) this.render(); }, ms + 30).unref();
   }
 
   render = () => {
