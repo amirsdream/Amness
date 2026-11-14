@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Message, Model } from "../src/index.ts";
 import { startDesktopServer } from "../cli/desktop/server.ts";
-import { electronBinary } from "../cli/desktop.ts";
+import { electronBinary, passElectronErrors } from "../cli/desktop.ts";
 import { call, say, sleep } from "./helpers/apprig.ts";
 
 /** A desktop server over a temp project with a scripted model, plus a reader for its event stream. */
@@ -303,4 +303,15 @@ test("desktop: configured MCP servers connect for the chat; /mcp lists them in t
     const lines = () => d.events.filter((e) => e.type === "block" && e.block.kind === "raw").flatMap((e) => e.block.lines as string[]).map((l) => l.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
     assert.ok(await d.until(() => /mine\s+only you, this project · stdio legacy · 2 tools/.test(lines()), 8000), lines());
   } finally { await d.close(); }
+});
+
+test("Electron's macOS sandbox start-up line is dropped; its other errors still reach the terminal", async () => {
+  const { spawn } = await import("node:child_process");
+  const { PassThrough } = await import("node:stream");
+  const script = `process.stderr.write("sandbox_extension_issue_file failed for /opt/x/Electron Helper.app/Contents/Resources: 1 (Operation not permitted)\\nreal error\\nlast")`;
+  const child = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "ignore", "pipe"] });
+  const out = new PassThrough(); let got = ""; out.on("data", (d) => { got += d; });
+  passElectronErrors(child, out);
+  await new Promise((r) => child.on("close", r));
+  assert.equal(got, "real error\nlast\n");
 });

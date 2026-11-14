@@ -32,6 +32,21 @@ export function electronBinary(): string | undefined {
   try { const p = createRequire(import.meta.url)("electron"); return typeof p === "string" && existsSync(p) ? p : undefined; } catch { return undefined; }
 }
 
+/** Lines Chromium inside Electron prints on every start that mean nothing to a user (the macOS sandbox cannot extend into
+ *  the Electron helper's folder when it is installed under Homebrew's lib folder; the window works anyway). */
+const ELECTRON_NOISE = [/sandbox_extension_issue_file failed for /];
+
+/** Electron's error output, line by line, without its known start-up noise; everything else still reaches the terminal. */
+export function passElectronErrors(child: ChildProcess, out: NodeJS.WritableStream = process.stderr): void {
+  let rest = "";
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (d: string) => {
+    const lines = (rest + d).split("\n"); rest = lines.pop() ?? "";
+    for (const l of lines) if (!ELECTRON_NOISE.some((r) => r.test(l))) out.write(l + "\n");
+  });
+  child.stderr?.on("end", () => { if (rest && !ELECTRON_NOISE.some((r) => r.test(rest))) out.write(rest + "\n"); });
+}
+
 /** A Chromium-based browser that can open a page as its own app window (no tabs, no address bar). */
 function chromeApp(): string | undefined {
   const c = process.platform === "darwin" ? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser", "/Applications/Chromium.app/Contents/MacOS/Chromium"]
@@ -62,7 +77,8 @@ export async function runDesktop(argv: string[]): Promise<number> {
     const main = fileURLToPath(new URL("./desktop/electron-main.cjs", import.meta.url));
     const env: NodeJS.ProcessEnv = { ...process.env, AMNESS_DESKTOP_WAIT: "1" };
     delete env.ELECTRON_RUN_AS_NODE; delete env.AMNESS_DESKTOP_URL;                         // ELECTRON_RUN_AS_NODE (set by some editors) would make Electron plain Node
-    child = spawn(bin, [main], { stdio: ["pipe", "ignore", "inherit"], env });
+    child = spawn(bin, [main], { stdio: ["pipe", "ignore", "pipe"], env });
+    passElectronErrors(child);
     child.on("error", (e) => { console.error(`amness-desktop: Electron did not start (${e.message}); opening it another way`); child = undefined; if (srv) void fallback(); });
     child.on("exit", () => void stop(0));
     child.stdin?.on("error", () => { /* the window closed first */ });
@@ -106,7 +122,8 @@ async function connect(address: string, tokenArg?: string): Promise<number> {
   if (bin) {
     const main = fileURLToPath(new URL("./desktop/electron-main.cjs", import.meta.url)), env: NodeJS.ProcessEnv = { ...process.env, AMNESS_DESKTOP_WAIT: "1", AMNESS_DESKTOP_REMOTE: "1" };
     delete env.ELECTRON_RUN_AS_NODE; delete env.AMNESS_DESKTOP_URL;
-    const child = spawn(bin, [main], { stdio: ["pipe", "ignore", "inherit"], env });
+    const child = spawn(bin, [main], { stdio: ["pipe", "ignore", "pipe"], env });
+    passElectronErrors(child);
     child.stdin?.write(JSON.stringify({ url, title: `Amness · ${u.host}` }) + "\n");
     return await new Promise<number>((done) => { child.on("exit", () => done(0)); child.on("error", async () => { await openUrl(url); done(0); }); });
   }
