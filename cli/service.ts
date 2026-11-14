@@ -3,7 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
 import { home } from "./config.ts";
 import { serveToken } from "./serve.ts";
 import { bold, cyan, dim, green, red, yellow } from "./ui.ts";
@@ -32,9 +32,10 @@ export function servicePlan(args: string[], o: { platform?: NodeJS.Platform; nod
   const platform = o.platform ?? process.platform, node = o.node ?? stableNode(), script = resolve(o.script ?? process.argv[1]), cwd = o.cwd ?? process.cwd(), env = o.env ?? process.env;
   const argv = [node, "--no-warnings", script, "serve", ...args];
   const keep: Record<string, string> = { PATH: env.PATH ?? "/usr/bin:/bin", NO_COLOR: "1", ...(env.AMNESS_HOME && { AMNESS_HOME: env.AMNESS_HOME }), ...(env.HOME && { HOME: env.HOME }) };
-  const log = join(home(), "serve.out.log");
+  const pj = platform === "win32" ? win32.join : posix.join, hd = env.HOME ?? homedir();                                 // paths for the target system, wherever the plan is made
+  const log = pj(home(), "serve.out.log");
   if (platform === "darwin") {
-    const file = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+    const file = pj(hd, "Library", "LaunchAgents", `${LABEL}.plist`);
     const content = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -64,7 +65,7 @@ ${Object.entries(keep).map(([k, v]) => `    <key>${k}</key><string>${xml(v)}</st
     const cmd = argv.map(winq).join(" ");
     return { platform, run: [["schtasks", "/Create", "/F", "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", TASK, "/TR", `cmd /c cd /d ${winq(cwd)} && ${cmd} >> ${winq(log)} 2>&1`], ["schtasks", "/Run", "/TN", TASK]], note: "a logon task: it starts when you sign in" };
   }
-  const file = join(env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "systemd", "user", UNIT);
+  const file = pj(env.XDG_CONFIG_HOME ?? pj(hd, ".config"), "systemd", "user", UNIT);
   const content = `[Unit]
 Description=Amness serve (the Amness app and HTTP API)
 After=network-online.target

@@ -46,7 +46,7 @@ export function hostsFor(host: string, port: number, extra: string[] = []): Set<
 export async function startDesktopServer(o: { cfg: Config; cwd: string; version: string; port?: number; persist?: boolean; makeModel?: (c: Config) => Model; net?: NetOptions }): Promise<DesktopServer> {
   const net = o.net ?? {}, bindHost = net.host ?? "127.0.0.1", scheme = net.tls ? "https" : "http";
   const token = net.token ?? randomBytes(24).toString("base64url"), clients = new Set<ServerResponse>();
-  const send = (e: ServerEvent) => { const d = `data: ${JSON.stringify(e)}\n\n`; for (const c of clients) c.write(d); };
+  const send = (e: ServerEvent) => { const d = `data: ${JSON.stringify(e)}\n\n`; for (const c of clients) if (!c.writableEnded) c.write(d); };   // a closing app may still say something
   const bridge = new DesktopBridge({ cfg: o.cfg, cwd: o.cwd, version: o.version, emit: send, persist: o.persist, makeModel: o.makeModel });
   let port = 0, allowed = new Set<string>(); const fails = new Map<string, { n: number; at: number }>();
 
@@ -132,9 +132,9 @@ export async function startDesktopServer(o: { cfg: Config; cwd: string; version:
   await new Promise<void>((ok, fail) => { server.once("error", fail); server.listen(o.port ?? 0, bindHost, ok); });
   port = (server.address() as AddressInfo).port; allowed = hostsFor(bindHost, port, net.allowHosts);
   const shown = LOOPBACK.has(bindHost) ? ["127.0.0.1"] : [...new Set([...allowed].map((h) => h.replace(/:\d+$/, "")).filter((h) => !LOOPBACK.has(h) && !/^\[(fe80|::1)/i.test(h)))];
-  const ping = setInterval(() => { for (const c of clients) c.write(": ping\n\n"); }, 20_000);
+  const ping = setInterval(() => { for (const c of clients) if (!c.writableEnded) c.write(": ping\n\n"); }, 20_000);
   return {
     url: `${scheme}://127.0.0.1:${port}/#t=${token}`, token, bridge, port, urls: shown.map((h) => `${scheme}://${h}:${port}/`),
-    close: () => new Promise<void>((ok) => { clearInterval(ping); for (const c of clients) c.end(); bridge.close(); server.close(() => ok()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((ok) => { clearInterval(ping); for (const c of clients) c.end(); clients.clear(); bridge.close(); server.close(() => ok()); server.closeAllConnections?.(); }),
   };
 }
