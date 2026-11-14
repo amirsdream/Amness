@@ -711,6 +711,7 @@ export class App {
     this.ensureTimer(); this.notifyAway("Amness needs your approval", `${title}: ${question}`);
     const idx = await new Promise<number | undefined>((res) => { this.overlay = new ChoiceOverlay(title, body, question, options, res, paint, detail); this.render(); });
     this.overlay = null; this.render();
+    if (idx === undefined && name === "exit_plan_mode") { this.interrupt(); return "the user stopped here: they did not approve the plan and want no more steps now"; }   // closing the plan question means stop, not "keep planning" (that is option 4)
     if (idx === undefined) return "the user declined this action; take a different approach or ask what they want";
     const last = idx === options.length - 1;
     if (last) { const note = await this.askText("What should Amness do instead?"); return note || "the user declined this action"; }

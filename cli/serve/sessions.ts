@@ -8,6 +8,7 @@ import { resolveConfig } from "../roles.ts";
 import { App } from "../tui/app.ts";
 import type { Block } from "../tui/blocks.ts";
 import { strip } from "../ui.ts";
+import { estimateCost } from "../tui/pricing.ts";
 import { answerOverlay, dialogView, nullIo, type DialogView } from "../desktop/bridge.ts";
 import type { Model } from "../../src/index.ts";
 
@@ -18,7 +19,8 @@ export const MODES: Mode[] = ["default", "acceptEdits", "plan", "yolo"];
 export type SessionView = {
   id: string; title: string; cwd: string; project: string; provider: string; model: string; mode: Mode; ready: boolean;
   status: "idle" | "running" | "waiting"; turns: number; queued: number; createdAt: number;
-  usage: { tokens: number; cost?: number };
+  /** prompt tokens sent (each request re-sends the conversation, so this adds up fast), how many of them came from the provider's cache, tokens received, and the estimated cost in dollars */
+  usage: { tokens: number; prompt: number; cached: number; completion: number; requests: number; cost?: number };
   /** the approval or question the session waits for (answer it with POST …/dialog) */
   dialog?: DialogView; lastAnswer?: string;
 };
@@ -85,7 +87,7 @@ export class ApiSessions {
     return {
       id, title: a.session.title, cwd: a.cwd, project: basename(a.cwd), provider: a.cfg.provider, model: a.cfg.model, mode: a.mode as Mode, ready: ready(a.cfg),
       status: this.statusOf(a), turns: a.session.turns.length, queued: a.queued.length, createdAt: l.createdAt,
-      usage: { tokens: a.budget?.tokens ?? 0 }, ...(l.dialog && { dialog: l.dialog }), ...(l.lastAnswer !== undefined && { lastAnswer: l.lastAnswer }),
+      usage: (() => { const u = a.session.usage, c = estimateCost(a.cfg.model, u.prompt, u.completion, u.cached ?? 0); return { tokens: a.budget?.tokens ?? 0, prompt: u.prompt, cached: u.cached ?? 0, completion: u.completion, requests: u.calls, ...(c != null && { cost: Math.round(c * 10000) / 10000 }) }; })(), ...(l.dialog && { dialog: l.dialog }), ...(l.lastAnswer !== undefined && { lastAnswer: l.lastAnswer }),
     };
   }
   /** Open sessions, plus (with `saved`) the conversations saved in a folder. */

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.1 (2026-11-14)
+
+Fixes from a review of the new MCP code (found by Amness itself, through its own API):
+
+- **Fixed: an MCP tool with no annotations ran without asking.** Only a tool marked read-only runs without approval now, as the MCP specification's defaults say.
+- **Fixed: a remote MCP server that started a streamed answer and then stalled could block forever** (and block starting the other servers). The time limit now covers the whole answer.
+- **A timed-out MCP call now tells the server to stop** (`notifications/cancelled` on stdio and older servers; closing the request on 2026-07-28 HTTP), so a destructive tool does not finish unseen.
+- **A 2026-07-28 server's own errors (missing capability, header mismatch) are reported** instead of being hidden by a fallback to the old handshake.
+- **MCP tool names that clash after cleanup** (`a.b` and `a_b`, or two long names) get a numbered suffix and a warning instead of one silently replacing the other; the same name from two servers is kept once, with a warning.
+- **Closing the plan question (Esc, or `null` in the API) stops the turn** instead of letting the agent plan on.
+- **The API's session `usage` shows `prompt`, `cached`, `completion`, `requests` and an estimated `cost`**, so a large token count can be read correctly (most of it is usually cached).
+
 ## 0.10.0 (2026-11-14)
 
 - **Amness as an MCP server, so Claude Code, Codex and other agents can hand it tasks.** `amness mcp serve` (stdio; `claude mcp add amness -- amness mcp serve`) and `/mcp` on `amness serve` (Streamable HTTP, same token, same sessions as the app and the API). Tools work on session handles: `amness_run`, `amness_status`, `amness_reply`, `amness_answer`, `amness_sessions`, `amness_close`; calls wait up to 50 s and then return the id to poll. Approvals go to the caller's user when the caller supports elicitation (both protocol generations), else to the calling agent as numbered options. Tested against the official MCP TypeScript SDK in both directions.

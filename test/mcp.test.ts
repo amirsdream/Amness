@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -191,4 +191,42 @@ test("OAuth 2.1 sign-in: discovery, registration, PKCE S256, resource, iss check
   const bad = await fakeOAuth({ badIss: true });
   try { await assert.rejects(oauthLogin(bad.url, { store, open: browser }), /another issuer \(iss\)/); assert.equal(bad.seen.tokenForms.length, 0, "the code is never redeemed after a wrong iss"); }
   finally { await bad.close(); }
+});
+
+test("review fixes: unannotated tools ask first; clashing names get suffixes; timeouts cancel the work and cover a stalled HTTP stream; modern-only errors do not fall back", async () => {
+  const { createServer } = await import("node:http");
+  const warns: string[] = [];
+  const h = await connectMcp({ command: "node", args: ["test/fake-mcp.mjs"], env: { PLAIN: "1", DUP: "1" } }, { name: "f", warn: (m) => warns.push(m) });
+  try {
+    assert.ok(h.tools.find((t) => t.name === "f__plain")!.risky, "no annotations: the spec's defaults (not read-only, destructive) apply, so it asks");
+    assert.ok(!h.tools.find((t) => t.name === "f__echo")!.risky, "readOnlyHint: runs without asking");
+    assert.ok(h.tools.some((t) => t.name === "f__x_y") && h.tools.some((t) => t.name === "f__x_y_2"), h.tools.map((t) => t.name).join());
+    assert.match(warns.join("\n"), /"x_y" would have the same name/);
+  } finally { h.close(); }
+  const log = join(tmp(), "cancelled.log");
+  const g = await connectMcp({ command: "node", args: ["test/fake-mcp.mjs"], env: { HANG: "1", CANCEL_LOG: log } }, { name: "g", timeoutMs: 400 });
+  try {
+    await assert.rejects(Promise.resolve(g.tools.find((t) => t.name === "g__echo")!.run({ text: "x" }, {} as any)), /timed out/);
+    for (let i = 0; i < 50 && !existsSync(log); i++) await new Promise((r) => setTimeout(r, 20));
+    assert.match(readFileSync(log, "utf8"), /"requestId":\d+.*"reason":"timed out"/);                // the server is told to stop
+  } finally { g.close(); }
+  let initialized = false;
+  const srv = createServer((req, res) => {
+    let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
+      const m = JSON.parse(b); if (m.method === "initialize") initialized = true;
+      if (req.headers["x-mode"] === "picky" || m.method === "initialize") { res.writeHead(400, { "content-type": "application/json" }); return res.end(JSON.stringify({ jsonrpc: "2.0", id: m.id, error: { code: -32021, message: "Missing required client capability: elicitation" } })); }
+      if (m.method === "tools/call") { res.writeHead(200, { "content-type": "text/event-stream" }); res.write(": started\n\n"); return; }   // then nothing: a stalled stream
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: m.method === "server/discover" ? { resultType: "complete", supportedVersions: ["2026-07-28"], capabilities: { tools: {} } } : { resultType: "complete", tools: [{ name: "slow", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }] } }));
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(srv.address() as any).port}/mcp`;
+  try {
+    const s = await connectMcp({ type: "http", url }, { name: "s", timeoutMs: 400 });
+    const t0 = Date.now(); await assert.rejects(Promise.resolve(s.tools[0].run({}, {} as any)), /timed out/); assert.ok(Date.now() - t0 < 3000, "the limit covers the streamed body");
+    s.close();
+    await assert.rejects(connectMcp({ type: "http", url, headers: { "x-mode": "picky" } }, { name: "p" }), /client capability/);
+    assert.equal(initialized, false, "a modern-only error is reported, not hidden by a fallback to initialize");
+  } finally { srv.closeAllConnections(); srv.close(); }
 });

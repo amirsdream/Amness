@@ -132,7 +132,10 @@ function stdioTransport(cfg: McpServerConfig, o: McpConnectOptions): Transport {
     rpc: (method, params, ms = o.timeoutMs ?? 600_000) => new Promise<any>((ok, fail) => {
       if (gone) return fail(new McpError(gone));
       const n = ++id;
-      const timer = setTimeout(() => { pending.delete(n); fail(new McpError(`MCP ${method} timed out after ${Math.round(ms / 1000)}s`)); }, ms); timer.unref?.();
+      const timer = setTimeout(() => {
+        pending.delete(n); fail(new McpError(`MCP ${method} timed out after ${Math.round(ms / 1000)}s`));
+        try { child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: n, reason: "timed out" } }) + "\n"); } catch { /* gone */ }   // the server should stop the work, not finish it unseen
+      }, ms); timer.unref?.();
       pending.set(n, { ok: (v) => (clearTimeout(timer), ok(v)), fail: (e) => (clearTimeout(timer), fail(e)) });
       const p = era === "modern" ? { ...params, _meta: { ...meta(), ...(params?._meta as object) } } : params;     // a modern server needs the per-request fields on every request
       child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id: n, method, params: p }) + "\n");
@@ -206,16 +209,25 @@ function httpTransport(cfg: McpServerConfig, o: McpConnectOptions, name: string)
     if (!Object.keys(h).some((k) => k.toLowerCase() === "authorization")) { const t = await o.token?.(); if (t) h.authorization = `Bearer ${t}`; }
     return h;
   };
-  const post = async (body: any, extra: Record<string, string>, ms: number, retry = false): Promise<Response> => {
-    const ac = new AbortController(); acs.add(ac); const timer = setTimeout(() => ac.abort(new McpError(`MCP ${body.method} timed out after ${Math.round(ms / 1000)}s`)), ms); timer.unref?.();
+  const post = async (body: any, extra: Record<string, string>, signal: AbortSignal, retry = false): Promise<Response> => {
     try {
       const headers = { ...(await baseHeaders(retry)), ...extra };
       if (era !== "sse") headers["mcp-protocol-version"] = version;
       if (session) headers["mcp-session-id"] = session;
-      const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: ac.signal });
-      if ((r.status === 401 || r.status === 403) && !retry && cfg.headersHelper) { await r.body?.cancel(); return post(body, extra, ms, true); }
+      const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal });
+      if ((r.status === 401 || r.status === 403) && !retry && cfg.headersHelper) { await r.body?.cancel(); return post(body, extra, signal, true); }
       return r;
-    } catch (e) { throw ac.signal.aborted && ac.signal.reason instanceof McpError ? ac.signal.reason : new McpError(`MCP server ${url} unreachable: ${(e as Error).message}`); }
+    } catch (e) { throw signal.aborted && signal.reason instanceof McpError ? signal.reason : new McpError(`MCP server ${url} unreachable: ${(e as Error).message}`); }
+  };
+  /** One request with its time limit over the whole exchange, the streamed body included. On timeout the request is closed (the 2026-07-28 way to cancel); an initialize-era server also gets notifications/cancelled. */
+  const exchange = async <T>(body: any, extra: Record<string, string>, ms: number, then: (r: Response) => Promise<T>): Promise<T> => {
+    const ac = new AbortController(); acs.add(ac);
+    const timer = setTimeout(() => {
+      ac.abort(new McpError(`MCP ${body.method} timed out after ${Math.round(ms / 1000)}s`));
+      if (era !== "modern" && body.id !== undefined) void post({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: body.id, reason: "timed out" } }, {}, AbortSignal.timeout(10_000)).then((r) => r.body?.cancel(), () => {});
+    }, ms); timer.unref?.();
+    try { return await then(await post(body, extra, ac.signal)); }
+    catch (e) { throw ac.signal.aborted && ac.signal.reason instanceof McpError ? ac.signal.reason : e; }
     finally { clearTimeout(timer); acs.delete(ac); }
   };
   const readReply = async (r: Response, n: number, method: string): Promise<any> => {
@@ -248,11 +260,12 @@ function httpTransport(cfg: McpServerConfig, o: McpConnectOptions, name: string)
           if (v !== undefined && v !== null) extra[`mcp-param-${h.name}`] = headerValue(typeof v === "boolean" ? String(v) : String(v));
         }
       }
-      const r = await post({ jsonrpc: "2.0", id: n, method, ...(p && { params: p }) }, extra, ms);
-      if (method === "initialize") session = r.headers.get("mcp-session-id") ?? undefined;
-      return readReply(r, n, method);
+      return exchange({ jsonrpc: "2.0", id: n, method, ...(p && { params: p }) }, extra, ms, (r) => {
+        if (method === "initialize") session = r.headers.get("mcp-session-id") ?? undefined;
+        return readReply(r, n, method);
+      });
     },
-    notify: async (method, params) => { const r = await post({ jsonrpc: "2.0", method, ...(params && { params }) }, era === "modern" ? { "mcp-method": method } : {}, 30_000); await r.body?.cancel(); },
+    notify: async (method, params) => { await exchange({ jsonrpc: "2.0", method, ...(params && { params }) }, era === "modern" ? { "mcp-method": method } : {}, 30_000, async (r) => { await r.body?.cancel(); }); },
     close: () => {
       for (const ac of acs) ac.abort(); acs.clear();
       if (session) void fetch(url, { method: "DELETE", headers: { "mcp-session-id": session, "mcp-protocol-version": version } }).then((r) => r.body?.cancel(), () => {});   // legacy servers end the session
@@ -288,7 +301,10 @@ async function sseTransport(cfg: McpServerConfig, o: McpConnectOptions, name: st
   return {
     kind: "sse", setEra: () => {},
     rpc: (method, params, ms = o.timeoutMs ?? 600_000) => new Promise<any>((ok, fail) => {
-      const n = ++id; const timer = setTimeout(() => { pending.delete(n); fail(new McpError(`MCP ${method} timed out after ${Math.round(ms / 1000)}s`)); }, ms); timer.unref?.();
+      const n = ++id; const timer = setTimeout(() => {
+        pending.delete(n); fail(new McpError(`MCP ${method} timed out after ${Math.round(ms / 1000)}s`));
+        void headers().then((h) => fetch(endpoint!, { method: "POST", headers: { "content-type": "application/json", ...h }, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: n, reason: "timed out" } }) })).then((x) => x.body?.cancel(), () => {});
+      }, ms); timer.unref?.();
       pending.set(n, { ok: (v) => (clearTimeout(timer), ok(v)), fail: (e) => (clearTimeout(timer), fail(e)) });
       void (async () => { try { const x = await fetch(endpoint!, { method: "POST", headers: { "content-type": "application/json", ...(await headers()) }, body: JSON.stringify({ jsonrpc: "2.0", id: n, method, ...(params && { params }) }) }); await x.body?.cancel(); if (!x.ok) { pending.delete(n); clearTimeout(timer); fail(new McpError(`MCP ${method}: HTTP ${x.status}`, { status: x.status })); } } catch (e) { pending.delete(n); clearTimeout(timer); fail(new McpError(`MCP ${method}: ${(e as Error).message}`)); } })();
     }),
@@ -332,6 +348,9 @@ export async function connectMcp(cfg: McpServerConfig, o: McpConnectOptions & { 
         const err = e as McpError;
         if (err.code === -32022) throw new McpError(`MCP server does not support protocol ${MCP_MODERN} (it supports ${JSON.stringify(err.data?.supported ?? [])})`, err);
         if (err.status === 401 || err.status === 403) throw err;
+        // Errors only a 2026-07-28 server gives: it speaks the modern protocol, so falling back to initialize would hide the real problem.
+        if (err.code === -32021) throw new McpError(`MCP server needs a client capability Amness does not offer: ${err.message}`, err);
+        if (err.code === -32020) throw new McpError(`MCP server refused the request headers: ${err.message}`, err);
         // Legacy: method not found, another error, a bare HTTP 400/404/405, or silence.
         era = "legacy";
         try { await legacyInit(); }
@@ -357,7 +376,7 @@ export async function connectMcp(cfg: McpServerConfig, o: McpConnectOptions & { 
       catch (e) { if (t.kind !== "http") return true; o.warn?.(`tool ${d.name} dropped: ${(e as Error).message}`); return false; }   // stdio may ignore x-mcp-header; HTTP clients MUST drop the tool
     });
     const rpc = (m: string, p?: Record<string, unknown>) => t.rpc(m, p);
-    const tools = usable.map((d): Tool => mcpTool(d, prefix, usable.length, o, rpc));
+    const tools = uniqueNames(usable.map((d): Tool => mcpTool(d, prefix, usable.length, o, rpc)), usable.map((d) => d.name), o.warn);
     const list = async <T>(method: string, key: string): Promise<T[]> => {
       const out: T[] = [];
       try { for (let cursor: string | undefined, pages = 0; pages < 20; pages++) { const r = await t.rpc(method, cursor ? { cursor } : {}, 15_000); out.push(...((r?.[key] ?? []) as T[])); cursor = r?.nextCursor; if (!cursor) break; } }
@@ -398,10 +417,25 @@ export async function mcpCall(rpc: (m: string, p?: Record<string, unknown>) => P
   return r;
 }
 
+/**
+ * Tool names are cleaned to [A-Za-z0-9_-] and cut to 64 characters, so "a.b" and "a_b" (or two long names) could become one name and one tool would
+ * silently replace the other. A clash gets a numbered suffix and a warning instead.
+ */
+function uniqueNames(tools: Tool[], original: string[], warn?: (m: string) => void): Tool[] {
+  const seen = new Set<string>();
+  return tools.map((t, i) => {
+    if (!seen.has(t.name)) { seen.add(t.name); return t; }
+    let k = 2, name = t.name; while (seen.has(name)) { const suf = `_${k++}`; name = t.name.slice(0, 64 - suf.length) + suf; }
+    warn?.(`tool "${original[i]}" would have the same name as another (${t.name}); it is called ${name}`);
+    seen.add(name); return { ...t, name };
+  });
+}
+
 /** One listed MCP tool as an Amness tool. */
 function mcpTool(t: any, prefix: string, count: number, o: McpConnectOptions, rpc: (m: string, p?: Record<string, unknown>) => Promise<any>): Tool {
   const a = t.annotations ?? {};
-  const risky = o.risky ? o.risky(t) : a.destructiveHint === true || (t.annotations && a.readOnlyHint !== true && a.destructiveHint !== false);
+  // Asks first unless the server says the tool only reads (readOnlyHint). Without annotations the spec's defaults apply (readOnlyHint false, destructiveHint true).
+  const risky = o.risky ? o.risky(t) : a.readOnlyHint !== true || a.destructiveHint === true;
   return {
     name: `${prefix}__${t.name}`.replace(/[^\w-]/g, "_").slice(0, 64), description: t.description ?? t.title ?? t.name,
     schema: t.inputSchema ?? { type: "object" }, risky: risky ? () => `MCP tool ${t.name} may change external state` : false,
@@ -416,7 +450,8 @@ function mcpTool(t: any, prefix: string, count: number, o: McpConnectOptions, rp
 let spilled = 0;
 /** A very long result would fill the context: keep the start, save the whole of it in the project, and say where (the model can read the rest with read_file). */
 function spill(text: string, label: string, o: McpConnectOptions): string {
-  const max = o.maxResultChars ?? 40_000; if (text.length <= max || !o.cwd) return text;
+  const max = o.maxResultChars ?? 40_000; if (text.length <= max) return text;
+  if (!o.cwd) return `${text.slice(0, max)}\n… [cut: the result is ${text.length} characters]`;
   const dir = join(o.cwd, ".amness", "mcp-output"), name = `${label.replace(/[^\w.-]+/g, "_").slice(0, 60)}-${Date.now().toString(36)}${(++spilled).toString(36)}.txt`;
   try {
     mkdirSync(dir, { recursive: true }); if (!existsSync(join(dir, ".gitignore"))) writeFileSync(join(dir, ".gitignore"), "*\n");   // never committed
@@ -473,7 +508,7 @@ export type McpHubOptions = McpConnectOptions & { onChange?: () => void; tokenFo
 /** All the MCP servers of a session: connects them in parallel, keeps each one's status, gives their tools. */
 export class McpHub {
   private servers = new Map<string, { entry: McpEntry; status: McpStatus; error?: string; handle?: McpHandle; changed?: McpChange[]; warnings?: Record<string, string[]> }>();
-  private o: McpHubOptions;
+  private o: McpHubOptions; private warnedDup = new Set<string>();
   constructor(o: McpHubOptions = {}) { this.o = o; }
 
   /** Replace the configured set and connect what is new or changed; servers no longer listed are closed. */
@@ -541,10 +576,15 @@ export class McpHub {
         schema: { type: "object", required: ["server", "uri"], properties: { server: { type: "string" }, uri: { type: "string" } } },
         run: async (a: any) => { const s = withRes.find((x) => x.entry.name === a?.server); if (!s) throw new Error(`no connected server "${a?.server}" with resources (${withRes.map((x) => x.entry.name).join(", ")})`); return s.handle!.readResource(String(a.uri)); } },
     ] : [];
+    const taken = new Set(res.map((t) => t.name));
     return [...res, ...[...this.servers.values()].flatMap((s) => {
       if (s.status !== "connected") return [];
       const held = new Set((s.changed ?? []).map((c) => c.tool)); if (!held.size) return s.handle!.tools;
       return s.handle!.tools.filter((t, i) => !held.has(s.handle!.listed[i]?.name));
+    }).filter((t) => {                                                                                // two servers whose names clean up the same ("a.b", "a_b"): the first keeps the name
+      if (!taken.has(t.name)) { taken.add(t.name); return true; }
+      if (!this.warnedDup.has(t.name)) { this.warnedDup.add(t.name); this.o.warn?.(`two MCP servers give a tool named ${t.name}; the second one is left out (rename one of the servers)`); }
+      return false;
     })];
   }
   /** Every connected server's prompts. */

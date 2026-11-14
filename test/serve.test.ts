@@ -60,7 +60,7 @@ test("serve API: a session runs a turn, waits for an approval the client answers
     assert.equal((await d.api("POST", `/v1/sessions/${s.id}/dialog`, { id: dlg.id, value: 0 })).status, 200);
     assert.ok(await d.until(() => d.events.some((e) => e.type === "turn.completed" && e.session === s.id)), JSON.stringify(d.events.map((e) => e.type)));
     assert.equal(readFileSync(join(d.dir, "a.txt"), "utf8"), "one\n2\n");
-    const v = (await d.api("GET", `/v1/sessions/${s.id}`)).json; assert.equal(v.status, "idle"); assert.equal(v.lastAnswer, "changed two to 2"); assert.equal(v.turns, 1);
+    const v = (await d.api("GET", `/v1/sessions/${s.id}`)).json; assert.equal(v.status, "idle"); for (const k of ["prompt", "cached", "completion", "requests"]) assert.equal(typeof v.usage[k], "number", k); assert.equal(v.lastAnswer, "changed two to 2"); assert.equal(v.turns, 1);
     const items = (await d.api("GET", `/v1/sessions/${s.id}/items`)).json.items; assert.deepEqual(items.filter((b: any) => b.kind !== "notice" && b.kind !== "raw").map((b: any) => b.kind), ["user", "tool", "tool", "assistant"]);
     assert.ok(items.find((b: any) => b.kind === "tool" && b.name === "edit_file").edit);
     assert.ok(d.events.some((e) => e.type === "item" && e.item.kind === "assistant"));

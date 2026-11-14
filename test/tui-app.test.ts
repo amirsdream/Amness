@@ -786,3 +786,16 @@ test("MCP prompts are slash commands, and a server's question during a call open
     assert.ok(t.seen.at(-1)!.msgs.some((m) => m.role === "tool" && /answer:accept:\{"colour":"blue","why":"sky"\}/.test(m.content ?? "")), JSON.stringify(t.seen.at(-1)!.msgs.filter((m) => m.role === "tool")));
   } finally { t.app.exit(0); }
 });
+
+test("closing the plan question (Esc) stops the turn instead of letting the agent plan on", async () => {
+  const t = rig([call("exit_plan_mode", { plan: "1. change paginate\n2. run the tests" }), say("I will keep planning"), say("and planning")], { cols: 120 });
+  await t.start(); t.app.setMode("plan");
+  try {
+    await t.submit("fix it");
+    assert.ok(await t.until(() => t.has("Would you like to proceed?") || t.has("proceed"), 5000), plain(t.screen()));
+    await t.key(KEY.esc);
+    assert.ok(await t.until(() => t.idle(), 5000));
+    assert.equal(t.seen.length, 1, "no further model request after the plan was closed");
+    assert.equal(t.app.mode, "plan");
+  } finally { t.app.exit(0); }
+});

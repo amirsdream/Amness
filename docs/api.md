@@ -97,7 +97,7 @@ Every route except `/v1/health` and `/v1/openapi.json` needs `Authorization: Bea
 | `GET /v1/health` | `{ ok, version, sessions }` |
 | `GET /v1/sessions` | The open sessions. With `?saved=<folder>`, also the conversations saved there. |
 | `POST /v1/sessions` | Starts a session. Optional fields: `cwd` (under a `--root`), `resume` (the id of a saved conversation), `model` (an id, `provider:model` or `server:<name>`), `mode` (`default`, `acceptEdits`, `plan`, `yolo`), `title`. |
-| `GET /v1/sessions/{id}` | Its state: `status` (`idle`, `running`, `waiting`), model, mode, turns, `dialog`, `lastAnswer`. |
+| `GET /v1/sessions/{id}` | Its state: `status` (`idle`, `running`, `waiting`), model, mode, turns, `dialog`, `lastAnswer`, and `usage`: `prompt` (tokens sent; each request re-sends the conversation, so this adds up fast), `cached` (how many of them the provider read from its cache, at a much lower price), `completion`, `requests` and the estimated `cost` in dollars. |
 | `POST /v1/sessions/{id}/messages` | `{ text, wait?, timeoutMs? }`. The text can also be a slash command, `!shell` or `#note`, as in the terminal. |
 | `GET /v1/sessions/{id}/items?since=<id>` | The transcript: `user`, `assistant`, `tool` (name, arguments, status, result, the diff of an edit), `thinking`, `notice`, `summary`, `raw` (command output). |
 | `POST /v1/sessions/{id}/dialog` | Answers the open question: `{ id, value }`. `value` is an option number for `choice` (0 is the first), an item number for `pick`, the text for `input`, or `null` to cancel. Cancelling an approval is a no. |
