@@ -7,6 +7,7 @@ These pages explain how to install, use, extend and trust Amness. Start with "Ge
 | [Getting started](getting-started.md) | Install Amness, set a key, and finish your first task |
 | [Using the chat](usage.md) | The interface, keys, permission modes, slash commands, themes and copying |
 | [Features in depth](features.md) | Permissions, sandbox, hooks, skills, subagents, routing, memory, tracing, replay and undo |
+| [Amness as a service](api.md) | `amness serve`: the app in any browser (your phone too) and an HTTP API for scripts, CI and other agents |
 | [MCP servers](mcp.md) | Give the agent more tools: add servers (stdio or HTTP), share them in `.mcp.json`, use them in every front end |
 | [Plugins](plugins.md) | Change the agent with code: loop rules, guardrails, tools, graders and variants you can evaluate |
 | [Build your own harness](build-your-own-harness.md) | A tutorial: from one small rule to a custom harness that you measure |

@@ -15,6 +15,7 @@ export * from "./quarantine.ts";
 export * from "./evals.ts";
 export * from "./dynamic.ts";
 export * from "./mcp.ts";
+export * from "./client.ts";
 export * from "./anthropic.ts";
 export * from "./diff.ts";
 export * from "./memory.ts";

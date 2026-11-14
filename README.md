@@ -20,7 +20,7 @@ npm install -g amness                 # gives you the `amness` and `amness-deskt
 cd ~/your-project && amness           # first start: pick a provider and paste your key (see below)
 ```
 
-Prefer a window? `amness-desktop` opens the same agent as a [desktop app](docs/desktop.md).
+Prefer a window? `amness-desktop` opens the same agent as a [desktop app](docs/desktop.md). Want it running all the time, from your phone or from scripts? `amness serve` gives the same app in any browser and an [HTTP API](docs/api.md). Tools from [MCP servers](docs/mcp.md) work in all of them, and so does Claude Code's `.mcp.json`.
 
 Or try it without installing: `npx amness`. To run the latest `main` from source (or to work on Amness), see [Run from source](#run-from-source).
 

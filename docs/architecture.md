@@ -142,6 +142,7 @@ The table lists every file in `src/` and `cli/`. The text comes from the first c
 | `src/embed.ts` | Optional embeddings for memory search. |
 | `src/bundle.ts` | Portable session bundles: handoff note, memory and changed files. |
 | `src/dynamic.ts` | Tools the agent defines as shell commands. |
+| `src/client.ts` | `AmnessClient`, a small client for `amness serve`'s API. |
 | `src/mcp.ts` | The MCP client: stdio, Streamable HTTP and HTTP+SSE, both protocol eras, and `McpHub` (several servers with their status). |
 | `src/images.ts` | Reads an image file for models that accept images. |
 | `src/web.ts` | Web search and URL fetch tools. |
@@ -180,6 +181,9 @@ The table lists every file in `src/` and `cli/`. The text comes from the first c
 | `cli/acpcli.ts` | `amness acp`: serve the Agent Client Protocol on stdin and stdout. |
 | `cli/mcpconfig.ts` | Where MCP servers come from (`.amness/settings.local.json`, `.mcp.json`, `~/.amness/config.json`, `--mcp-config`, the editor), `${VAR}` values, saving and removing. |
 | `cli/mcpcli.ts` | The `amness mcp` command. |
+| `cli/serve.ts` | `amness serve`: the service (browser app and `/v1` API), its token and network options. |
+| `cli/serve/sessions.ts` | The API's sessions: one App each, their items, status, dialogs and events. |
+| `cli/serve/api.ts` | The `/v1` routes and their OpenAPI description. |
 
 ### `cli/tui/` : the chat interface
 

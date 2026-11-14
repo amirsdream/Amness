@@ -405,6 +405,7 @@ const TOP_HELP = `amness ${VERSION}: coding agent for your terminal
   amness tasks [id]            background runs (amness run --background "<task>"): list, show, --apply, --drop, --stop
   amness doctor [model]        check how a model uses tools and which jobs it can take (amness doctor --help)
   amness mcp <command>         MCP servers: add, list, get, remove, enable, disable (amness mcp --help)
+  amness serve                 run as a service: the app in your browser and the /v1 HTTP API (amness serve --help)
   amness demo                  guided demo, no API key needed
 
   inside the chat: /help for commands · @file to mention files · shift+tab to change permissions`;
@@ -475,6 +476,7 @@ async function main() {
   if (quick === "schedule") { process.exitCode = runSchedule(argv.slice(1)); return; }
   if (quick === "acp") { if (argv.includes("--help")) return void console.log(ACP_HELP); process.exitCode = await runAcp({ model: rawModel, version: VERSION, maxTokens: cfg.maxTokens }); return; }
   if (quick === "tasks") { const { runTasks } = await import("./bgrun.ts"); process.exitCode = await runTasks(argv.slice(1)); return; }
+  if (quick === "serve") { const { runServe } = await import("./serve.ts"); process.exitCode = await runServe(argv.slice(1)); return; }
   if (quick === "mcp") { const { runMcpCli } = await import("./mcpcli.ts"); process.exitCode = await runMcpCli(argv.slice(1)); return; }
   if (quick === "doctor") { const { runDoctorCli } = await import("./doctorcli.ts"); process.exitCode = await runDoctorCli(argv.slice(1), { cfg, confirm, version: VERSION }); return; }
   if (quick === "tune") { process.exitCode = await runTune(argv.slice(1), { model: makeModel, modelName: cfg.model, maxTokens: cfg.maxTokens, confirm, modelFor: modelByRef }); return; }

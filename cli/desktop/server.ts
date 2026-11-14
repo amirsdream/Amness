@@ -4,6 +4,8 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer as createHttps } from "node:https";
+import { hostname, networkInterfaces } from "node:os";
 import type { AddressInfo } from "node:net";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,13 +20,35 @@ const TYPES: Record<string, string> = { ".html": "text/html; charset=utf-8", ".j
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const MODES = ["default", "acceptEdits", "plan", "yolo"] as const;
 
-export type DesktopServer = { url: string; token: string; bridge: DesktopBridge; close: () => Promise<void> };
+export type DesktopServer = { url: string; token: string; bridge: DesktopBridge; close: () => Promise<void>; /** every address it answers on (for amness serve's banner) */ urls: string[]; port: number };
+/** How `amness serve` opens the same server to the network: a fixed token, another address, TLS, its own routes, a log. The desktop app uses none of these. */
+export type NetOptions = {
+  host?: string; token?: string; allowHosts?: string[]; tls?: { cert: Buffer; key: Buffer };
+  /** more routes (the /v1 API); return true when handled. `authed` says whether the request carried the token. */
+  extra?: (req: IncomingMessage, res: ServerResponse, u: URL, authed: boolean) => Promise<boolean>;
+  log?: (line: Record<string, unknown>) => void;
+};
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+/** The host names a server bound to `host` answers to (Host-header check against DNS rebinding). */
+export function hostsFor(host: string, port: number, extra: string[] = []): Set<string> {
+  const names = new Set<string>(["127.0.0.1", "localhost", "[::1]"]);
+  const any = host === "0.0.0.0" || host === "::";
+  if (!LOOPBACK.has(host)) {
+    names.add(host.includes(":") ? `[${host}]` : host);
+    if (any) for (const list of Object.values(networkInterfaces())) for (const i of list ?? []) names.add(i.family === "IPv6" ? `[${i.address.split("%")[0]}]` : i.address);
+    const h = hostname().toLowerCase(); names.add(h); if (!h.endsWith(".local")) names.add(`${h}.local`);
+  }
+  for (const e of extra) names.add(e.toLowerCase());
+  const out = new Set<string>(); for (const n of names) { out.add(`${n}:${port}`); if (extra.includes(n)) out.add(n); }   // a reverse proxy's name may come without the port
+  return out;
+}
 
-export async function startDesktopServer(o: { cfg: Config; cwd: string; version: string; port?: number; persist?: boolean; makeModel?: (c: Config) => Model }): Promise<DesktopServer> {
-  const token = randomBytes(24).toString("base64url"), clients = new Set<ServerResponse>();
+export async function startDesktopServer(o: { cfg: Config; cwd: string; version: string; port?: number; persist?: boolean; makeModel?: (c: Config) => Model; net?: NetOptions }): Promise<DesktopServer> {
+  const net = o.net ?? {}, bindHost = net.host ?? "127.0.0.1", scheme = net.tls ? "https" : "http";
+  const token = net.token ?? randomBytes(24).toString("base64url"), clients = new Set<ServerResponse>();
   const send = (e: ServerEvent) => { const d = `data: ${JSON.stringify(e)}\n\n`; for (const c of clients) c.write(d); };
   const bridge = new DesktopBridge({ cfg: o.cfg, cwd: o.cwd, version: o.version, emit: send, persist: o.persist, makeModel: o.makeModel });
-  let port = 0;
+  let port = 0, allowed = new Set<string>(); const fails = new Map<string, { n: number; at: number }>();
 
   const okToken = (t: string | null | undefined) => { if (!t) return false; const a = Buffer.from(t), b = Buffer.from(token); return a.length === b.length && timingSafeEqual(a, b); };
   const json = (res: ServerResponse, code: number, body: unknown) => { res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body)); };
@@ -71,10 +95,16 @@ export async function startDesktopServer(o: { cfg: Config; cwd: string; version:
     },
   };
 
-  const server = createServer(async (req, res) => {
-    const u = new URL(req.url ?? "/", "http://127.0.0.1"), host = (req.headers.host ?? "").toLowerCase();
-    if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) { res.writeHead(403).end("forbidden host"); return; }
-    if (req.headers.origin && req.headers.origin !== `http://127.0.0.1:${port}` && req.headers.origin !== `http://localhost:${port}`) { res.writeHead(403).end("forbidden origin"); return; }
+  const handler = async (req: IncomingMessage, res: ServerResponse) => {
+    const u = new URL(req.url ?? "/", "http://127.0.0.1"), host = (req.headers.host ?? "").toLowerCase(), ip = req.socket.remoteAddress ?? "?";
+    if (!allowed.has(host)) { res.writeHead(403).end("forbidden host"); return; }
+    if (req.headers.origin && !(req.headers.origin.startsWith(`${scheme}://`) && allowed.has(req.headers.origin.slice(scheme.length + 3).toLowerCase()))) { res.writeHead(403).end("forbidden origin"); return; }
+    const f = fails.get(ip); if (f && f.n >= 20 && Date.now() - f.at < 60_000) { res.writeHead(429, { "retry-after": "60" }).end("too many wrong tokens; wait a minute"); return; }
+    const given = (req.headers["x-amness-token"] as string | undefined) ?? (/^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "")?.[1]) ?? (u.pathname.endsWith("/events") ? u.searchParams.get("t") ?? undefined : undefined);
+    const authed = okToken(given);
+    if (given && !authed) fails.set(ip, { n: (f && Date.now() - f.at < 60_000 ? f.n : 0) + 1, at: Date.now() });
+    if (net.log && (req.method !== "GET" || u.pathname.startsWith("/v1/"))) res.on("finish", () => net.log!({ t: new Date().toISOString(), ip, method: req.method, path: u.pathname, status: res.statusCode }));
+    if (net.extra && u.pathname.startsWith("/v1/") && (await net.extra(req, res, u, authed))) return;
     if (u.pathname === "/" || u.pathname === "/index.html") {                              // the page itself is harmless; the token travels in the fragment, never to the server log
       res.writeHead(200, { "content-type": TYPES[".html"], "content-security-policy": CSP, "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "cache-control": "no-store" });
       res.end(readFileSync(join(UI, "index.html"))); return;
@@ -85,24 +115,26 @@ export async function startDesktopServer(o: { cfg: Config; cwd: string; version:
       return;
     }
     if (u.pathname === "/events") {
-      if (!okToken(u.searchParams.get("t"))) { res.writeHead(401).end(); return; }
+      if (!authed) { res.writeHead(401).end(); return; }
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
       res.write(": hello\n\n"); clients.add(res); req.on("close", () => clients.delete(res));
       bridge.hello(); return;
     }
     const route = api[`${req.method} ${u.pathname}`];
     if (!route) { json(res, 404, { error: "not found" }); return; }
-    if (!okToken(req.headers["x-amness-token"] as string | undefined)) { json(res, 401, { error: "unauthorised" }); return; }
+    if (!authed) { json(res, 401, { error: "unauthorised" }); return; }
     try {
       const b = req.method === "POST" ? await body(req, u.pathname === "/api/image" ? 25 << 20 : 2 << 20) : {};
       json(res, 200, (await route(b, u.searchParams)) ?? { ok: true });
     } catch (e) { json(res, 400, { error: (e as Error).message }); }
-  });
-  await new Promise<void>((ok, fail) => { server.once("error", fail); server.listen(o.port ?? 0, "127.0.0.1", ok); });
-  port = (server.address() as AddressInfo).port;
+  };
+  const server = net.tls ? createHttps({ cert: net.tls.cert, key: net.tls.key }, handler) : createServer(handler);
+  await new Promise<void>((ok, fail) => { server.once("error", fail); server.listen(o.port ?? 0, bindHost, ok); });
+  port = (server.address() as AddressInfo).port; allowed = hostsFor(bindHost, port, net.allowHosts);
+  const shown = LOOPBACK.has(bindHost) ? ["127.0.0.1"] : [...new Set([...allowed].map((h) => h.replace(/:\d+$/, "")).filter((h) => !LOOPBACK.has(h) && !/^\[(fe80|::1)/i.test(h)))];
   const ping = setInterval(() => { for (const c of clients) c.write(": ping\n\n"); }, 20_000);
   return {
-    url: `http://127.0.0.1:${port}/#t=${token}`, token, bridge,
+    url: `${scheme}://127.0.0.1:${port}/#t=${token}`, token, bridge, port, urls: shown.map((h) => `${scheme}://${h}:${port}/`),
     close: () => new Promise<void>((ok) => { clearInterval(ping); for (const c of clients) c.end(); bridge.close(); server.close(() => ok()); server.closeAllConnections?.(); }),
   };
 }

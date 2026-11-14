@@ -51,8 +51,25 @@ export type ServerEvent =
   | { type: "fileChanged"; path: string; diff: string; created: boolean }
   | { type: "copy"; text: string } | { type: "suggestReady" } | { type: "exit" };
 
+/** An App overlay as plain data (the window and the API show the same dialogs). */
+export function dialogView(o: object, id: number): DialogView | undefined {
+  if (o instanceof ChoiceOverlay) return { id, kind: "choice", title: o.title, body: o.body, question: o.question, options: o.options.map((x) => ({ label: x.label, hint: x.hint })), detail: o.detail };
+  if (o instanceof PickerOverlay) return { id, kind: "pick", title: o.title, items: o.items.map((x) => ({ label: x.label, hint: x.hint })), sel: o.sel, preview: !!o.preview };
+  if (o instanceof InputOverlay) return { id, kind: "input", prompt: o.prompt, secret: o.secret, initial: o.ed.text, hint: o.hint };
+  if (o instanceof TextOverlay) return { id, kind: "text", title: o.title, lines: o.lines };
+  if (o instanceof LongTextOverlay) return { id, kind: "longtext", title: o.title, text: o.text, hint: o.hint };
+  return undefined;
+}
+/** Answer an overlay: an option index (choice), an item index (pick), the text (input, long text), or null (cancel / close). */
+export function answerOverlay(o: object, value: number | string | null) {
+  if (o instanceof ChoiceOverlay) o.done(typeof value === "number" && value >= 0 && value < o.options.length ? value : undefined);
+  else if (o instanceof PickerOverlay) o.done(typeof value === "number" && o.items[value] ? o.items[value].value : undefined);
+  else if (o instanceof InputOverlay) o.done(typeof value === "string" ? value : undefined);
+  else if (o instanceof TextOverlay) o.done();
+  else if (o instanceof LongTextOverlay) o.done(typeof value === "string" ? value : undefined);
+}
 /** Input and output that go nowhere: the App never draws in remote mode, but it still owns them. */
-const nullIo = () => ({ input: Object.assign(new EventEmitter(), { setRawMode() {}, setEncoding() {}, resume() {}, pause() {} }), output: Object.assign(new EventEmitter(), { write: () => true, columns: 110, rows: 40, isTTY: false }) });
+export const nullIo = () => ({ input: Object.assign(new EventEmitter(), { setRawMode() {}, setEncoding() {}, resume() {}, pause() {} }), output: Object.assign(new EventEmitter(), { write: () => true, columns: 110, rows: 40, isTTY: false }) });
 
 export type BridgeOptions = { cfg: Config; cwd: string; version: string; emit: (e: ServerEvent) => void; persist?: boolean; makeModel?: (c: Config) => Model };
 
@@ -175,13 +192,7 @@ export class DesktopBridge {
     if (o === this.dialogOf) return;
     if (this.dialogOf) this.emit({ type: "dialogClose", id: this.dialogId });
     this.dialogOf = o ?? undefined; if (!o) return;
-    const id = ++this.dialogId;
-    let d: DialogView | undefined;
-    if (o instanceof ChoiceOverlay) d = { id, kind: "choice", title: o.title, body: o.body, question: o.question, options: o.options.map((x) => ({ label: x.label, hint: x.hint })), detail: o.detail };
-    else if (o instanceof PickerOverlay) d = { id, kind: "pick", title: o.title, items: o.items.map((x) => ({ label: x.label, hint: x.hint })), sel: o.sel, preview: !!o.preview };
-    else if (o instanceof InputOverlay) d = { id, kind: "input", prompt: o.prompt, secret: o.secret, initial: o.ed.text, hint: o.hint };
-    else if (o instanceof TextOverlay) d = { id, kind: "text", title: o.title, lines: o.lines };
-    else if (o instanceof LongTextOverlay) d = { id, kind: "longtext", title: o.title, text: o.text, hint: o.hint };
+    const d = dialogView(o, ++this.dialogId);
     if (d) this.emit({ type: "dialog", dialog: d });
   }
 
@@ -228,11 +239,7 @@ export class DesktopBridge {
   /** The answer to dialog `id`: an option index (choice), an item index (pick), the text (input), or nothing (cancel / close). */
   answer(id: number, value: number | string | null) {
     const o = this.app.overlay; if (!o || id !== this.dialogId) return;
-    if (o instanceof ChoiceOverlay) o.done(typeof value === "number" && value >= 0 && value < o.options.length ? value : undefined);
-    else if (o instanceof PickerOverlay) o.done(typeof value === "number" && o.items[value] ? o.items[value].value : undefined);
-    else if (o instanceof InputOverlay) o.done(typeof value === "string" ? value : undefined);
-    else if (o instanceof TextOverlay) o.done();
-    else if (o instanceof LongTextOverlay) o.done(typeof value === "string" ? value : undefined);
+    answerOverlay(o, value);
     this.changed();
   }
   /** Lines describing item `i` of the open picker (a conversation's last messages in /resume). */
