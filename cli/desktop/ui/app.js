@@ -17,6 +17,30 @@ async function api(path, body) {
 const tryApi = async (path, body) => { try { return await api(path, body); } catch (e) { toast("error", e.message); return undefined; } };
 /** Run anything the terminal accepts: a /command, !shell, #note or a message. */
 const run = (text) => tryApi("/api/send", { text });
+/** What the Inspect menu opens: each is the terminal's own report, shown as a window (never in the conversation). `ws`: also a button in the Workspace section. */
+const INSPECT = [
+  { group: "This conversation" },
+  { label: "Tokens and cost", cmd: "/tokens", tip: "What fills the context window, tokens in and out, cache and an estimated cost", ws: true },
+  { label: "Agent loop", cmd: "/loop", tip: "Every step of the last run: model calls, tools and what the guards did", ws: true },
+  { label: "Todos", cmd: "/todos", tip: "The agent's checklist for this task" },
+  { label: "Status", cmd: "/status", tip: "Model, mode, project and session", ws: true },
+  { group: "Agent" },
+  { label: "Tools", cmd: "/tools", tip: "The tools the agent can use right now", ws: true },
+  { label: "Harness", cmd: "/harness", tip: "The agent loop's settings: guards, step limit, context budget" },
+  { label: "Permission rules", cmd: "/permissions", tip: "What runs without asking, what asks and what is refused" },
+  { label: "Policy decisions", cmd: "/policy", tip: "Why recent actions were allowed, asked about or refused" },
+  { label: "Hooks", cmd: "/hooks", tip: "Lifecycle hooks in effect" },
+  { label: "Cache", cmd: "/cache", tip: "What the harness reused instead of repeating, and the server's prefix cache" },
+  { group: "Extensions" },
+  { label: "MCP servers", cmd: "/mcp", tip: "Connected MCP servers, their tools and status", ws: true },
+  { label: "Skills", cmd: "/skills", tip: "Skills the agent can load, and which ones it used", ws: true },
+  { label: "Subagents", cmd: "/agents", tip: "Built-in and custom subagents" },
+  { label: "Memory", cmd: "/memory", tip: "Saved memory notes", ws: true },
+  { label: "Plugins", cmd: "/plugins", tip: "Plugins loaded" },
+  { group: "Running" },
+  { label: "Background tasks", cmd: "/bg", tip: "Tasks running in their own worktree" },
+  { label: "Processes", cmd: "/procs", tip: "Commands the agent left running, such as a dev server" },
+];
 
 // ------------------------------------------------------------------ small DOM helpers
 const $ = (id) => document.getElementById(id);
@@ -552,16 +576,16 @@ function sec(title, right, ...kids) {
     f ? null : h("div", { class: "psec-body" }, kids));
 }
 function kv(pairs) { return h("div", { class: "kv" }, pairs.filter(Boolean).flatMap(([k, v]) => [h("span", { class: "k", text: k }), h("span", { class: "v" }, v)])); }
-const tile = (label, value, sub, cls = "", tip) => h("div", { class: `tile ${cls}`, title: tip }, h("div", { class: "tv" }, value), h("div", { class: "tl2", text: label }), sub ? h("div", { class: "ts", text: sub }) : null);
+const tile = (label, value, sub, cls = "", tip, cmd) => h(cmd ? "button" : "div", { class: `tile ${cls}${cmd ? " clickable" : ""}`, title: cmd ? `${tip}. Click for the details` : tip, onclick: cmd ? () => run(cmd) : undefined }, h("div", { class: "tv" }, value), h("div", { class: "tl2", text: label }), sub ? h("div", { class: "ts", text: sub }) : null);
 function renderPanel() {
   const d = sd, s = state; if (!d) return;
   const out = [], u = d.usage, pct = d.ctxPct ?? 0, cachePct = u.prompt ? Math.round((u.cached / u.prompt) * 100) : 0;
   const b = d.budget && Number.isFinite(d.budget.max) && d.budget.used > 0 ? Math.min(100, Math.round((d.budget.used / d.budget.max) * 100)) : null;
   out.push(h("div", { class: "tiles" },
-    tile("context", h("span", {}, `${pct}`, h("small", { text: "%" })), `${fmtTokens(d.ctxUsed)} / ${fmtTokens(d.ctxMax)}`, pct > 85 ? "err" : pct > 60 ? "warn" : "", "Context window\nHow full the model's window is now. Near the top, Amness shortens old tool output and then writes a handoff note"),
-    tile("cost", fmtCost(d.cost).replace(/^\$/, "$"), d.lastTurnCost != null ? `last turn ${fmtCost(d.lastTurnCost)}` : "this conversation", "", "Cost\nAn estimate for this conversation from list prices, subagents included. Your bill can differ"),
-    tile("tokens", fmtTokens(u.prompt + u.completion), `${fmtTokens(u.prompt)} in · ${fmtTokens(u.completion)} out`, "", "Tokens\nAll tokens sent (in) and received (out) in this conversation"),
-    tile("cache", h("span", {}, `${cachePct}`, h("small", { text: "%" })), b !== null ? `budget ${b}%` : `${u.calls} request${u.calls === 1 ? "" : "s"}`, cachePct >= 60 ? "ok" : "", "Prompt cache\nThe share of sent tokens the provider read from its cache. Cached tokens are cheaper and faster")));
+    tile("context", h("span", {}, `${pct}`, h("small", { text: "%" })), `${fmtTokens(d.ctxUsed)} / ${fmtTokens(d.ctxMax)}`, pct > 85 ? "err" : pct > 60 ? "warn" : "", "Context window\nHow full the model's window is now. Near the top, Amness shortens old tool output and then writes a handoff note", "/tokens"),
+    tile("cost", fmtCost(d.cost).replace(/^\$/, "$"), d.lastTurnCost != null ? `last turn ${fmtCost(d.lastTurnCost)}` : "this conversation", "", "Cost\nAn estimate for this conversation from list prices, subagents included. Your bill can differ", "/tokens"),
+    tile("tokens", fmtTokens(u.prompt + u.completion), `${fmtTokens(u.prompt)} in · ${fmtTokens(u.completion)} out`, "", "Tokens\nAll tokens sent (in) and received (out) in this conversation", "/tokens"),
+    tile("cache", h("span", {}, `${cachePct}`, h("small", { text: "%" })), b !== null ? `budget ${b}%` : `${u.calls} request${u.calls === 1 ? "" : "s"}`, cachePct >= 60 ? "ok" : "", "Prompt cache\nThe share of sent tokens the provider read from its cache. Cached tokens are cheaper and faster", "/cache")));
   if (s.loop) out.push(sec(s.loop.title === "LOOP" ? "Agent loop" : "Last run", ansi(s.loop.right), h("div", { class: "loop" }, s.loop.lines.map((l, i) => {
     const hit = s.loop.hits.find((x) => x.line === i);
     return h(hit ? "button" : "div", { class: `tl${hit ? " step" : ""}`, onclick: hit ? () => api("/api/step", { n: hit.step }) : undefined }, ansi(l));
@@ -581,7 +605,7 @@ function renderPanel() {
   if (d.skills?.length) { const used = d.skills.filter((x) => x.uses > 0).length; out.push(sec("Skills", `${used ? used + " used · " : ""}${d.skills.length}`, h("div", { class: "chips" }, d.skills.map((x) => h("button", { class: `chip-s ${x.uses ? "on" : x.off ? "off" : ""}`, title: x.off ? "switched off" : x.uses ? `used ${x.uses}×` : "available", onclick: () => run(`/skills show ${x.name}`) }, x.name, x.uses ? h("span", { class: "n", text: ` ${x.uses}` }) : null))))); }
   if (d.pluginStatus?.length) out.push(sec("Plugins", String(d.pluginStatus.length), ...d.pluginStatus.map((p) => h("div", { class: "small muted", text: p }))));
   out.push(sec("Workspace", `${d.tools} tools`, kv([["tools", String(d.tools)], ["MCP servers", String(d.mcp)], ["memory notes", String(d.memory)]]),
-    h("div", { class: "row-btns" }, ["status", "tools", "memory", "mcp", "loop", "tokens"].map((c) => h("button", { class: "btn xs", onclick: () => run("/" + c) }, "/" + c)))));
+    h("div", { class: "row-btns" }, INSPECT.filter((x) => x.ws).map((x) => h("button", { class: "btn xs", title: `${x.tip} (${x.cmd})`, onclick: () => run(x.cmd) }, x.label)))));
   out.push(sec("Project", s.project, h("div", { class: "small muted wrap", text: s.cwd }),
     h("div", { class: "row-btns" }, h("button", { class: "btn xs", onclick: openProjectPicker }, "Open another…"), window.amnessDesktop ? h("button", { class: "btn xs", onclick: () => window.amnessDesktop.reveal(s.cwd) }, "Show in folder") : null)));
   if (d.tip) out.push(h("div", { class: "tip" }, h("b", { text: "Tip · " }), d.tip));
@@ -840,6 +864,9 @@ function findBar() {
     $("main").append(bar);
   }
   bar.querySelector("input").focus(); bar.querySelector("input").select();
+}
+function inspectMenu() {
+  popover($("inspectBtn"), INSPECT.map((x) => x.group ? h("div", { class: "head", text: x.group }) : popItem(x.label, () => run(x.cmd), x.cmd, x.tip)));
 }
 function modelMenu() {
   popover($("modelBtn"), [h("div", { class: "head", text: `${state?.providerLabel ?? ""} · ${state?.model ?? ""}` }),
@@ -1163,10 +1190,11 @@ $("expandBtn").onclick = () => setExpandAll(!expandAll);
 $("paletteBtn").onclick = palette;
 $("newBtn").onclick = newChat;
 $("modelBtn").onclick = modelMenu;
+$("inspectBtn").onclick = inspectMenu;
 $("titleBtn").onclick = renameSession;
 $("projectBtn").onclick = projectMenu;
 $("prefsBtn").onclick = () => showPrefs();
-const menuAction = (what) => ({ prefs: () => showPrefs(), new: newChat, open: openProjectPicker, file: quickOpen, sidebar: () => toggle("sidebar-open"), panel: () => toggle("panel-open"), expand: () => setExpandAll(!expandAll), find: findBar, palette })[what]?.();
+const menuAction = (what) => ({ prefs: () => showPrefs(), new: newChat, open: openProjectPicker, file: quickOpen, sidebar: () => toggle("sidebar-open"), panel: () => toggle("panel-open"), expand: () => setExpandAll(!expandAll), find: findBar, palette, inspect: inspectMenu })[what]?.();
 window.amnessDesktop?.onMenu(menuAction);
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
@@ -1176,7 +1204,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && state?.running && document.activeElement !== input && !dialogOpen) { api("/api/stop", {}); return; }
   if (!mod || window.amnessDesktop) return;                                       // in the app window the menu owns these shortcuts
   if (e.key === ",") { e.preventDefault(); showPrefs(); return; }
-  const map = { n: "new", o: "open", p: "file", b: "sidebar", j: "panel", e: "expand", f: "find", k: "palette" }, k = map[e.key.toLowerCase()];
+  const map = { n: "new", o: "open", p: "file", b: "sidebar", j: "panel", e: "expand", f: "find", k: "palette", i: "inspect" }, k = map[e.key.toLowerCase()];
   if (k) { e.preventDefault(); menuAction(k); }
 });
 if (window.amnessDesktop && /Mac/.test(navigator.platform)) document.documentElement.classList.add("mac-electron");

@@ -139,7 +139,7 @@ export class LongTextOverlay implements Overlay {
 export class TextOverlay implements Overlay {
   lines: string[]; done: () => void; scroll = 0; title: string;
   constructor(lines: string[], done: () => void, title = "Help") { this.lines = lines; this.done = done; this.title = title; }
-  render(): Drawn { return { lines: [...this.lines, dim("  press any key to close")] }; }
+  render(): Drawn { return { lines: [...this.lines, dim("  Esc closes · typing goes to the input")] }; }
   key(k?: Key) {
     const step = k?.name === "up" ? -1 : k?.name === "down" ? 1 : k?.name === "pageup" ? -10 : k?.name === "pagedown" ? 10 : k?.name === "home" ? -1e6 : k?.name === "end" ? 1e6 : 0;
     if (step) this.scroll = Math.max(0, this.scroll + step); else this.done();         // arrows scroll long text; anything else closes it

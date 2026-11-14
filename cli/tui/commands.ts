@@ -28,6 +28,27 @@ import { tokenReport } from "./tokens.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
 import { helpLines, renderDiff, toolCall, todoList } from "./view.ts";
 
+/** The reports `/inspect` (and the sidebar, the header chip, the desktop's Inspect menu) open, each as a window. */
+export const INSPECT: { label: string; cmd: string; tip: string }[] = [
+  { label: "Tokens and cost", cmd: "/tokens", tip: "what fills the context window, usage, cache and cost" },
+  { label: "Agent loop", cmd: "/loop", tip: "every step of the last run" },
+  { label: "Todos", cmd: "/todos", tip: "the agent's checklist" },
+  { label: "Status", cmd: "/status", tip: "model, mode, project, session" },
+  { label: "Tools", cmd: "/tools", tip: "the tools the agent can use now" },
+  { label: "Harness", cmd: "/harness", tip: "guards, step limit, context budget" },
+  { label: "Permission rules", cmd: "/permissions", tip: "allow, ask and deny rules" },
+  { label: "Policy decisions", cmd: "/policy", tip: "why recent actions were allowed or refused" },
+  { label: "Hooks", cmd: "/hooks", tip: "lifecycle hooks in effect" },
+  { label: "Cache", cmd: "/cache", tip: "what was reused instead of repeated" },
+  { label: "MCP servers", cmd: "/mcp", tip: "servers, their tools and status" },
+  { label: "Skills", cmd: "/skills", tip: "skills and which ones were used" },
+  { label: "Subagents", cmd: "/agents", tip: "built-in and custom subagents" },
+  { label: "Memory", cmd: "/memory", tip: "saved notes" },
+  { label: "Plugins", cmd: "/plugins", tip: "plugins loaded" },
+  { label: "Background tasks", cmd: "/bg", tip: "tasks in their own worktree" },
+  { label: "Processes", cmd: "/procs", tip: "commands left running" },
+];
+
 export type Cmd = { name: string; help: string; alias?: string; args?: string; /** safe to run while the agent is working */ live?: boolean; run(app: App, args: string): Promise<void> | void };
 
 const INIT_PROMPT = "Explore this repository and write an AGENTS.md at the repo root for future coding sessions: what the project is, how to build/test/run it (exact commands), the code layout, conventions you can verify from the code, and gotchas. Keep it under 80 lines and do not invent anything you cannot confirm from the files.";
@@ -257,7 +278,7 @@ export function buildCommands(): Cmd[] {
     { name: "plan", help: "enter plan mode (read-only)", run: (a) => a.setMode("plan") },
     { name: "clear", help: "start a fresh conversation", alias: "new", run: (a) => {
       a.newConversation(); a.screen.height = 0; a.io.output.write("\x1b[2J\x1b[3J\x1b[H");
-      a.commit([dim("  conversation cleared; the old one is saved (use /resume)"), ""]);
+      a.say("conversation cleared; the old one is saved (use /resume)", dim);
     } },
     { name: "compact", help: "summarise the conversation to free up context", run: async (a) => {
       if (!a.session.messages.length) return void a.say("nothing to compact yet", dim);
@@ -277,22 +298,21 @@ export function buildCommands(): Cmd[] {
         a.cfg.embeddings = tail === "on"; a.saveConfig(); a.buildAgent();
         return void a.say(tail === "on" ? "semantic memory search on: note text and your messages are sent to your provider's /embeddings endpoint (stored vectors live in memory/embeddings.json)" : "semantic memory search off", dim);
       }
-      if (sub === "graph") { const all = m.list(), rows = all.map((e) => [e, m.neighbors(e, all)] as const).filter(([, n]) => n.length); return void a.commit(rows.length ? ["", bold("  Related notes"), ...rows.map(([e, n]) => `  ${cyan(e.name.padEnd(24))} ${dim("↔")} ${n.map((x) => x.name).join(", ")}`), dim("  links come from [[name]] mentions and from notes that keep being retrieved together")] : ["", dim("  no links yet. Mention [[other-note]] in a note, or keep using memory: notes retrieved together get linked.")]); }
+      if (sub === "graph") { const all = m.list(), rows = all.map((e) => [e, m.neighbors(e, all)] as const).filter(([, n]) => n.length); return void (rows.length ? a.report("Related notes", [...rows.map(([e, n]) => `  ${cyan(e.name.padEnd(24))} ${dim("↔")} ${n.map((x) => x.name).join(", ")}`), dim("  links come from [[name]] mentions and from notes that keep being retrieved together")]) : a.say("no links yet. Mention [[other-note]] in a note, or keep using memory: notes retrieved together get linked.", dim)); }
       if (sub === "consolidate") {
         a.say("asking the model to tidy memory (merge duplicates, archive obsolete notes)…", dim);
         const plan = await m.consolidate(a.roles.compact ?? a.model);
         if (!plan.merges.length && !plan.archive.length) return void a.say("memory looks tidy: nothing to merge or archive", dim);
         const lines = [...plan.merges.map((x) => `merge ${x.from.join(", ")} → ${x.keep}`), ...plan.archive.map((n) => `archive ${n}`)];
-        a.commit(["", bold("  Proposed memory clean-up"), ...lines.map((l) => "  " + l), dim("  nothing is deleted: replaced notes move to memory/archive/")]);
-        const ok = await a.pick("Apply this clean-up?", [{ label: "Yes, apply", value: "y" }, { label: "No", value: "n" }]);
-        if (ok === "y") { const r = m.applyPlan(plan); a.say(`merged ${r.merged}, archived ${r.archived}`, dim); }
+        const ok = await a.confirm("Proposed memory clean-up", [...lines, "", dim("nothing is deleted: replaced notes move to memory/archive/")], "Apply this clean-up?", [{ label: "Yes, apply" }, { label: "No" }]);
+        if (ok === 0) { const r = m.applyPlan(plan); a.say(`merged ${r.merged}, archived ${r.archived}`, dim); }
         return;
       }
-      if (sub === "stale") { const st = m.stale(); return void a.commit(st.length ? ["", bold("  Never-used notes (older than 90 days, surfaced at most once)"), ...st.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}] last used ${e.used ?? e.updated}`)}`), dim("  /memory prune moves them to an archive folder (reversible)")] : ["", dim("  no stale notes")]); }
+      if (sub === "stale") { const st = m.stale(); return void (st.length ? a.report("Never-used notes (older than 90 days, surfaced at most once)", [...st.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}] last used ${e.used ?? e.updated}`)}`), dim("  /memory prune moves them to an archive folder (reversible)")]) : a.say("no stale notes", dim)); }
       if (sub === "prune") { const gone = m.prune(); return void a.say(gone.length ? `archived ${gone.length} stale note${gone.length === 1 ? "" : "s"}: ${gone.join(", ")} (moved to memory/archive/)` : "nothing stale to archive", dim); }
       const all = m.list();
       if (!all.length) return void a.say("no memory notes yet. Use `# note` or ask me to remember something.", dim);
-      a.commit(["", bold("  Memory"), ...all.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}]${e.hits ? ` · used ${e.hits}×` : ""}`)} ${e.description}`)]);
+      a.report("Memory", [...all.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}]${e.hits ? ` · used ${e.hits}×` : ""}`)} ${e.description}`)]);
     } },
     { name: "resume", help: "continue an earlier conversation", alias: "sessions", run: async (a) => {
       const list = a.store.list().filter((s) => s.id !== a.session.id);
@@ -363,15 +383,17 @@ export function buildCommands(): Cmd[] {
       return a.openPager(out, "loop trace");
     } },
     { name: "tokens", alias: "cost", help: "context window, what fills it, tokens and cost", live: true, run: (a) => {
-      a.commit(tokenReport({ model: a.cfg.model, window: a.window, messages: a.session.messages, usage: a.session.usage, series: a.session.usage.series ?? [], lastPrompt: a.lastPrompt, turnTokens: a.runTokens, turnBudget: a.running ? a.cfg.maxTokens : 0, width: a.width,
-        toolDefChars: JSON.stringify(a.agent.registry.visible({ step: 0, messages: [] }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }))).length }));
+      const report = tokenReport({ model: a.cfg.model, window: a.window, messages: a.session.messages, usage: a.session.usage, series: a.session.usage.series ?? [], lastPrompt: a.lastPrompt, turnTokens: a.runTokens, turnBudget: a.running ? a.cfg.maxTokens : 0, width: a.width,
+        toolDefChars: JSON.stringify(a.agent.registry.visible({ step: 0, messages: [] }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }))).length });
       // The last turn's spending per model, when more than one model worked on it (a local explorer, a cheaper reviewer).
       const bm = Object.entries(a.budget.byModel);
-      if (bm.length > 1) a.commit(["", bold("  Last turn by model"), ...bm.map(([id, e]) => `  ${dim((e.tier ?? "?").padEnd(9))}${id.padEnd(32)} ${String(e.calls).padStart(3)} calls  ${fmtTokens(e.tokens).padStart(7)} tokens  ${(e.ms / 1000).toFixed(1).padStart(6)}s waiting`)]);
+      if (bm.length > 1) report.push("", bold("  Last turn by model"), ...bm.map(([id, e]) => `  ${dim((e.tier ?? "?").padEnd(9))}${id.padEnd(32)} ${String(e.calls).padStart(3)} calls  ${fmtTokens(e.tokens).padStart(7)} tokens  ${(e.ms / 1000).toFixed(1).padStart(6)}s waiting`));
+      a.report("Tokens and cost", report);
     } },
     { name: "todos", help: "show the agent's checklist, or change it: /todos edit", args: "[edit]", live: true, run: async (a, arg) => {
       if (arg.trim() === "edit") return void (await a.editTodos());
-      a.commit(["", ...(a.todos.length ? todoList(a.todos, a.width) : [dim("  no todo list right now")]), ...(a.todos.length ? [dim("  /todos edit changes it")] : [])]);
+      if (!a.todos.length) return void a.say("no todo list right now", dim);
+      a.report("Todos", [...todoList(a.todos, a.width), "", dim("  /todos edit changes it")]);
     } },
     { name: "edit", help: "edit one of your earlier messages and send it again from there (the old version is kept as a branch)", args: "[n]", run: async (a, arg) => {
       if (a.running) return void a.say("wait for the current turn to finish", dim);
@@ -446,21 +468,22 @@ export function buildCommands(): Cmd[] {
       const [sub, id] = arg.split(/\s+/);
       if (sub === "stop" && id) { try { const p = await a.agent.procs!.stop(id); return void a.say(`stopped ${p.id} (${p.name})`, dim); } catch (e) { return void a.say((e as Error).message, red); } }
       const l = a.agent.procs?.list() ?? [];
-      a.commit(["", bold("  Background processes"), ...(l.length ? l.map((p) => `  ${(p.status === "running" ? green : dim)(p.id.padEnd(4))} ${p.name.padEnd(28)} ${dim(`${p.status}${p.status === "exited" ? ` (${p.code})` : ""} · pid ${p.pid ?? "?"} · ${Math.round((Date.now() - p.startedAt) / 1000)}s`)}`) : [dim("  none")])]);
+      a.report("Background processes", [...(l.length ? l.map((p) => `  ${(p.status === "running" ? green : dim)(p.id.padEnd(4))} ${p.name.padEnd(28)} ${dim(`${p.status}${p.status === "exited" ? ` (${p.code})` : ""} · pid ${p.pid ?? "?"} · ${Math.round((Date.now() - p.startedAt) / 1000)}s`)}`) : [dim("  none")])]);
     } },
     { name: "hooks", help: "lifecycle hooks in effect (.amness/hooks.json, ~/.amness/hooks.json)", live: true, run: (a) => {
       const l = a.hooks.list(), fp = Hooks.fingerprint(a.cwd);
-      a.commit(["", bold("  Hooks"), ...(l.length ? l.map((h) => `  ${cyan(h.event.padEnd(16))} ${h.def.match ? dim(`[${h.def.match}] `) : ""}${h.def.command} ${dim(`${h.def.timeout ?? 10}s${h.def.failClosed ? " · fail closed" : ""}`)}`) : [dim("  none active")]), ...(fp && !l.some(() => true) ? [dim("  this project has .amness/hooks.json but it is not approved; restart and allow it")] : []), dim("  exit 0 allows · exit 2 blocks (stderr is shown to the model) · stdout JSON can add context or rewrite arguments")]);
+      a.report("Hooks", [...(l.length ? l.map((h) => `  ${cyan(h.event.padEnd(16))} ${h.def.match ? dim(`[${h.def.match}] `) : ""}${h.def.command} ${dim(`${h.def.timeout ?? 10}s${h.def.failClosed ? " · fail closed" : ""}`)}`) : [dim("  none active")]), ...(fp && !l.some(() => true) ? [dim("  this project has .amness/hooks.json but it is not approved; restart and allow it")] : []), dim("  exit 0 allows · exit 2 blocks (stderr is shown to the model) · stdout JSON can add context or rewrite arguments")]);
     } },
     { name: "trust", args: "[reset]", help: "this folder's trust: shows it and asks again about project hooks, rules and plugins you said no to; reset forgets the yes answers too", run: async (a, arg) => {
       if (!a.persist) return void a.say("nothing is saved in this session, so there is nothing to change", dim);
       const st = loadState(), cwd = a.cwd, hfp = projectConfigFingerprint(cwd), pfp = pluginFingerprint(cwd), reset = arg.trim() === "reset";
       const what = (fp: string | undefined, yes?: Record<string, string>, no?: Record<string, string>) => !fp ? dim("none in this project") : yes?.[cwd] === fp ? green("trusted") : no?.[cwd] === fp ? yellow("you said no") : dim("not asked yet");
-      a.commit(["", bold("  Trust for this folder"), `  folder          ${isTrustedDir(st, cwd) ? green("trusted") : yellow("not trusted")}`, `  hooks and rules ${what(hfp, st.hookTrust, st.hookDeclined)}`, `  plugins         ${what(pfp, st.pluginTrust, st.pluginDeclined)}`, dim("  remove a trusted folder in Preferences (Trusted folders)")]);
+      const summary = [`  folder          ${isTrustedDir(st, cwd) ? green("trusted") : yellow("not trusted")}`, `  hooks and rules ${what(hfp, st.hookTrust, st.hookDeclined)}`, `  plugins         ${what(pfp, st.pluginTrust, st.pluginDeclined)}`, dim("  remove a trusted folder in Preferences (Trusted folders)")];
       for (const k of ["hookDeclined", "pluginDeclined", ...(reset ? ["hookTrust", "pluginTrust"] as const : [])] as const) { const m = st[k]; if (m) delete m[cwd]; }
       saveState(st);
+      // a question to answer shows on its own (it says what it is about); otherwise the summary is the answer
       if ((hfp && st.hookTrust?.[cwd] !== hfp) || (pfp && st.pluginTrust?.[cwd] !== pfp)) await a.askHookTrust();
-      else if (reset) { a.loadHooks(); await a.loadPluginsNow(); a.buildAgent(); }
+      else { if (reset) { a.loadHooks(); await a.loadPluginsNow(); a.buildAgent(); } a.report("Trust for this folder", summary); }
     } },
     { name: "permissions", help: "permission rules: list · allow|ask|deny <rule> · e.g. /permissions allow sh(npm test*)", args: "[allow|ask|deny <rule>]", live: true, run: (a, arg) => {
       const [list, ...rest] = arg.split(/\s+/), rule = rest.join(" ");
@@ -471,7 +494,7 @@ export function buildCommands(): Cmd[] {
         a.loadHooks(); a.buildAgent(); return void a.say(`${list} ${rule} saved to .amness/permissions.json`, dim);
       }
       const r = a.rules.rules();
-      a.commit(["", bold("  Permission rules"), ...(["deny", "ask", "allow"] as const).flatMap((k) => r[k].map((x) => `  ${(k === "deny" ? red : k === "ask" ? yellow : green)(k.padEnd(6))} ${x}`)), ...(!r.deny.length && !r.ask.length && !r.allow.length ? [dim("  no rules yet")] : []),
+      a.report("Permission rules", [...(["deny", "ask", "allow"] as const).flatMap((k) => r[k].map((x) => `  ${(k === "deny" ? red : k === "ask" ? yellow : green)(k.padEnd(6))} ${x}`)), ...(!r.deny.length && !r.ask.length && !r.allow.length ? [dim("  no rules yet")] : []),
         "", dim("  always on, in every mode including yolo: no recursive delete of / or ~, no force-push to main, no editing .git or these rule files; curl|sh and force-pushes always ask"), dim("  precedence: that floor > deny > ask > allow > permission mode")]);
     } },
     { name: "budget", help: "show or set the token cap per turn (cached input counts a tenth)", args: "[tokens, e.g. 500k]", run: (a, arg) => {
@@ -507,7 +530,7 @@ export function buildCommands(): Cmd[] {
     } },
     { name: "plugins", help: "plugins loaded (code in .amness/plugins that extends the loop, tools, guards and evals)", run: (a) => {
       if (!a.plugins.length) return void a.say("no plugins loaded. Put a file in .amness/plugins/ (or ~/.amness/plugins/) that exports definePlugin({ name, ... }); see docs/plugins.md. Project plugins ask for your approval first.", dim);
-      a.commit(["", bold("  Plugins"), ...a.plugins.map((p) => `  ${cyan(p.name.padEnd(22))} ${dim([p.tools?.length ? `${p.tools.length} tool(s)` : "", p.hooks ? `hooks: ${Object.keys(p.hooks).join(", ")}` : "", p.system ? "system prompt" : "", p.cases?.length ? `${p.cases.length} eval case(s)` : "", p.variants ? `variants: ${Object.keys(p.variants).join(", ")}` : ""].filter(Boolean).join(" · "))} ${p.description ?? ""}`)]);
+      a.report("Plugins", [...a.plugins.map((p) => `  ${cyan(p.name.padEnd(22))} ${dim([p.tools?.length ? `${p.tools.length} tool(s)` : "", p.hooks ? `hooks: ${Object.keys(p.hooks).join(", ")}` : "", p.system ? "system prompt" : "", p.cases?.length ? `${p.cases.length} eval case(s)` : "", p.variants ? `variants: ${Object.keys(p.variants).join(", ")}` : ""].filter(Boolean).join(" · "))} ${p.description ?? ""}`)]);
     } },
     { name: "plans", help: "offer the plan of a similar finished task as a starting point (off until measured)", args: "[on|off]", run: (a, arg) => {
       if (arg !== "on" && arg !== "off") { const s = a.agent.plans?.stats(); return void a.say(`plan cache is ${a.cfg.plans ? "on" : "off"}${s ? `: ${s.plans} stored, offered ${s.offered}×, led to a finished task ${s.helped}×` : ""}. /plans on: a finished task leaves a short plan (files changed, checks run, result); a similar new task is offered it as a starting point.`, dim); }
@@ -518,7 +541,7 @@ export function buildCommands(): Cmd[] {
       lines.push(s ? `plans: ${s.plans} stored, offered ${s.offered}×, led to a finished task ${s.helped}×` : "plans: off (/plans on)");
       const px = await prefixCacheRate(a.cfg.baseUrl); if (px !== undefined) lines.push(`server prefix cache: ${Math.round(px * 100)}% of prompt tokens were served from the server's cache`);
       lines.push("replies on disk: amness eval --cache / amness run --cache (reruns cost nothing)");
-      a.commit(["", bold("  Cache"), ...lines.map((l) => "  " + dim(l))]);
+      a.report("Cache", [...lines.map((l) => "  " + dim(l))]);
     } },
     { name: "lsp", help: "append language-server errors to edit results (needs typescript-language-server, pyright, gopls or rust-analyzer)", args: "[on|off]", run: (a, arg) => {
       if (arg !== "on" && arg !== "off") return void a.say(`language-server diagnostics are ${a.cfg.lsp ? "on" : "off"}. /lsp on: each edit result also lists the errors an installed language server reports for that file.`, dim);
@@ -537,7 +560,7 @@ export function buildCommands(): Cmd[] {
       if (!r.diff.trim()) return void a.say(`no changes against ${r.against} to review`, dim);
       a.say(`reviewing ${r.diff.split("\n").filter((l) => l.startsWith("diff --git")).length} changed file(s) against ${r.against}…`, dim);
       const v = await reviewWork({ model: a.roles.review ?? a.model, cwd: a.cwd, task: "Review these changes as a careful colleague would before they are merged.", contract: ["the change does what its code and commit messages suggest, without introducing bugs", "edge cases and error paths are handled", "nothing unrelated or leftover (debug code, secrets, commented-out code) is included", "behaviour that changed is covered by tests, or the missing tests are named"], summary: "(a human asked for a review; there is no author summary)", diffs: r.diff.slice(0, 60_000), commands: "", verify: a.verify, budget: a.budget });
-      a.commit(["", v.inconclusive ? `  ${yellow("?")} ${dim("the reviewer gave no usable verdict; try again, or use /reviewer on for tasks")}` : v.pass ? `  ${green("✔")} ${bold("review: no problems found")}` : `  ${yellow("✖")} ${bold(`review: ${v.findings.length} finding${v.findings.length === 1 ? "" : "s"}`)}`, ...v.findings.map((f) => `    ${yellow("•")} ${f}`)]);
+      a.report("Review", [v.inconclusive ? `  ${yellow("?")} ${dim("the reviewer gave no usable verdict; try again, or use /reviewer on for tasks")}` : v.pass ? `  ${green("✔")} ${bold("review: no problems found")}` : `  ${yellow("✖")} ${bold(`review: ${v.findings.length} finding${v.findings.length === 1 ? "" : "s"}`)}`, ...v.findings.map((f) => `    ${yellow("•")} ${f}`)]);
     } },
     { name: "pr", help: "draft a pull request from your branch and create it with gh after you confirm (/pr draft for a draft PR)", args: "[draft]", run: async (a, arg) => {
       const have = await new Promise<boolean>((res) => execFile("gh", ["--version"], (e) => res(!e)));
@@ -549,8 +572,8 @@ export function buildCommands(): Cmd[] {
       if (!diff.trim() && !log) return void a.say(`nothing to open a pull request for against ${base}`, dim);
       a.say("drafting the pull request…", dim);
       let d; try { d = await draftPr(a.roles.compact ?? a.model, { diff, log, branch }); } catch (e) { return void a.say((e as Error).message, red); }
-      a.commit(["", bold(`  ${d.title}`), dim(`  ${branch} → ${base.replace(/^origin\//, "")}`), "", ...d.body.split("\n").map((l) => "  " + l)]);
-      const choice = await a.pick("Create this pull request on GitHub?", [{ label: "Create it", value: "pr" }, { label: "Create it as a draft", value: "draft" }, { label: "Cancel", value: "no" }]);
+      const pick = await a.confirm(d.title, [dim(`${branch} → ${base.replace(/^origin\//, "")}`), "", ...d.body.split("\n")], "Create this pull request on GitHub?", [{ label: "Create it" }, { label: "Create it as a draft" }, { label: "Cancel" }]);
+      const choice = pick === 0 ? "pr" : pick === 1 ? "draft" : "no";
       if (!choice || choice === "no") return void a.say("not created", dim);
       if (!(await hasUpstream(a.cwd))) { const push = await a.pick("The branch is not on the remote yet. Push it now (git push -u origin HEAD)?", [{ label: "Yes, push it", value: "y" }, { label: "No", value: "n" }]); if (push !== "y") return void a.say("not created: push the branch first", dim); try { await pushBranch(a.cwd); } catch (e) { return void a.say(`push failed: ${(e as Error).message}`, red); } }
       try { const url = await createPr(a.cwd, d, { base, draft: choice === "draft" || arg === "draft" }); a.say(`created: ${url}`, green); } catch (e) { a.say(`gh failed: ${(e as Error).message}`, red); }
@@ -563,11 +586,11 @@ export function buildCommands(): Cmd[] {
         const check = await a.askText(`A command that exits 0 only when "${last.text.slice(0, 50).replace(/\s+/g, " ")}" is really done (the agent never sees it)`); if (!check) return void a.say("cancelled", dim);
         const r = caseFromWorkspace(a.cwd, { name, task: last.text, check, verify: a.verify }); return void a.say(`wrote ${r.path.replace(a.cwd + "/", "")} (${r.files} files from git HEAD). Run: amness eval --cases .amness/evals/cases --variants ab`, dim);
       }
-      a.commit(["", ...formatMining(join(a.cwd, ".amness", "traces")).split("\n").map((l) => "  " + l)]);
+      a.report("Recurring problems", [...formatMining(join(a.cwd, ".amness", "traces")).split("\n").map((l) => "  " + l)]);
     } },
     { name: "models", help: "use other models for some jobs: /models <role> <model|off>; a model is an id, provider:model or server:<name>[/model]", args: "[role model]", run: (a, arg) => {
       const [role, id] = arg.split(/\s+/), roles: readonly string[] = ROLE_NAMES;
-      if (!role) { const m = a.cfg.models ?? {}, lab = a.wired?.labels ?? {}; return void a.commit(["", bold("  Models"), `  ${dim("main".padEnd(11))} ${a.cfg.server ? `server:${a.cfg.server}/` : `${a.cfg.provider}:`}${a.cfg.model}`, ...roles.map((r) => `  ${dim(r.padEnd(11))} ${(lab as Record<string, string | undefined>)[r] ?? ((m as Record<string, string | undefined>)[r] ? `${(m as Record<string, string>)[r]} ${dim("(same as main)")}` : dim("(main model)"))}`), `  ${dim("fallback".padEnd(11))} ${lab.fallback ?? a.cfg.fallback ?? dim("(none)")}`, dim("  e.g. /models explore server:lab   /models compact anthropic:claude-haiku-5-5   /models review off")]); }
+      if (!role) { const m = a.cfg.models ?? {}, lab = a.wired?.labels ?? {}; return void a.report("Models", [`  ${dim("main".padEnd(11))} ${a.cfg.server ? `server:${a.cfg.server}/` : `${a.cfg.provider}:`}${a.cfg.model}`, ...roles.map((r) => `  ${dim(r.padEnd(11))} ${(lab as Record<string, string | undefined>)[r] ?? ((m as Record<string, string | undefined>)[r] ? `${(m as Record<string, string>)[r]} ${dim("(same as main)")}` : dim("(main model)"))}`), `  ${dim("fallback".padEnd(11))} ${lab.fallback ?? a.cfg.fallback ?? dim("(none)")}`, dim("  e.g. /models explore server:lab   /models compact anthropic:claude-haiku-5-5   /models review off")]); }
       if (role !== "fallback" && !roles.includes(role)) return void a.say(`usage: /models ${roles.join("|")}|fallback <model | off>`, red);
       if (!id) return void a.say(`usage: /models ${role} <model | off>`, red);
       let label = id; if (id !== "off") { try { label = resolveConfig(id, a.cfg).label; } catch (e) { return void a.say((e as Error).message, red); } }
@@ -585,14 +608,14 @@ export function buildCommands(): Cmd[] {
       const [sub, n] = arg.trim().split(/\s+/), id = Number(n);
       if (!arg.trim()) {
         if (!a.bg.tasks.length) return void a.say("no background tasks. Start one with /bg <task>: it runs in its own git worktree while you keep working here", dim);
-        return void a.commit(["", bold("  Background tasks"), ...a.bg.tasks.map((t) => "  " + bgLine(t)), dim("  /bg show <n> · /bg apply <n> (take its changes) · /bg drop <n> · /bg stop <n>")]);
+        return void a.report("Background tasks", [...a.bg.tasks.map((t) => "  " + bgLine(t)), dim("  /bg show <n> · /bg apply <n> (take its changes) · /bg drop <n> · /bg stop <n>")]);
       }
       if (["show", "apply", "drop", "stop"].includes(sub) && Number.isInteger(id) && n !== undefined) {
         if (sub === "stop") return void a.say(a.bg.stop(id), dim);
         if (sub === "drop") return void a.say(await a.bg.drop(id), dim);
         if (sub === "apply") { const msg = await a.bg.apply(id); a.say(msg, /^applied/.test(msg) ? green : yellow); return; }
         const t = a.bg.get(id); if (!t) return void a.say(`no background task ${id}`, red);
-        return void a.commit(["", bold(`  Background task ${t.id}`), `  ${dim("task".padEnd(8))} ${t.task}`, `  ${dim("status".padEnd(8))} ${t.status}`, `  ${dim("branch".padEnd(8))} ${t.branch}  ${dim(t.dir)}`,
+        return void a.report(`Background task ${t.id}`, [`  ${dim("task".padEnd(8))} ${t.task}`, `  ${dim("status".padEnd(8))} ${t.status}`, `  ${dim("branch".padEnd(8))} ${t.branch}  ${dim(t.dir)}`,
           `  ${dim("changed".padEnd(8))} ${t.changed?.join(", ") || (t.status === "running" ? "(running)" : "nothing")}`, "", ...(t.summary ?? "(no summary yet)").split("\n").map((l) => "  " + l)]);
       }
       try { const t = await a.bg.start(arg.trim()); a.say(`started background task ${t.id} in ${t.branch}; keep working, you will be told when it ends (/bg lists them)`, green); }
@@ -604,17 +627,17 @@ export function buildCommands(): Cmd[] {
       const m = a.wired?.byRef(ref) ?? a.model;
       a.say(`checking ${r.label}: about ten short requests…`, dim);
       let rep; try { rep = await runDoctor(m, { stated: a.window }); } catch (e) { return void a.say(`doctor failed: ${(e as Error).message}`, red); }
-      a.commit(["", ...formatDoctor(r.label, rep).split("\n").map((l) => "  " + l)]);
+      a.report("Doctor", [...formatDoctor(r.label, rep).split("\n").map((l) => "  " + l)]);
       if (write) { const at = new Date().toISOString().slice(0, 10); writeProfile(join(a.cwd, ".amness", "profile.json"), r.name, { ...rep.suggest, qualified: { roles: rep.qualified, at, by: "amness doctor" } }, `checked with amness doctor on ${at}`); a.say(`  saved in .amness/profile.json (${r.name})`, dim); a.buildAgent(); }
       else a.say("  /doctor " + ref + " write saves this in .amness/profile.json", dim);
     } },
     { name: "policy", help: "why recent actions were allowed, asked about or refused (rules, the safety floor, untrusted-text checks)", live: true, run: (a) => {
-      a.commit(["", bold("  Recent policy decisions"), ...(a.policyLog.length ? a.policyLog.map((l) => "  " + (l.startsWith("deny") ? red(l.slice(0, 5)) : l.startsWith("ask") ? yellow(l.slice(0, 5)) : green(l.slice(0, 5))) + l.slice(5)) : [dim("  none yet: every call so far went through the permission mode alone")]),
+      a.report("Recent policy decisions", [...(a.policyLog.length ? a.policyLog.map((l) => "  " + (l.startsWith("deny") ? red(l.slice(0, 5)) : l.startsWith("ask") ? yellow(l.slice(0, 5)) : green(l.slice(0, 5))) + l.slice(5)) : [dim("  none yet: every call so far went through the permission mode alone")]),
         "", dim("  layers: safety floor > deny rules > untrusted-text check (commands copied from web pages or tool servers) > ask rules > allow rules > permission mode"), dim("  /permissions lists your rules, /sandbox shows OS enforcement")]);
     } },
     { name: "profile", help: "harness settings for this model (.amness/profile.json): guards switched off, limits", live: true, run: (a) => {
       const p = a.profile.profile;
-      a.commit(["", bold("  Harness profile"), `  ${dim("model")}   ${a.cfg.model}`, `  ${dim("from")}    ${a.profile.sources.length ? a.profile.sources.map((s) => s.replace(a.cwd + "/", "")).join(", ") : dim("(none: built-in defaults)")}`, `  ${dim("off")}     ${p.off?.length ? p.off.join(", ") : dim("nothing: every guard is on")}`, `  ${dim("limits")}  ${[p.maxSteps !== undefined && `max steps ${p.maxSteps}`, p.stagnationTurns !== undefined && `stagnation after ${p.stagnationTurns} turns`].filter(Boolean).join(" · ") || dim("defaults")}`, ...(p.note ? [`  ${dim("note")}    ${p.note}`] : []), dim("  write one from measurements: amness eval --variants ablate --profile-out profile.json")]);
+      a.report("Harness profile", [`  ${dim("model")}   ${a.cfg.model}`, `  ${dim("from")}    ${a.profile.sources.length ? a.profile.sources.map((s) => s.replace(a.cwd + "/", "")).join(", ") : dim("(none: built-in defaults)")}`, `  ${dim("off")}     ${p.off?.length ? p.off.join(", ") : dim("nothing: every guard is on")}`, `  ${dim("limits")}  ${[p.maxSteps !== undefined && `max steps ${p.maxSteps}`, p.stagnationTurns !== undefined && `stagnation after ${p.stagnationTurns} turns`].filter(Boolean).join(" · ") || dim("defaults")}`, ...(p.note ? [`  ${dim("note")}    ${p.note}`] : []), dim("  write one from measurements: amness eval --variants ablate --profile-out profile.json")]);
     } },
     { name: "router", help: "route exploration steps to a cheaper model when that pays off, cache cost included (needs /models cheap <id>)", args: "[on|off]", run: (a, arg) => {
       if (!arg) return void a.say(`router is ${a.cfg.router ? "on" : "off"}${a.cfg.models?.cheap ? ` (cheap model: ${a.cfg.models.cheap})` : dim("  (set one with /models cheap <model id>)")}. Planning, edits, failures and answers always use ${a.cfg.model}; a run of read-only steps moves to the cheap model once the saving repays the cold read of the conversation on that model's own cache.`, dim);
@@ -630,7 +653,7 @@ export function buildCommands(): Cmd[] {
     } },
     { name: "agents", help: "custom subagents (.amness/agents/*.md, .claude/agents/*.md) available to the task tool", live: true, run: (a) => {
       const l = a.agent.agents ?? [], w = a.agent.agentWarnings ?? [];
-      a.commit(["", bold("  Subagents"), `  ${cyan("explore".padEnd(16))} ${dim("[built in · read-only]")} broad searches and questions that need reading many files`, ...l.map((s) => `  ${cyan(s.name.padEnd(16))} ${dim(`[${s.scope} · ${s.tools.join(", ")}${s.isolation ? " · isolated worktree" : ""}${s.model ? " · model " + s.model : ""}]`)} ${s.description}`), ...(!l.length ? [dim("  add .amness/agents/<name>.md (front matter: name, description, tools, model, isolation) to define your own")] : []), ...w.map((x) => "  " + yellow("⚠ ") + dim(x))]);
+      a.report("Subagents", [`  ${cyan("explore".padEnd(16))} ${dim("[built in · read-only]")} broad searches and questions that need reading many files`, ...l.map((s) => `  ${cyan(s.name.padEnd(16))} ${dim(`[${s.scope} · ${s.tools.join(", ")}${s.isolation ? " · isolated worktree" : ""}${s.model ? " · model " + s.model : ""}]`)} ${s.description}`), ...(!l.length ? [dim("  add .amness/agents/<name>.md (front matter: name, description, tools, model, isolation) to define your own")] : []), ...w.map((x) => "  " + yellow("⚠ ") + dim(x))]);
     } },
     { name: "skills", help: "see which skills exist and are in use; new, add, remove, on, off, show, draft", args: "[list|show|new|add|remove|on|off|draft|drafts|approve|reject] [name]", live: true, run: async (a, arg) => {
       const [sub = "list", ...rest] = arg.trim().split(/\s+/).filter(Boolean), name = rest[0], agent = a.agent, st = agent.skillState;
@@ -640,10 +663,10 @@ export function buildCommands(): Cmd[] {
         if (sub === "list" || sub === "ls") {
           const all = agent.allSkills ?? [], drafts = listDrafts(a.cwd);
           const row = (s: (typeof all)[number]) => { const off = st.isOff(s.name), uses = a.skillsUsed.get(s.name) ?? 0, k = st.stats[s.name]; const mark = off ? dim("⊘") : uses ? green("●") : dim("○"); const use = uses ? green(` in use ×${uses}`) : ""; const hist = k?.loaded ? dim(` · used ${k.loaded}×${k.finished || k.failed ? `, runs: ${k.finished} finished, ${k.failed} stopped` : ""}`) : ""; return `  ${mark} ${(off ? dim : cyan)(s.name.padEnd(22))} ${dim(`[${s.scope} · ${s.source}]`)}${use}${hist}${off ? dim(" · off") : ""}\n      ${dim(s.description)}`; };
-          a.commit(["", bold("  Skills"), ...(all.length ? all.flatMap((s) => row(s).split("\n")) : [dim("  none yet. /skills new <name> makes one, /skills add <folder or git URL> installs one.")]), ...(drafts.length ? ["", bold("  Drafts waiting for you"), ...drafts.map((d) => `  ${cyan(d.name.padEnd(22))} ${dim(d.description)}`), dim("  /skills approve <name> · /skills reject <name>")] : []), ...((agent.skillWarnings ?? []).map((w) => "  " + dim(w))), "", dim("  ● in use now   ○ available   ⊘ switched off   ·   /skills show|new|add|remove|on|off|draft")]);
+          a.report("Skills", [...(all.length ? all.flatMap((s) => row(s).split("\n")) : [dim("  none yet. /skills new <name> makes one, /skills add <folder or git URL> installs one.")]), ...(drafts.length ? ["", bold("  Drafts waiting for you"), ...drafts.map((d) => `  ${cyan(d.name.padEnd(22))} ${dim(d.description)}`), dim("  /skills approve <name> · /skills reject <name>")] : []), ...((agent.skillWarnings ?? []).map((w) => "  " + dim(w))), "", dim("  ● in use now   ○ available   ⊘ switched off   ·   /skills show|new|add|remove|on|off|draft")]);
           return;
         }
-        if (sub === "show") { const s = find(name); if (!s) return void a.say(name ? `no skill named ${name}` : "usage: /skills show <name>", red); const t = readFileSync(s.file, "utf8").split("\n"); a.commit(["", bold(`  ${s.name}`) + dim(`  ${s.dir}`), ...t.slice(0, 40).map((l) => "  " + dim(l)), ...(t.length > 40 ? [dim(`  … ${t.length - 40} more lines`)] : [])]); return; }
+        if (sub === "show") { const s = find(name); if (!s) return void a.say(name ? `no skill named ${name}` : "usage: /skills show <name>", red); const t = readFileSync(s.file, "utf8").split("\n"); a.report(s.name, [dim(`  ${s.dir}`), "", ...t.map((l) => "  " + l)]); return; }
         if (sub === "on" || sub === "off") { const s = find(name); if (!s) return void a.say(name ? `no skill named ${name}` : `usage: /skills ${sub} <name>`, red); st.setOff(s.name, sub === "off"); return void done(`${s.name} is ${sub === "off" ? "switched off: not listed to the model and not loadable" : "on again"}`); }
         if (sub === "new") { const r = scaffoldSkill(a.cwd, name ?? "", rest.slice(1).join(" ") || undefined); return void done(`created ${r.file}\nedit it: the description line decides when the model loads it. It is picked up automatically.`); }
         if (sub === "remove" || sub === "rm") {
@@ -657,7 +680,7 @@ export function buildCommands(): Cmd[] {
           try {
             const found = inspectSource(src.dir); if (!found.length) return void a.say(`no SKILL.md found in ${name} (or one folder down)`, red);
             const scope = rest[1] === "user" ? "user" : "project";
-            a.commit(["", bold(`  Skills found in ${name}`), ...found.flatMap((f) => [`  ${f.problems.length ? red("✗") : green("✓")} ${cyan(f.name)} ${dim(`${f.files.length} file${f.files.length === 1 ? "" : "s"}`)}${f.scripts.length ? yellow(`  includes scripts: ${f.scripts.slice(0, 4).join(", ")}`) : ""}`, `      ${dim(f.description || "(no description)")}`, ...f.problems.map((p) => "      " + red(p))]), "", dim("  A skill is a set of instructions the model will follow. Read it first (/skills show <name> after installing), and do not install skills you do not trust.")]);
+            a.report(`Skills found in ${name}`, [...found.flatMap((f) => [`  ${f.problems.length ? red("✗") : green("✓")} ${cyan(f.name)} ${dim(`${f.files.length} file${f.files.length === 1 ? "" : "s"}`)}${f.scripts.length ? yellow(`  includes scripts: ${f.scripts.slice(0, 4).join(", ")}`) : ""}`, `      ${dim(f.description || "(no description)")}`, ...f.problems.map((p) => "      " + red(p))]), "", dim("  A skill is a set of instructions the model will follow. Read it first (/skills show <name> after installing), and do not install skills you do not trust.")]);
             const ok = await a.pick(`Install ${found.filter((f) => !f.problems.length).length} skill(s) for ${scope === "user" ? "all your projects" : "this project"}?`, [{ label: "Install", value: "yes" }, { label: "Cancel", value: "no" }], 1); if (ok !== "yes") return;
             const r = installSkills(a.cwd, found, { scope }); return void done(`${r.installed.length ? `installed: ${r.installed.join(", ")}` : "nothing installed"}${r.skipped.length ? `\nskipped: ${r.skipped.join("; ")}` : ""}`);
           } finally { src.cleanup(); }
@@ -665,7 +688,7 @@ export function buildCommands(): Cmd[] {
         if (sub === "draft") {
           if (a.session.messages.length < 3) return void a.say("nothing to learn from yet: finish a task first, then /skills draft", dim);
           a.note("drafting a skill from this conversation…", 60_000); const d = await agent.draftSkill(a.session.messages);
-          return void a.commit(["", `  ${green("✓")} drafted ${cyan(d.name)}`, `    ${dim(d.description)}`, dim(`    saved to ${d.file}; it is NOT active. Read it, then /skills approve ${d.name} or /skills reject ${d.name}.`)]);
+          return void a.say([`${green("✓")} drafted ${cyan(d.name)}`, `  ${dim(d.description)}`, dim(`  saved to ${d.file}; it is NOT active. Read it, then /skills approve ${d.name} or /skills reject ${d.name}.`)]);
         }
         if (sub === "drafts") { const l = listDrafts(a.cwd); return void a.say(l.length ? l.map((d) => `${d.name}: ${d.description}`).join("\n") : "no drafts", dim); }
       if (sub === "approve") { if (!name) return void a.say("usage: /skills approve <name>", red); approveDraft(a.cwd, name); return void done(`${name} is active now`); }
@@ -690,7 +713,7 @@ export function buildCommands(): Cmd[] {
       const words = arg.trim().split(/\s+/).filter(Boolean), sub = words[0] ?? "";
       if (!sub || sub === "list") {
         const rows = a.mcpHub?.rows() ?? [], dot = (st: string) => st === "connected" ? green("●") : st === "connecting" ? yellow("◌") : st === "disabled" ? dim("○") : st === "pending" ? yellow("⏸") : red("✗");
-        const out = ["", bold("  MCP servers")];
+        const out: string[] = [];
         for (const r of rows) {
           out.push(`  ${dot(r.status)} ${bold(r.name)}  ${dim(`${SCOPE_TEXT[r.scope]} · ${r.transport}${r.era ? ` ${r.era}` : ""} · ${r.status === "connected" ? `${r.tools} tools` : r.status === "pending" ? "waits for /trust" : r.status}`)}`);
           out.push(`    ${dim(r.target.slice(0, a.width - 6))}`);
@@ -702,7 +725,7 @@ export function buildCommands(): Cmd[] {
         for (const m of a.mcp) out.push(`  ${green("●")} ${m.cmd}  ${dim(`this session · ${m.tools.length} tools`)}`);
         for (const n of a.mcpNotes) out.push(`  ${yellow("!")} ${dim(n)}`);
         if (!rows.length && !a.mcp.length) out.push(dim("  no MCP servers attached or configured."), dim("  /mcp add github https://api.githubcopilot.com/mcp/ · /mcp add fs npx -y @modelcontextprotocol/server-filesystem ."), dim("  or a .mcp.json in the project (Claude Code's format) · amness mcp --help"));
-        return void a.commit(out);
+        return void a.report("MCP servers", out);
       }
       if (sub === "login" || sub === "logout") {
       const r = a.mcpHub?.rows().find((x) => x.name === words[1]); if (!r) return void a.say(`usage: /mcp ${sub} <name> (a remote server from /mcp)`, dim);
@@ -726,7 +749,7 @@ export function buildCommands(): Cmd[] {
       if (sub === "tools") {
         const h = words[1] ? a.mcpHub?.handle(words[1]) : undefined; if (!h) return void a.say(words[1] ? `${words[1]} is not connected (/mcp)` : "usage: /mcp tools <name>", dim);
         const row = a.mcpHub!.rows().find((x) => x.name === words[1])!, held = new Set(row.changed.map((c) => c.tool));
-        return void a.commit(["", bold(`  ${words[1]}: ${h.tools.length} tools`), ...h.listed.flatMap((d, i) => { const t = h.tools[i]; return [`  ${cyan(t.name)} ${held.has(d.name) ? red("held: changed since you approved it") : t.risky ? yellow("asks") : dim("read-only")} ${dim(t.description.split("\n")[0].slice(0, Math.max(20, a.width - t.name.length - 14)))}`, ...(row.warnings[d.name] ?? []).map((w) => `    ${red("⚠ " + w)}`)]; })]);
+        return void a.report(`${words[1]}: ${h.tools.length} tools`, [...h.listed.flatMap((d, i) => { const t = h.tools[i]; return [`  ${cyan(t.name)} ${held.has(d.name) ? red("held: changed since you approved it") : t.risky ? yellow("asks") : dim("read-only")} ${dim(t.description.split("\n")[0].slice(0, Math.max(20, a.width - t.name.length - 14)))}`, ...(row.warnings[d.name] ?? []).map((w) => `    ${red("⚠ " + w)}`)]; })]);
       }
       if (sub === "remove") {
         if (!words[1]) return void a.say("usage: /mcp remove <name>", dim);
@@ -753,12 +776,16 @@ export function buildCommands(): Cmd[] {
       a.say(`${green("✓")} ${arg}\n${dim(h.tools.length + " tools: " + h.tools.slice(0, 6).map((t) => t.name).join(", ") + (h.tools.length > 6 ? "…" : "") + ". Tools that change things will ask first.")}`);
     } },
     { name: "init", help: "have the agent write AGENTS.md for this repo", run: (a) => a.turn(INIT_PROMPT) },
+    { name: "inspect", help: "open a report as a window: tokens, tools, status, MCP servers, skills, hooks and more", live: true, run: async (a) => {
+      const c = await a.pick("Inspect", INSPECT.map((x) => ({ label: x.label, value: x.cmd, hint: `${x.cmd} · ${x.tip}` })));
+      if (c) await a.runCommand(c);
+    } },
     { name: "tools", help: "list the tools the agent can use right now", live: true, run: (a) => {
       const vis = a.agent.registry.visible({ step: 0, messages: [] });
-      a.commit(["", bold("  Tools"), ...vis.map((t) => `  ${cyan(t.name.padEnd(16))} ${dim(t.description.split(".")[0].slice(0, a.width - 22))}`)]);
+      a.report("Tools", [...vis.map((t) => `  ${cyan(t.name.padEnd(16))} ${dim(t.description.split(".")[0].slice(0, a.width - 22))}`)]);
     } },
     { name: "status", help: "model, mode, project, session", live: true, run: (a) => {
-      a.commit(["", bold("  Status"), `  ${dim("model")}     ${a.cfg.model} ${dim("via " + a.providerInfo().label + (a.model.api ? ` · ${a.model.api()} API` : ""))}`, ...(a.cfg.effort ? [`  ${dim("effort")}    ${a.cfg.effort}`] : []), ...Object.entries(a.wired?.labels ?? {}).map(([r, l]) => `  ${dim(r.padEnd(10))}${l}`), `  ${dim("mode")}      ${a.mode}`, `  ${dim("project")}   ${a.cwd}${a.branch ? dim("  ⎇ " + a.branch) : ""}`,
+      a.report("Status", [`  ${dim("model")}     ${a.cfg.model} ${dim("via " + a.providerInfo().label + (a.model.api ? ` · ${a.model.api()} API` : ""))}`, ...(a.cfg.effort ? [`  ${dim("effort")}    ${a.cfg.effort}`] : []), ...Object.entries(a.wired?.labels ?? {}).map(([r, l]) => `  ${dim(r.padEnd(10))}${l}`), `  ${dim("mode")}      ${a.mode}`, `  ${dim("project")}   ${a.cwd}${a.branch ? dim("  ⎇ " + a.branch) : ""}`,
         `  ${dim("verify")}    ${a.verify ?? "none"}`, `  ${dim("session")}   ${a.session.id} ${dim(`(${a.session.turns.length} turns)`)}`, `  ${dim("memory")}    ${a.memory?.list().length ?? 0} notes`, `  ${dim("sandbox")}   ${a.cfg.sandbox ?? "off"}`, `  ${dim("trace")}     ${a.tracer?.file ? a.tracer.file.replace(a.cwd + "/", "") : "(after the first message)"}`, `  ${dim("instructions")} ${a.agent.guidance?.files.join(", ") || "none loaded (add an AGENTS.md)"}`, `  ${dim("running")}   ${a.running ? "yes, " + fmtDuration(Date.now() - a.runStart) : "no"}`]);
     } },
     { name: "theme", help: "colour theme (live preview)", args: "[name]", run: async (a, arg) => {

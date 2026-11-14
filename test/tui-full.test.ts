@@ -201,3 +201,19 @@ test("full UI: the retro theme draws double frames, a double sidebar line and a 
     const foot = t.vt.screen().at(-1)!; assert.match(foot, /^enter send +ctrl\+p commands/);
   } finally { await t.key(KEY.ctrlD); }
 });
+
+test("full UI: reports open as windows, not in the conversation; a one-line answer is a toast; /inspect lists the reports; the sidebar opens them", async () => {
+  const t = rig([], { cols: 132, rows: 40, ui: "full" }); await t.start();
+  try {
+    const raws = () => t.app.blocks.blocks.filter((b) => b.kind === "raw").length, before = raws();
+    await t.submit("/tools"); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "Tools"), t.screen());
+    assert.match(t.screen(), /Tools[\s\S]*read_file[\s\S]*Esc closes/); assert.equal(raws(), before, "nothing was added to the conversation");
+    await t.key(KEY.esc); assert.equal(t.app.overlay, null);
+    await t.submit("/lsp off"); assert.ok(await t.until(() => t.has("language-server diagnostics off")), t.screen());
+    assert.equal(t.app.overlay, null, "a one-line answer needs no window"); assert.equal(raws(), before);
+    await t.submit("/inspect"); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "Inspect"), t.screen());
+    await t.key(KEY.enter); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "Tokens and cost"), t.screen());
+    await t.key(KEY.esc);
+    assert.match(t.screen(), /CONTEXT ›/, "the sidebar marks the sections that open a report");
+  } finally { await t.key(KEY.ctrlD); }
+});

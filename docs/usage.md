@@ -386,8 +386,11 @@ When you start the chat, Amness picks a first `/verify` command for you if it ca
 
 ### Information
 
+These commands show a report in a window: it does not go into the conversation. Use the arrow keys to scroll, and `Esc` to close it. If you start typing, the window closes and your text goes into the input. A command that answers in one short line shows it as a short message that goes away by itself. `/inspect` lists every report. In the full-screen view you can also click `≡ inspect` in the header, or a sidebar title marked `›` (for example `CONTEXT ›` opens `/tokens`). The inline view shows a long report in its pager.
+
 | Command | What it does |
 |---|---|
+| `/inspect` | A list of the reports below; pick one to open it. |
 | `/help` (alias `/?`), `/status`, `/tools`, `/todos` | Help, session facts, tools the agent can use, the agent's checklist. `/todos edit` changes the checklist. |
 | `/harness` | The agent loop's guards and limits. See [Tune the agent loop](#tune-the-agent-loop-harness). |
 | `/settings` | Every setting in groups, applied together. See [Change settings in one place](#change-settings-in-one-place-settings). |

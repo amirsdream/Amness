@@ -66,10 +66,14 @@ test("desktop: every terminal command works, its output arrives in colour, and c
   const d = await boot([]);
   try {
     const cmds = (await d.api("/api/commands")).json; assert.ok(cmds.length > 50); assert.ok(cmds.some((c: any) => c.name === "loop" && c.group));
-    await d.api("/api/send", { text: "/status" });
-    assert.ok(await d.until(() => d.events.some((e) => e.type === "block" && e.block.kind === "raw")));
-    const raw = d.events.find((e) => e.type === "block" && e.block.kind === "raw").block;
-    assert.ok(raw.lines.some((l: string) => /\x1b\[/.test(l)), "command output keeps its colours");
+    await d.api("/api/send", { text: "/status" });                                    // a report opens as a window, not in the conversation
+    assert.ok(await d.until(() => d.events.some((e) => e.type === "dialog" && e.dialog.kind === "text" && e.dialog.title === "Status")));
+    const st = d.events.find((e) => e.type === "dialog" && e.dialog.title === "Status").dialog;
+    assert.ok(st.lines.some((l: string) => /\x1b\[/.test(l)), "command output keeps its colours");
+    assert.ok(!d.events.some((e) => e.type === "block" && e.block.kind === "raw"), "nothing was added to the conversation");
+    await d.api("/api/dialog", { id: st.id, value: null });
+    await d.api("/api/send", { text: "/lsp off" });                                   // a one-line answer is a toast
+    assert.ok(await d.until(() => d.events.some((e) => e.type === "toast" && /language-server diagnostics off/.test(e.text))));
     const s1 = (await d.api("/api/suggest", { text: "/sta", cursor: 4 })).json; assert.equal(s1.token.kind, "slash"); assert.ok(s1.items.some((i: any) => i.label === "/status"));
     const s2 = (await d.api("/api/suggest", { text: "/mode p", cursor: 7 })).json; assert.equal(s2.token.kind, "arg"); assert.ok(s2.items.some((i: any) => i.label === "plan"));
     const s3 = (await d.api("/api/suggest", { text: "read @a.t", cursor: 9 })).json; assert.equal(s3.token.kind, "file"); assert.ok(s3.items.some((i: any) => i.label === "a.txt"));
@@ -300,7 +304,7 @@ test("desktop: configured MCP servers connect for the chat; /mcp lists them in t
     let n; for (let i = 0; i < 200 && (n = await count()) !== 1; i++) await sleep(40);
     assert.equal(n, 1, "the panel counts the connected server");
     await d.api("/api/send", { text: "/mcp" });
-    const lines = () => d.events.filter((e) => e.type === "block" && e.block.kind === "raw").flatMap((e) => e.block.lines as string[]).map((l) => l.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
+    const lines = () => d.events.filter((e) => e.type === "dialog" && e.dialog.kind === "text").flatMap((e) => e.dialog.lines as string[]).map((l) => l.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
     assert.ok(await d.until(() => /mine\s+only you, this project · stdio legacy · 2 tools/.test(lines()), 8000), lines());
   } finally { await d.close(); }
 });

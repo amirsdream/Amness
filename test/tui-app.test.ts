@@ -242,10 +242,14 @@ test("/tokens (alias /cost) shows the context gauge, what fills it, usage and co
   await t.submit("hello"); assert.ok(await t.until(() => t.idle()));
   await t.submit("/tokens"); assert.ok(await t.until(() => t.has("est. cost"), 6000));         // wait for the output itself, not for a fixed delay
   const out = plain(t.text());
-  assert.match(out, /Tokens\n[\s\S]*context window\s+▰*▱+ 0%/); assert.match(out, /what fills it\s+█+/); assert.match(out, /■ system \d+%\s+■ tool defs \d+%/);                           // in a fresh chat the tool definitions are the big slice; tiny parts drop out of the legend
+  assert.match(out, /context window\s+▰*▱+ 0%/); assert.doesNotMatch(out, /^\s*Tokens\s*$/m, "the window title is not repeated inside"); assert.match(out, /what fills it\s+█+/); assert.match(out, /■ system \d+%\s+■ tool defs \d+%/);                           // in a fresh chat the tool definitions are the big slice; tiny parts drop out of the legend
   assert.match(out, /this chat\s+200 in · 40 out · 2 requests/); assert.match(out, /est\. cost\s+unknown for this model/);
   assert.match(plain(t.screen()), /▱+ 0%/);
-  await t.submit("/cost"); assert.ok(await t.until(() => plain(t.text()).split("context window").length >= 3, 6000));   // the alias works
+  assert.equal((t.app.overlay as any)?.title, "Tokens and cost", "a report is a window, not part of the conversation");
+  assert.ok(!t.app.blocks.blocks.some((b) => b.kind === "raw" && b.lines.some((l) => plain(l).includes("context window"))), "nothing was added to the conversation");
+  await t.key(KEY.esc); assert.equal(t.app.overlay, null, "Esc closes it");
+  await t.submit("/cost"); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "Tokens and cost", 6000));   // the alias works
+  await t.type("x"); assert.equal(t.app.overlay, null, "typing closes the window"); assert.equal(t.app.editor.text, "x", "and the key goes into the input"); await t.key(KEY.bs);
   await t.submit("/status"); assert.ok(await t.until(() => /session\s+\d{8}/.test(plain(t.text())), 6000));
   await t.key(KEY.ctrlD);
 });

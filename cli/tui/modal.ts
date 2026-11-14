@@ -90,10 +90,15 @@ export function drawModal(c: Canvas, t: Theme, o: Overlay, frame: number): Modal
   }
 
   if (o instanceof TextOverlay) {
-    const w = Math.min(c.w - 6, 110), inner = w - 4, visible = Math.min(o.lines.length, c.h - 8), h = visible + 4, { x, y } = card(w, h, t.accent2, o.title[0].toUpperCase() + o.title.slice(1), "?");
-    const maxScroll = Math.max(0, o.lines.length - visible); o.scroll = Math.max(0, Math.min(o.scroll, maxScroll));
-    o.lines.slice(o.scroll, o.scroll + visible).forEach((l, i) => c.ansi(x + 2, y + 1 + i, fit(l, inner, t.surface), {}, inner));
-    c.ansi(x + 2, y + h - 2, F(t.faint, (maxScroll ? "↑↓ scroll  ·  " : "") + "any other key closes"), { bg: t.surface }, inner);
+    // As wide as the longest line needs (between 56 and 110 columns, never wider than the screen); long lines wrap instead of being cut.
+    const max = Math.min(c.w - 6, 110), need = Math.max(cellWidth(o.title) + 8, ...o.lines.map((l) => cellWidth(l) + 2), 52) + 4;
+    const w = Math.max(Math.min(56, max), Math.min(max, need)), inner = w - 4;
+    const rows = o.lines.flatMap((l) => (cellWidth(l) <= inner ? [l] : wrapAnsi(l, inner - 1, (/^\s*/.exec(l.replace(/\x1b\[[0-9;]*m/g, ""))?.[0].length ?? 0) + 2)));
+    const visible = Math.min(rows.length, c.h - 8), h = visible + 4, { x, y } = card(w, h, t.accent2, o.title[0].toUpperCase() + o.title.slice(1), o.title.toLowerCase() === "help" ? "?" : "≡");
+    const maxScroll = Math.max(0, rows.length - visible); o.scroll = Math.max(0, Math.min(o.scroll, maxScroll));
+    rows.slice(o.scroll, o.scroll + visible).forEach((l, i) => c.ansi(x + 2, y + 1 + i, fit(l, inner, t.surface), {}, inner));
+    if (maxScroll) c.ansi(x + w - 9, y + h - 1, F(t.faint, ` ${o.scroll + visible}/${rows.length} `), {}, 8);
+    c.ansi(x + 2, y + h - 2, F(t.faint, (maxScroll ? "↑↓ scroll  ·  " : "") + "Esc closes  ·  typing goes to the input"), { bg: t.surface }, inner);
     return { hits, box: { x, y, w, h } };
   }
   void A; void highlightWith; void chip; void frame;

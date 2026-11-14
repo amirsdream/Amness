@@ -11,9 +11,15 @@
   // slash completion: the terminal's own suggestions
   type("/sta"); r.slashMenu = await until(() => $$("#mentionMenu .opt").some((o) => o.textContent.includes("/status")));
   key("Escape"); type("");
-  // a command prints coloured output into the conversation
+  // a report opens as a window with the terminal's colours, not in the conversation; Close shuts it
   type("/status"); key("Enter");
-  r.rawBlock = await until(() => $(".rawout .tl span[style]") !== null);
+  r.reportWindow = await until(() => $(".modal .dialog-term span[style]") !== null) && !$(".rawout");
+  $$(".modal footer .btn.primary").find((b) => b.textContent === "Close")?.click(); r.reportCloses = await until(() => !$(".modal"));
+  // the Inspect button lists the reports; one opens as a window
+  $("#inspectBtn").click(); await sleep(100);
+  const tokItem = $$(".popover .opt").find((o) => o.textContent.includes("Tokens and cost")); r.inspectMenu = !!tokItem; tokItem?.click();
+  r.inspectOpens = await until(() => ($(".modal header")?.textContent ?? "").includes("Tokens and cost"));
+  $$(".modal footer .btn.primary").find((b) => b.textContent === "Close")?.click(); await until(() => !$(".modal"));
   // a turn: while it runs the newest step is open and older ones fold to one line
   type("fix paginate"); key("Enter");
   let sawLiveFold = false, sawLatestOpen = false;

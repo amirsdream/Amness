@@ -127,10 +127,7 @@ export class ApiSessions {
   /** Run a slash command and return what it printed, as plain lines (it is not added to the transcript). */
   async command(id: string, text: string): Promise<string[]> {
     if (!/^\/[a-z-]+(\s|$)/.test(text)) throw Object.assign(new Error("not a command (it starts with /)"), { status: 400 });
-    const a = this.get(id).app, before = a.blocks.blocks.length;
-    await a.runCommand(text);
-    const added = a.blocks.blocks.splice(before); a.blocks.version++;
-    return added.flatMap((b) => (b.kind === "raw" ? b.lines : b.kind === "notice" ? [b.text] : [])).map((x) => strip(x).replace(/\s+$/, "")).filter((x) => x.trim());
+    return (await this.get(id).app.captureCommand(text)).map((x) => strip(x).replace(/\s+$/, "")).filter((x) => x.trim());
   }
   close(id: string) { const l = this.get(id); l.app.exit(0); this.live.delete(id); this.emit({ type: "closed", session: id }); return { ok: true }; }
   closeAll() { for (const l of this.live.values()) l.app.exit(0); this.live.clear(); }

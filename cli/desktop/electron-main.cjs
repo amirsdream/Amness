@@ -76,6 +76,7 @@ app.whenReady().then(() => {
     { label: "View", submenu: [
       { label: "Toggle Sidebar", accelerator: "CmdOrCtrl+B", click: (_m, w) => w?.webContents.send("amness:menu", "sidebar") },
       { label: "Toggle Workspace Panel", accelerator: "CmdOrCtrl+J", click: (_m, w) => w?.webContents.send("amness:menu", "panel") },
+      { label: "Inspect…", accelerator: "CmdOrCtrl+I", click: (_m, w) => w?.webContents.send("amness:menu", "inspect") },
       { label: "Expand All Tool Output", accelerator: "CmdOrCtrl+E", click: (_m, w) => w?.webContents.send("amness:menu", "expand") },
       { label: "Find in Conversation", accelerator: "CmdOrCtrl+F", click: (_m, w) => w?.webContents.send("amness:menu", "find") },
       { label: "Command Palette", accelerator: "CmdOrCtrl+K", click: (_m, w) => w?.webContents.send("amness:menu", "palette") },

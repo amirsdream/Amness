@@ -115,14 +115,15 @@ export class FullView {
     c.fill(0, 0, W, 1, bg);
     const logo = gradientText("✻ Amness", t.gradient), proj = BOLD(F(t.text, basename(app.cwd))), br = app.branch ? F(t.dim, "  ⎇ " + app.branch) : "";
     const left = " " + logo + F(t.border, "  │  ") + proj + br;
-    const modelChip = chip(`${F(brand.color, brand.icon)} ${app.cfg.model}`, t.text, t.surface2), modeChip = chip(MODE_LABEL[mode] ?? mode, t.onAccent, modeCol, true), sideChip = chip(this.showSidebar ? "▥" : "▤", t.dim, t.surface2);
-    const right = modelChip + " " + modeChip + " " + sideChip + " ";
+    const modelChip = chip(`${F(brand.color, brand.icon)} ${app.cfg.model}`, t.text, t.surface2), modeChip = chip(MODE_LABEL[mode] ?? mode, t.onAccent, modeCol, true), sideChip = chip(this.showSidebar ? "▥" : "▤", t.dim, t.surface2), infoChip = chip("≡ inspect", t.dim, t.surface2);
+    const right = infoChip + " " + modelChip + " " + modeChip + " " + sideChip + " ";
     const title = app.session.title ? F(t.faint, ITAL(clipWidth(app.session.title, Math.max(0, W - cellWidth(left) - cellWidth(right) - 6)))) : "";
     const mid = W - cellWidth(left) - cellWidth(right);
     c.ansi(0, 0, fit(left + (mid > 12 && title ? "  " + F(t.border, "·") + " " + title : ""), W - cellWidth(right), bg));
     c.ansi(W - cellWidth(right), 0, right);
     // clickable chips
-    const rw = cellWidth(right), mx = W - rw, mlen = cellWidth(modelChip), dlen = cellWidth(modeChip), slen = cellWidth(sideChip);
+    const ilen = cellWidth(infoChip), rw = cellWidth(right) - ilen - 1, mx = W - rw, mlen = cellWidth(modelChip), dlen = cellWidth(modeChip), slen = cellWidth(sideChip);
+    this.regions.push({ x: mx - ilen - 1, y: 0, w: ilen, h: 1, kind: "inspect", click: () => void app.inspect() });
     this.regions.push({ x: mx, y: 0, w: mlen, h: 1, kind: "model", click: () => void app.runCommand("/model") }, { x: mx + mlen + 1, y: 0, w: dlen, h: 1, kind: "mode", click: () => { app.cycleMode(); app.render(); } },
       { x: mx + mlen + dlen + 2, y: 0, w: slen, h: 1, kind: "sidebar", click: () => { this.showSidebar = !this.showSidebar; this.invalidate(); } });
   }
@@ -303,7 +304,7 @@ export class FullView {
     const { rows, hits } = renderSidebar(sidebarData(this.app, this.panel, t, Date.now()), t, w, h);
     rows.forEach((r, i) => c.put(x0 + 1, y0 + i, r, w - 1));
     for (let i = 0; i < h; i++) c.text(x0, y0 + i, BORDERS[t.frame].v, { fg: t.border, bg: t.surface });
-    for (const hh of hits) if (hh.row < h) this.regions.push({ x: x0, y: y0 + hh.row, w, h: 1, kind: "change", click: () => { if (hh.kind === "step" && hh.step !== undefined) { toggleStep(this.panel, hh.step); this.invalidate(); } else if (hh.blockId !== undefined) this.scrollToBlock(hh.blockId); } });
+    for (const hh of hits) if (hh.row < h) this.regions.push({ x: x0, y: y0 + hh.row, w, h: 1, kind: "change", click: () => { if (hh.kind === "cmd" && hh.cmd) void this.app.runCommand(hh.cmd); else if (hh.kind === "step" && hh.step !== undefined) { toggleStep(this.panel, hh.step); this.invalidate(); } else if (hh.blockId !== undefined) this.scrollToBlock(hh.blockId); } });
   }
 
   // ------------------------------------------------------------------ status line, input, footer

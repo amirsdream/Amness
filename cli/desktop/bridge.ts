@@ -228,11 +228,9 @@ export class DesktopBridge {
   /** Run a terminal command without showing its output in the conversation (Preferences uses this); returns what it said, as plain lines. */
   async command(text: string): Promise<string[]> {
     if (!/^\/[a-z-]+(\s|$)/.test(text)) throw new Error("not a command");
-    const before = this.app.blocks.blocks.length;
-    await this.app.runCommand(text);
-    const added = this.app.blocks.blocks.splice(before); this.app.blocks.version++;
+    const lines = await this.app.captureCommand(text);
     this.fullSync(); this.changed();
-    return added.flatMap((b) => (b.kind === "raw" ? b.lines : b.kind === "notice" ? [b.text] : [])).map((l) => strip(l).trim()).filter(Boolean);
+    return lines.map((l) => strip(l).trim()).filter(Boolean);
   }
 
   // ------------------------------------------------------------------ window -> App

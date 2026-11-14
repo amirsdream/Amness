@@ -28,7 +28,7 @@ for (const [g, names] of Object.entries({
   Quality: "verify check review reviewer lsp report loop diff harness",
   Project: "init pr tools procs bg shell status live",
   Extend: "memory mcp skills agents plugins reload-plugins prompt strategy profile",
-  Interface: "help settings set theme sidebar details diffmode mouse ui notify vim",
+  Interface: "help inspect settings set theme sidebar details diffmode mouse ui notify vim",
 })) for (const n of names.split(" ")) GROUP_MEMBERS[n] = g;
 export const groupOf = (name: string): string => GROUP_MEMBERS[name] ?? "Custom";
 

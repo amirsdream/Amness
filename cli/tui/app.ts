@@ -41,7 +41,7 @@ import { contextWindow, estimateCost, fmtCost, fmtDuration, fmtTokens, priceOf }
 import { Screen, type Out } from "./screen.ts";
 import { SessionStore, forkSession, newSession, rewindFull, snapshot, type SessionData, type Turn } from "./session.ts";
 import { basename } from "node:path";
-import { cellWidth, clipWidth, wrapAnsi } from "./text.ts";
+import { cellWidth, clipWidth, strip, wrapAnsi } from "./text.ts";
 import { assistantBlock, editSummary, footer, helpLines, isFailure, renderDiff, todoList, toolCall, toolHeader, toolResult, userMessage, welcome } from "./view.ts";
 
 type Ev = Event & { agent?: string };
@@ -274,7 +274,58 @@ export class App {
   private notify(level: "info" | "warn" | "error" | "ok", text: string, inline: string[]) { if (this.structured) this.blocks.notice(level, text); else this.out.push(...inline); }
   private addUser(text: string, note?: string, queued?: boolean) { this.blocks.addUser(text, note, queued); this.inlineOnly(userMessage(text, this.width, note ?? "")); }
   say(text: string | string[], paint: (s: string) => string = (s) => s) {
-    for (const t of ([] as string[]).concat(text)) this.commit(["", ...t.split("\n").flatMap((p) => wrapAnsi(paint(p), this.width - 2)).map((l) => "  " + l)]);
+    for (const t of ([] as string[]).concat(text)) {
+      // A slash command's messages do not go into the conversation in the full-screen UI and the desktop: a progress line ("checking…") is a toast at
+      // once, the rest is collected and shown when the command ends (one short line as a toast, more as one window). The inline UI keeps its scrollback.
+      if (this.capture) { this.capture.push(...t.split("\n").map((l) => paint(l))); continue; }
+      if (this.structured && this.cmdOut) {
+        if (/…$/.test(strip(t).trim()) && !t.includes("\n")) { this.toast(strip(t).trim(), "info"); continue; }
+        this.cmdOut.lines.push(...t.split("\n").map((l) => paint(l))); if (paint === red) this.cmdOut.error = true; continue;
+      }
+      this.commit(["", ...t.split("\n").flatMap((p) => wrapAnsi(paint(p), this.width - 2)).map((l) => "  " + l)]);
+    }
+  }
+  /** The list of reports (the header chip in the full-screen UI, /inspect). */
+  inspect() { if (!this.overlay) void this.runCommand("/inspect"); }
+  /** What the running slash command said so far (structured UIs only; see `say`). */
+  private cmdOut: { name: string; lines: string[]; error: boolean } | null = null;
+  /** Set while `captureCommand` runs: what the command says and reports goes here instead of the screen. */
+  private capture: string[] | null = null;
+  /** Run a slash command for an API client (the desktop's Preferences, `amness serve`): nothing is shown, its output comes back as styled lines. */
+  async captureCommand(text: string): Promise<string[]> {
+    const before = this.blocks.blocks.length, cap: string[] = [], prev = this.capture; this.capture = cap;
+    try { await this.runCommand(text); } finally { this.capture = prev; }
+    const added = this.blocks.blocks.splice(before); this.blocks.version++;
+    return [...added.flatMap((b) => (b.kind === "raw" ? b.lines : b.kind === "notice" ? [b.text] : [])), ...cap];
+  }
+  /** A short message that goes away by itself: a toast in the full-screen UI and the desktop, the footer notice inline. */
+  toast(text: string, kind: "info" | "ok" | "warn" | "error" = "info", ms = kind === "error" ? 6000 : 3500) {
+    if (this.remote) { this.remote.toast(kind, text); return; }
+    if (this.full) { this.full.toast(text, kind, ms); this.render(); setTimeout(() => this.render(), ms + 40).unref(); return; }
+    this.note(text, ms);
+  }
+  /**
+   * A report a command shows on request (/tools, /tokens, /status…): a window the user scrolls and closes, never part of the conversation.
+   * Lines are pre-styled; the inline UI uses its pager when the report is taller than the screen.
+   */
+  report(title: string, lines: string[]) {
+    let body = lines[0] === "" ? lines.slice(1) : lines;
+    const first = strip(body[0] ?? "").trim().toLowerCase();
+    if (first && title.toLowerCase().startsWith(first)) body = body.slice(body[1] === "" ? 2 : 1);       // the report's own heading repeats the window title
+    if (this.capture) { this.capture.push(title, ...body); return; }
+    if (!this.structured && body.length > Math.max(6, this.screen.rows - 8)) return this.openPager(body, title, "top");
+    void this.showText(body, title);
+  }
+  /** End of a slash command: show what it said (one short line as a toast, more as a window added to its report if it opened one). */
+  private flushCommand() {
+    const out = this.cmdOut; this.cmdOut = null;
+    if (!out || !out.lines.some((l) => strip(l).trim())) return;
+    const lines = out.lines.map((l) => (l.startsWith("  ") ? l : "  " + l));
+    if (this.overlay instanceof TextOverlay) { this.overlay.lines.push("", ...lines); this.render(); return; }
+    if (this.overlay) { for (const l of out.lines.slice(-2)) this.toast(strip(l).trim(), out.error ? "error" : "info"); return; }
+    const one = out.lines.filter((l) => strip(l).trim());
+    if (one.length === 1 && strip(one[0]).trim().length <= 160) return this.toast(strip(one[0]).trim(), out.error ? "error" : /^\s*[✓●]/.test(strip(one[0])) ? "ok" : "info");
+    void this.showText(lines, out.name);
   }
   note(text: string, ms = 3000) {
     if (this.remote) { this.remote.toast("info", text); return; }
@@ -358,10 +409,11 @@ export class App {
     if (this.keys.pending) this.flushT = setTimeout(() => { for (const k of this.keys.flush()) this.handleKey(k); }, 35);
   };
 
-  handleKey(k: Key) {
+  handleKey(k: Key): void {
     if (k.name === "focusin" || k.name === "focusout") { this.focused = k.name === "focusin"; return; }
     if (k.name === "mouse" && k.mouse) { this.full?.mouse(k.mouse); return; }
     if (this.pager) return this.pager.key(k);
+    if (this.overlay instanceof TextOverlay && (k.name === "paste" || (k.name === "char" && !k.ctrl && !k.alt && k.text !== "q"))) { this.overlay.done(); this.schedule(); return this.handleKey(k); }   // typing closes a report window and goes on into the input box
     if (this.overlay) { this.overlay.key(k); this.schedule(); return; }
     if (this.full?.find && this.full.findKey(k)) return this.render();
     const ed = this.editor;
@@ -505,9 +557,11 @@ export class App {
   async runCommand(text: string) {
     const [name, ...rest] = text.slice(1).split(/\s+/), args = text.slice(1).slice(name.length).trim();
     const c = this.cmds.find((x) => x.name === name || x.alias === name);
-    if (!c) { this.commit(["", `  ${red("✗")} unknown command /${name}. Type /help.`]); return this.render(); }
+    if (!c) { if (this.structured) this.toast(`unknown command /${name}. Type /help.`, "error"); else this.commit(["", `  ${red("✗")} unknown command /${name}. Type /help.`]); return this.render(); }
     void rest;
-    try { await c.run(this, args); } catch (e) { this.commit(["", `  ${red("✗")} /${name}: ${(e as Error).message}`]); }
+    const outer = this.cmdOut; this.cmdOut = { name: c.name, lines: [], error: false };
+    try { await c.run(this, args); } catch (e) { if (this.structured) this.say(`✗ /${name}: ${(e as Error).message}`, red); else this.commit(["", `  ${red("✗")} /${name}: ${(e as Error).message}`]); }
+    this.flushCommand(); this.cmdOut = outer;
     this.render();
   }
   private drainQueue(): string[] {
@@ -737,10 +791,23 @@ export class App {
 
   // ------------------------------------------------------------------ helpers used by commands
   pick<T>(title: string, items: PickItem<T>[], initial = 0, onMove?: (v: T | undefined) => void, preview?: (v: T) => string[]): Promise<T | undefined> {
+    this.flushPending();
     return new Promise((res) => { const p = new PickerOverlay(title, items, (v) => { this.overlay = null; this.render(); res(v); }, initial); if (onMove) p.onMove = onMove; if (preview) p.preview = preview; this.overlay = p; this.render(); });
   }
   askText(prompt: string, o: { secret?: boolean; initial?: string } = {}): Promise<string | undefined> {
+    this.flushPending();
     return new Promise((res) => { this.overlay = new InputOverlay(prompt, (v) => { this.overlay = null; this.render(); res(v); }, o); this.render(); });
+  }
+  /** Before a dialog opens mid-command: what the command said so far, as toasts (the dialog takes the window). */
+  private flushPending() {
+    const out = this.cmdOut; if (!out?.lines.length) return;
+    for (const l of out.lines.filter((x) => strip(x).trim()).slice(-3)) this.toast(strip(l).trim(), out.error ? "error" : "info");
+    out.lines = []; out.error = false;
+  }
+  /** Ask with a body to read and a few answers (a drafted PR, a proposed clean-up). Returns the index, or undefined on Esc. */
+  confirm(title: string, body: string[], question: string, options: { label: string; hint?: string }[]): Promise<number | undefined> {
+    this.flushPending();
+    return new Promise((res) => { this.overlay = new ChoiceOverlay(title, body, question, options, (i) => { this.overlay = null; this.render(); res(i); }); this.render(); });
   }
   showText(lines: string[], title?: string) { return new Promise<void>((res) => { this.overlay = new TextOverlay(lines, () => { this.overlay = null; this.render(); res(); }, title); this.render(); }); }
   openPager(lines: string[], title = "transcript", start: "top" | "bottom" = title === "transcript" ? "bottom" : "top") {

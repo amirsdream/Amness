@@ -24,13 +24,19 @@ export type SidebarData = {
   /** subagents working right now: their brief, what they are doing, how far along */ agents?: { task: string; doing: string; steps: number; secs: number }[];
   tools: number; mcp: number; memory: number; running: boolean; elapsedMs: number; tip?: string;
 };
-export type SideHit = { row: number; kind: "change" | "todos" | "step"; blockId?: number; step?: number };
+export type SideHit = { row: number; kind: "change" | "todos" | "step" | "cmd"; blockId?: number; step?: number; /** a slash command the row opens (its report window) */ cmd?: string };
 const BARS = "▁▂▃▄▅▆▇█";
 
 export function renderSidebar(d: SidebarData, t: Theme, width: number, height: number): { rows: Cell[][]; hits: SideHit[] } {
   const inner = width - 4, out: string[] = [], hits: SideHit[] = [], bg = t.surface;
   const push = (s = "") => out.push(fit("  " + s, width - 1, bg));
-  const head = (title: string, right = "") => { if (out.length > 1) push(); push(right ? split(F(t.faint, BOLD(title)), right, inner, bg) : F(t.faint, BOLD(title))); };
+  /** A section title; with `cmd`, clicking it opens that command's report (marked with ›). */
+  const head = (title: string, right = "", cmd?: string) => {
+    if (out.length > 1) push();
+    if (cmd) hits.push({ row: out.length, kind: "cmd", cmd });
+    const label = F(t.faint, BOLD(title)) + (cmd ? F(t.border, " ›") : "");
+    push(right ? split(label, right, inner, bg) : label);
+  };
   const brand = brandOfModel(d.model, d.provider, t);
 
   push();
@@ -54,7 +60,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
   for (const [r, l] of Object.entries(d.roles ?? {})) push(F(t.faint, clipWidth(`${r} → ${l}`, inner)));
   push(F(t.dim, "⎇ " + (d.branch ?? "no git") + "  ") + F(t.faint, tail(d.cwd, Math.max(6, inner - 4 - (d.branch?.length ?? 6)))));
 
-  head("CONTEXT", d.ctxPct === null ? "" : F(pctColor(d.ctxPct, t), `${d.ctxPct}%`));
+  head("CONTEXT", d.ctxPct === null ? "" : F(pctColor(d.ctxPct, t), `${d.ctxPct}%`), "/tokens");
   const bw = inner, filled = Math.round(((d.ctxPct ?? 0) / 100) * bw);
   push(F(pctColor(d.ctxPct ?? 0, t), "▰".repeat(filled)) + F(t.border, "▱".repeat(Math.max(0, bw - filled))));
   push(F(t.dim, `${fmtTokens(d.ctxUsed)} / ${fmtTokens(d.ctxMax)} tokens`));
@@ -62,7 +68,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
   const mapRow = d.map.filter((m) => m.pct > 0).slice(0, 3).map((m) => F(m.color, "■") + F(t.dim, ` ${m.label} ${m.pct}%`)).join("  ");
   if (mapRow) for (const l of wrapPlain(mapRow, inner)) push(l);
 
-  head("USAGE");
+  head("USAGE", "", "/tokens");
   push(F(t.dim, "in ") + F(t.text, fmtTokens(d.usage.prompt)) + F(t.dim, "  out ") + F(t.text, fmtTokens(d.usage.completion)) + F(t.dim, "  ") + F(t.faint, `${d.usage.calls} req`));
   if (d.budget && Number.isFinite(d.budget.max) && d.budget.used > 0) { const pct = Math.min(100, Math.round((d.budget.used / d.budget.max) * 100)); push(F(t.dim, "budget ") + F(pct >= 90 ? t.err : pct >= 75 ? t.warn : t.text, `${pct}%`) + F(t.faint, ` of ${fmtTokens(d.budget.max)} this turn`)); }
   if (d.usage.cached) push(F(t.dim, "cache ") + F(t.ok, `${Math.round((d.usage.cached / Math.max(1, d.usage.prompt)) * 100)}%`) + (d.usage.reasoning ? F(t.dim, "  reasoning ") + F(t.text, fmtTokens(d.usage.reasoning)) : ""));
@@ -70,7 +76,7 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
 
   if (d.todos.length) {
     const done = d.todos.filter((x) => x.status === "done").length;
-    head("TODOS", F(t.dim, `${done}/${d.todos.length}`));
+    head("TODOS", F(t.dim, `${done}/${d.todos.length}`), "/todos");
     for (const x of d.todos.slice(0, 7)) push((x.status === "done" ? F(t.ok, "✓ ") + F(t.faint, clipWidth(x.content, inner - 2)) : x.status === "in_progress" ? F(t.warn, "▶ ") + BOLD(F(t.text, clipWidth(x.content, inner - 2))) : F(t.faint, "○ ") + F(t.dim, clipWidth(x.content, inner - 2))));
     if (d.todos.length > 7) push(F(t.faint, `+${d.todos.length - 7} more`));
   }
@@ -83,19 +89,20 @@ export function renderSidebar(d: SidebarData, t: Theme, width: number, height: n
     }
     if (d.changes.length > 8) push(F(t.faint, `+${d.changes.length - 8} more files`));
   }
-  if (d.tasks?.length) { head("TASKS"); for (const x of d.tasks.slice(0, 5)) push((x.status === "running" ? F(t.ok, "● ") : x.status === "done" ? F(t.ok, "✓ ") : F(t.faint, "■ ")) + F(t.text, clipWidth(`${x.id} ${x.task}`, inner - 10)) + F(t.faint, ` ${x.status === "running" ? x.secs + "s" : x.changed ? x.changed + " files" : x.status}`)); }
-  if (d.procs?.length) { head("PROCESSES"); for (const p of d.procs.slice(0, 5)) push((p.status === "running" ? F(t.ok, "● ") : F(t.faint, "○ ")) + F(t.text, clipWidth(`${p.id} ${p.name}`, inner - 10)) + F(t.faint, ` ${p.status === "running" ? p.secs + "s" : p.status}`)); }
+  if (d.tasks?.length) { head("TASKS", "", "/bg"); for (const x of d.tasks.slice(0, 5)) push((x.status === "running" ? F(t.ok, "● ") : x.status === "done" ? F(t.ok, "✓ ") : F(t.faint, "■ ")) + F(t.text, clipWidth(`${x.id} ${x.task}`, inner - 10)) + F(t.faint, ` ${x.status === "running" ? x.secs + "s" : x.changed ? x.changed + " files" : x.status}`)); }
+  if (d.procs?.length) { head("PROCESSES", "", "/procs"); for (const p of d.procs.slice(0, 5)) push((p.status === "running" ? F(t.ok, "● ") : F(t.faint, "○ ")) + F(t.text, clipWidth(`${p.id} ${p.name}`, inner - 10)) + F(t.faint, ` ${p.status === "running" ? p.secs + "s" : p.status}`)); }
   if (d.skills?.length) {                                                                                             // which skills exist, and which one the model is using
     const on = d.skills.filter((s) => !s.off), used = on.filter((s) => s.uses > 0);
-    head("SKILLS", F(t.dim, used.length ? `${used.length} in use · ${on.length}` : String(on.length)));
+    head("SKILLS", F(t.dim, used.length ? `${used.length} in use · ${on.length}` : String(on.length)), "/skills");
     const order = [...d.skills].sort((a, b) => Number(a.off) - Number(b.off) || b.uses - a.uses);
     for (const s of order.slice(0, 6)) push((s.off ? F(t.faint, "⊘ ") : s.uses ? F(t.ok, "● ") : F(t.faint, "○ ")) + (s.off ? F(t.faint, clipWidth(s.name, inner - 2)) : s.uses ? BOLD(F(t.text, clipWidth(s.name, inner - 6))) + F(t.dim, ` ×${s.uses}`) : F(t.dim, clipWidth(s.name, inner - 2))));
     if (order.length > 6) push(F(t.faint, `+${order.length - 6} more · /skills`));
   }
-  head("WORKSPACE");
+  head("WORKSPACE", "", "/status");
   if (d.sandbox && d.sandbox !== "off") push(F(t.ok, "⛨ ") + F(t.dim, `sandbox ${d.sandbox}`));
   for (const s of d.pluginStatus ?? []) push(F(t.accent2, "◇ ") + F(t.dim, clipWidth(s, inner - 3)));
-  push(F(t.dim, `${d.tools} tools`) + (d.mcp ? F(t.faint, ` · ${d.mcp} mcp`) : "") + (d.memory ? F(t.faint, ` · ${d.memory} notes`) : ""));
+  hits.push({ row: out.length, kind: "cmd", cmd: "/tools" });
+  push(F(t.dim, `${d.tools} tools`) + (d.mcp ? F(t.faint, ` · ${d.mcp} mcp`) : "") + (d.memory ? F(t.faint, ` · ${d.memory} notes`) : "") + F(t.border, " ›"));
   if (d.tip) { push(); for (const l of wrap(d.tip, inner, 3)) push(F(t.faint, ITAL(l))); }
 
   const rows = out.slice(0, height).map((r) => parseAnsi(r));
