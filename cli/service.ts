@@ -29,7 +29,7 @@ function stableNode(): string {
 }
 /** What install writes and runs on this platform, for the given `amness serve` arguments. Pure, so it can be shown (--dry-run) and tested. */
 export function servicePlan(args: string[], o: { platform?: NodeJS.Platform; node?: string; script?: string; cwd?: string; env?: NodeJS.ProcessEnv; uid?: number } = {}): ServicePlan {
-  const platform = o.platform ?? process.platform, node = o.node ?? stableNode(), script = resolve(o.script ?? process.argv[1]), cwd = o.cwd ?? process.cwd(), env = o.env ?? process.env;
+  const platform = o.platform ?? process.platform, node = o.node ?? stableNode(), script = ((p: string) => ((platform === "win32" ? win32 : posix).isAbsolute(p) ? p : resolve(p)))(o.script ?? process.argv[1]), cwd = o.cwd ?? process.cwd(), env = o.env ?? process.env;
   const argv = [node, "--no-warnings", script, "serve", ...args];
   const keep: Record<string, string> = { PATH: env.PATH ?? "/usr/bin:/bin", NO_COLOR: "1", ...(env.AMNESS_HOME && { AMNESS_HOME: env.AMNESS_HOME }), ...(env.HOME && { HOME: env.HOME }) };
   const pj = platform === "win32" ? win32.join : posix.join, hd = env.HOME ?? homedir();                                 // paths for the target system, wherever the plan is made
