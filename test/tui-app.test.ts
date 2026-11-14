@@ -246,7 +246,7 @@ test("/tokens (alias /cost) shows the context gauge, what fills it, usage and co
   assert.match(out, /this chat\s+200 in · 40 out · 2 requests/); assert.match(out, /est\. cost\s+unknown for this model/);
   assert.match(plain(t.screen()), /▱+ 0%/);
   assert.equal((t.app.overlay as any)?.title, "Tokens and cost", "a report is a window, not part of the conversation");
-  assert.ok(!t.app.blocks.blocks.some((b) => b.kind === "raw" && b.lines.some((l) => plain(l).includes("context window"))), "nothing was added to the conversation");
+  assert.ok(!t.app.blocks.blocks.some((b) => b.kind === "raw" && b.lines.some((l) => /context window\s+▰*▱/.test(plain(l)))), "nothing was added to the conversation");   // the gauge line itself: a start-up tip may also mention "context window"
   await t.key(KEY.esc); assert.equal(t.app.overlay, null, "Esc closes it");
   await t.submit("/cost"); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "Tokens and cost", 6000));   // the alias works
   await t.type("x"); assert.equal(t.app.overlay, null, "typing closes the window"); assert.equal(t.app.editor.text, "x", "and the key goes into the input"); await t.key(KEY.bs);
