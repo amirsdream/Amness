@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.1 (2026-11-14)
 
 - **Fixed: the agent could kill Amness while freeing a port.** `lsof -ti:8000 | xargs kill -9` stops every program connected to port 8000, clients included, and Amness is one of them when its model server listens on that port (a llama.cpp server on `:8000`). The safety floor now refuses this in every mode, as well as `fuser -k <port>/tcp` and `pkill node` / `killall node`, and tells the model the safe form: `lsof -ti tcp:PORT -sTCP:LISTEN | xargs kill`.
 
