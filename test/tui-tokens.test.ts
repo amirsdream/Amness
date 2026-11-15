@@ -33,7 +33,7 @@ test("tokenReport: gauge, stacked map with legend, sparkline, usage, cost, advic
   assert.match(txt, /context window\s+▰{1,}▱+ 3%\s+30k of 1\.0M/); assert.match(txt, /tool output \d+%/); assert.match(txt, /■ system \d+%/);
   assert.match(txt, /one read_file result is ~\d+k tokens/); assert.match(txt, /prompt size\/req\s+[▁-█]{4}\s+4 requests, latest 120k/);
   assert.match(txt, /500k in · 20k out · 10 requests \(avg 50k in\)/); assert.match(txt, /est\. cost\s+\$2\.40\s+at \$4\/\$20 per M tokens/);
-  assert.match(txt, /turn budget\s+▰+▱+ 80k of 300k/); assert.match(txt, /mostly tool output/);
+  assert.match(txt, /turn budget\s+▰+▱+ 27%\s+80k of 300k/); assert.match(txt, /mostly tool output/);
   assert.ok(lo.every((l) => cellWidth(l) <= 100));
   assert.match(tokenReport({ ...base, lastPrompt: 700_000 }).map(strip).join("\n"), /getting full: \/compact/);
   assert.match(tokenReport({ ...base, lastPrompt: 950_000 }).map(strip).join("\n"), /nearly full: run \/compact now/);

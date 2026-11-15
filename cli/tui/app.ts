@@ -34,6 +34,7 @@ import { KeyParser, PASTE_OFF, PASTE_ON, type Key } from "./keys.ts";
 import { renderMarkdown, takeCompleteBlocks } from "./markdown.ts";
 import { expandMentions, attachedNote } from "./mentions.ts";
 import { copyToClipboard } from "./clipboard.ts";
+import { plainBlocks, renderBlocks, type ReportBlock } from "./report.ts";
 import { FIXED, ToolPickerOverlay, fmtTok, groupTools, picksFrom, totals, type PickGroup, type PickResult, type PickState } from "./toolpicker.ts";
 import { LongTextOverlay, ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, editKey, type ChoiceDetail, type Overlay, type PickItem } from "./overlays.ts";
 import { Pager, transcriptLines } from "./pager.ts";
@@ -334,13 +335,17 @@ export class App {
    * A report a command shows on request (/tools, /tokens, /status…): a window the user scrolls and closes, never part of the conversation.
    * Lines are pre-styled; the inline UI uses its pager when the report is taller than the screen.
    */
-  report(title: string, lines: string[]) {
-    let body = lines[0] === "" ? lines.slice(1) : lines;
-    const first = strip(body[0] ?? "").trim().toLowerCase();
-    if (first && title.toLowerCase().startsWith(first)) body = body.slice(body[1] === "" ? 2 : 1);       // the report's own heading repeats the window title
-    if (this.capture) { this.capture.push(title, ...body); return; }
+  report(title: string, content: string[] | ReportBlock[]) {
+    const blocks = content.length && typeof content[0] === "object" ? (content as ReportBlock[]) : undefined;
+    let body = blocks ? renderBlocks(blocks, this.full ? Math.min(this.screen.cols - 10, 106) : this.width) : (content as string[]);   // the full-screen window is narrower than the screen: wrap once, at its width
+    if (!blocks) {
+      if (body[0] === "") body = body.slice(1);
+      const first = strip(body[0] ?? "").trim().toLowerCase();
+      if (first && title.toLowerCase().startsWith(first)) body = body.slice(body[1] === "" ? 2 : 1);       // the report's own heading repeats the window title
+    }
+    if (this.capture) { this.capture.push(title, ...(blocks ? plainBlocks(blocks) : body)); return; }
     if (!this.structured && body.length > Math.max(6, this.screen.rows - 8)) return this.openPager(body, title, "top");
-    void this.showText(body, title);
+    void this.showText(body, title, { blocks });
   }
   /** End of a slash command: show what it said (one short line as a toast, more as a window added to its report if it opened one). */
   private flushCommand() {
@@ -351,7 +356,7 @@ export class App {
     if (this.overlay) { for (const l of out.lines.slice(-2)) this.toast(strip(l).trim(), out.error ? "error" : "info"); return; }
     const one = out.lines.filter((l) => strip(l).trim());
     if (one.length === 1 && strip(one[0]).trim().length <= 160) return this.toast(strip(one[0]).trim(), out.error ? "error" : /^\s*[✓●]/.test(strip(one[0])) ? "ok" : "info");
-    void this.showText(lines, out.name);
+    void this.showText(lines, out.name, { prose: true });
   }
   note(text: string, ms = 3000) {
     if (this.remote) { this.remote.toast("info", text); return; }
@@ -835,7 +840,8 @@ export class App {
     this.flushPending();
     return new Promise((res) => { this.overlay = new ChoiceOverlay(title, body, question, options, (i) => { this.overlay = null; this.render(); res(i); }); this.render(); });
   }
-  showText(lines: string[], title?: string) { return new Promise<void>((res) => { this.overlay = new TextOverlay(lines, () => { this.overlay = null; this.render(); res(); }, title); this.render(); }); }
+  /** A window of text. `blocks`: the same report as structured content (the desktop draws it natively); `prose`: messages, not a listing (no monospace there). */
+  showText(lines: string[], title?: string, o: { blocks?: ReportBlock[]; prose?: boolean } = {}) { return new Promise<void>((res) => { const t = new TextOverlay(lines, () => { this.overlay = null; this.render(); res(); }, title); t.blocks = o.blocks; t.prose = o.prose; this.overlay = t; this.render(); }); }
   openPager(lines: string[], title = "transcript", start: "top" | "bottom" = title === "transcript" ? "bottom" : "top") {
     if (this.structured) { void this.showText(lines, title); return; }                 // the full-screen UI and the desktop show these as a scrollable dialog
     this.screen.enterAlt();

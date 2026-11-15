@@ -13,7 +13,7 @@
   key("Escape"); type("");
   // a report opens as a window with the terminal's colours, not in the conversation; Close shuts it
   type("/status"); key("Enter");
-  r.reportWindow = await until(() => $(".modal .dialog-term span[style]") !== null) && !$(".rawout");
+  r.reportWindow = await until(() => $(".modal .report .rkv .k") !== null) && !$(".modal .dialog-term") && !$(".rawout");   // drawn as part of the app (key/value rows), not as terminal text
   $$(".modal footer .btn.primary").find((b) => b.textContent === "Close")?.click(); r.reportCloses = await until(() => !$(".modal"));
   // the Inspect button lists the reports; one opens as a window
   $("#inspectBtn").click(); await sleep(100);

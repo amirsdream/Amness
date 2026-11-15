@@ -1,7 +1,8 @@
 // "Where did my tokens go?": estimates what fills the context window and renders a compact report.
 import type { Message } from "../../src/index.ts";
 import { contextWindow, estimateCost, fmtCost, fmtTokens, priceOf } from "./pricing.ts";
-import { bold, dimmed, fg, gauge, gaugeColor, palette, sparkline, stackedBar, type RGB } from "./theme.ts";
+import { bold, palette, type RGB } from "./theme.ts";
+import { renderBlocks, type ReportBlock } from "./report.ts";
 
 export type ContextMap = { parts: { key: "system" | "you" | "assistant" | "tools" | "defs"; label: string; tokens: number; color: RGB }[]; total: number; biggest?: { name: string; tokens: number } };
 
@@ -42,29 +43,32 @@ export type ReportInput = {
   /** context window in tokens; default: the known size for the model */ window?: number; lastPrompt: number; turnTokens: number; turnBudget: number; width: number; /** size of the tool definitions sent with every request */ toolDefChars?: number;
 };
 
-/** The /tokens panel. */
-export function tokenReport(r: ReportInput): string[] {
+/** The /tokens report as structured blocks (cli/tui/report.ts): the terminal and the desktop each draw it in their own style. */
+export function tokenBlocks(r: ReportInput): ReportBlock[] {
   const win = r.window ?? contextWindow(r.model), used = r.lastPrompt || contextMap(r.messages, 0, r.toolDefChars).total, pct = Math.min(100, Math.round((used / win) * 100));
-  const map = contextMap(r.messages, r.lastPrompt, r.toolDefChars), barW = Math.max(16, Math.min(48, r.width - 12));
-  const sb = stackedBar(map.parts.map((p) => ({ label: p.label, value: p.tokens, color: p.color })), barW);
+  const map = contextMap(r.messages, r.lastPrompt, r.toolDefChars), total = Math.max(1, map.parts.reduce((n, p) => n + p.tokens, 0));
   const cached = r.usage.cached ?? 0, reasoning = r.usage.reasoning ?? 0;
   const cost = estimateCost(r.model, r.usage.prompt, r.usage.completion, cached), p = priceOf(r.model);
   const perReq = r.usage.calls ? Math.round(r.usage.prompt / r.usage.calls) : 0;
-  const lines = [
-    "", `  ${bold("Tokens")}`,
-    `  ${dimmed("context window")}  ${gauge(pct, 20)} ${fg(gaugeColor(pct), pct + "%")}  ${dimmed(`${fmtTokens(used)} of ${fmtTokens(win)}`)}`,
-    `  ${dimmed("what fills it ")}  ${sb.bar}`, `                  ${sb.legend.join("   ")}`,
+  const out: ReportBlock[] = [
+    { kind: "meter", label: "context window", pct, detail: `${fmtTokens(used)} of ${fmtTokens(win)}` },
+    { kind: "segments", label: "what fills it", parts: map.parts.map((x) => ({ label: x.label, pct: Math.round((x.tokens / total) * 100), color: (x.color[0] << 16) | (x.color[1] << 8) | x.color[2] })) },
   ];
-  if (map.biggest && map.biggest.tokens > 800) lines.push(`  ${dimmed("biggest item   ")}  ${fg(palette.warn, "◆")} one ${map.biggest.name} result is ~${fmtTokens(map.biggest.tokens)} tokens`);
-  if (r.series.length) lines.push(`  ${dimmed("prompt size/req")}  ${sparkline(r.series, 32)}  ${dimmed(`${r.series.length} requests, latest ${fmtTokens(r.series.at(-1)!)}`)}`);
-  if (cached) lines.push(`  ${dimmed("prompt cache   ")}  ${fg(palette.ok, Math.round((cached / Math.max(1, r.usage.prompt)) * 100) + "%")} of input served from cache ${dimmed(`(${fmtTokens(cached)} tokens at ~10% price)`)}`);
-  if (reasoning) lines.push(`  ${dimmed("reasoning      ")}  ${fmtTokens(reasoning)} hidden reasoning tokens ${dimmed(`(${Math.round((reasoning / Math.max(1, r.usage.completion)) * 100)}% of output)`)}`);
-  lines.push(
-    `  ${dimmed("this chat      ")}  ${fmtTokens(r.usage.prompt)} in · ${fmtTokens(r.usage.completion)} out · ${r.usage.calls} request${r.usage.calls === 1 ? "" : "s"}${perReq ? dimmed(` (avg ${fmtTokens(perReq)} in)`) : ""}`,
-    `  ${dimmed("est. cost      ")}  ${cost === null ? dimmed("unknown for this model") : bold(fmtCost(cost))}${p ? dimmed(`  at $${p[1]}/$${p[2]} per M tokens${cached ? ", cached input at 10%" : ""}`) : ""}`,
-  );
-  if (r.turnBudget && r.turnTokens) { const b = Math.min(100, Math.round((r.turnTokens / r.turnBudget) * 100)); lines.push(`  ${dimmed("turn budget    ")}  ${gauge(b, 20)} ${fmtTokens(r.turnTokens)} of ${fmtTokens(r.turnBudget)}`); }
-  const advice = pct >= 85 ? `${fg(palette.err, "!")} nearly full: run /compact now, or /clear to start fresh` : pct >= 60 ? `${fg(palette.warn, "↯")} getting full: /compact will summarise and free most of it` : map.parts[0].key === "tools" && map.parts[0].tokens > used * 0.5 ? `${fg(palette.read, "i")} mostly tool output: ask for narrower reads (line ranges, grep) to keep it lean` : "";
-  if (advice) lines.push("", `  ${advice}`);
-  return lines;
+  if (map.biggest && map.biggest.tokens > 800) out.push({ kind: "kv", rows: [{ key: "biggest item", value: `one ${map.biggest.name} result is ~${fmtTokens(map.biggest.tokens)} tokens`, tone: "warn" }] });
+  if (r.series.length) out.push({ kind: "spark", label: "prompt size/req", values: r.series, detail: `${r.series.length} requests, latest ${fmtTokens(r.series.at(-1)!)}` });
+  const rows: Extract<ReportBlock, { kind: "kv" }>["rows"] = [];
+  if (cached) rows.push({ key: "prompt cache", value: `${Math.round((cached / Math.max(1, r.usage.prompt)) * 100)}% of input served from cache`, tone: "ok", hint: `${fmtTokens(cached)} tokens at ~10% price` });
+  if (reasoning) rows.push({ key: "reasoning", value: `${fmtTokens(reasoning)} hidden reasoning tokens (${Math.round((reasoning / Math.max(1, r.usage.completion)) * 100)}% of output)` });
+  rows.push({ key: "this chat", value: `${fmtTokens(r.usage.prompt)} in · ${fmtTokens(r.usage.completion)} out · ${r.usage.calls} request${r.usage.calls === 1 ? "" : "s"}${perReq ? ` (avg ${fmtTokens(perReq)} in)` : ""}` });
+  const price = p ? "at " + "$" + p[1] + "/" + "$" + p[2] + " per M tokens" + (cached ? ", cached input at 10%" : "") : undefined;
+  rows.push(cost === null ? { key: "est. cost", value: "unknown for this model", tone: "muted" } : { key: "est. cost", value: fmtCost(cost), hint: price });
+  out.push({ kind: "kv", rows });
+  if (r.turnBudget && r.turnTokens) out.push({ kind: "meter", label: "turn budget", pct: Math.min(100, Math.round((r.turnTokens / r.turnBudget) * 100)), detail: `${fmtTokens(r.turnTokens)} of ${fmtTokens(r.turnBudget)}` });
+  const advice = pct >= 85 ? { text: "! nearly full: run /compact now, or /clear to start fresh", tone: "err" as const } : pct >= 60 ? { text: "↯ getting full: /compact will summarise and free most of it", tone: "warn" as const } : map.parts[0].key === "tools" && map.parts[0].tokens > used * 0.5 ? { text: "i mostly tool output: ask for narrower reads (line ranges, grep) to keep it lean", tone: "accent" as const } : undefined;
+  if (advice) out.push({ kind: "note", ...advice });
+  return out;
 }
+
+/** The /tokens report as terminal lines. */
+export function tokenReport(r: ReportInput): string[] { return ["", `  ${bold("Tokens")}`, ...renderBlocks(tokenBlocks(r), r.width)]; }
+

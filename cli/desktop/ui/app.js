@@ -768,13 +768,50 @@ function showDialog(d) {
       h("footer", {}, h("span", { class: "muted small", text: "⌘/Ctrl+Enter saves · Esc cancels" }), h("span", { class: "spacer" }), h("button", { class: "btn", onclick: () => answer(d.id, null) }, "Cancel"), h("button", { class: "btn primary", onclick: ok }, "Save"))), { sticky: true });
     setTimeout(() => ta.focus(), 40); dialogOpen = d.id;
   } else if (d.kind === "text") {
-    const m = h("div", { class: "modal wide" }, h("header", {}, h("span", { text: stripAnsi(d.title).replace(/^./, (c) => c.toUpperCase()) }), h("span", { class: "spacer" }), h("button", { class: "copy", onclick: () => copy(d.lines.map(stripAnsi).join("\n")) }, "Copy")),
-      h("div", { class: "body" }, ansiLines(d.lines, "term dialog-term")), h("footer", {}, h("span", { class: "spacer" }), h("button", { class: "btn primary", autofocus: true, onclick: () => answer(d.id, null) }, "Close")));
+    // A report with structured blocks is drawn as part of the app (key/value rows, tables, meters, code); messages read as text; only listings
+    // that are terminal text by nature (help, a diff, a transcript) keep the terminal look.
+    const content = d.blocks ? reportView(d.blocks) : d.prose ? h("div", { class: "rprose" }, d.lines.filter((l, i, a) => l.trim() || (i && a[i - 1].trim())).map((l) => h("p", {}, ansi(l.replace(/^ {2}/, ""))))) : ansiLines(d.lines, "term dialog-term");
+    const plain = d.plain ?? d.lines.map(stripAnsi);
+    const m = h("div", { class: `modal ${d.blocks && !d.blocks.some((b) => b.kind === "code" || b.kind === "table") ? "" : "wide"}` }, h("header", {}, h("span", { text: stripAnsi(d.title).replace(/^./, (c) => c.toUpperCase()) }), h("span", { class: "spacer" }), h("button", { class: "copy", onclick: () => copy(plain.join("\n")) }, "Copy")),
+      h("div", { class: "body" }, content), h("footer", {}, h("span", { class: "spacer" }), h("button", { class: "btn primary", autofocus: true, onclick: () => answer(d.id, null) }, "Close")));
     m.addEventListener("keydown", (e) => { if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); answer(d.id, null); } });
     modal(m, { onCancel: () => answer(d.id, null) }); dialogOpen = d.id;
   } else if (d.kind === "tools") {
     showToolPicker(d);
   }
+}
+/** A report's blocks (cli/tui/report.ts) as part of the app: key/value rows, tables, lists with status dots, meters, code with highlighting. */
+const TONE = { ok: "t-ok", warn: "t-warn", err: "t-err", accent: "t-accent", muted: "t-muted" };
+function jsonView(text) {
+  const out = h("pre", { class: "rcode" }), re = /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b/g;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) out.append(text.slice(last, m.index));
+    if (m[1]) { out.append(h("span", { class: m[2] ? "j-key" : "j-str", text: m[1] })); if (m[2]) out.append(m[2]); }
+    else out.append(h("span", { class: m[3] ? "j-num" : "j-lit", text: m[0] }));
+    last = m.index + m[0].length;
+  }
+  out.append(text.slice(last)); return out;
+}
+function reportView(blocks) {
+  const out = h("div", { class: "report" });
+  let kv = null;                                                                  // neighbouring rows (kv, meter, segments, spark) share one grid
+  const grid = () => (kv ??= out.appendChild(h("div", { class: "rkv" })));
+  const row = (k, v) => { const g = grid(); g.append(h("div", { class: "k", text: k }), h("div", { class: "v" }, v)); };
+  const title = (t) => { if (t) { kv = null; out.append(h("h4", { class: "rtitle", text: t })); } };
+  for (const b of blocks) {
+    if (b.kind === "kv") { title(b.title); for (const r of b.rows) row(r.key, [h("span", { class: TONE[r.tone] || "", text: r.value }), r.hint ? h("span", { class: "hint", text: r.hint }) : null]); continue; }
+    if (b.kind === "meter") { const cls = b.pct >= 85 ? "t-err" : b.pct >= 60 ? "t-warn" : "t-ok"; row(b.label, h("div", { class: "rmeter" }, h("div", { class: "bar" }, h("div", { class: `fill ${cls}`, style: `width:${Math.max(1, b.pct)}%` })), h("b", { class: cls, text: `${b.pct}%` }), b.detail ? h("span", { class: "hint", text: b.detail }) : null)); continue; }
+    if (b.kind === "segments") { row(b.label, h("div", {}, h("div", { class: "ctxbar" }, b.parts.filter((p) => p.pct > 0).map((p) => h("span", { title: `${p.label} ${p.pct}%`, style: `width:${p.pct}%;background:${themeColor(p.color)}` }))), h("div", { class: "ctxmap" }, b.parts.filter((p) => p.pct > 0).map((p) => h("div", { class: "cm" }, h("span", { class: "sw", style: `background:${themeColor(p.color)}` }), h("span", { text: p.label }), h("span", { class: "faint", text: `${p.pct}%` })))))); continue; }
+    if (b.kind === "spark") { row(b.label, h("div", { class: "rmeter" }, spark(b.values.slice(-48), 220, 22), b.detail ? h("span", { class: "hint", text: b.detail }) : null)); continue; }
+    kv = null;
+    if (b.kind === "table") { title(b.title); const dot = b.rows.some((r) => r.tone); out.append(h("div", { class: "rtable-wrap" }, h("table", { class: "rtable" }, h("thead", {}, h("tr", {}, (dot ? [""] : []).concat(b.columns).map((c) => h("th", { text: c })))), h("tbody", {}, b.rows.map((r) => h("tr", {}, ...(dot ? [h("td", { class: "dotc" }, r.tone ? h("span", { class: `rdot ${TONE[r.tone]}` }) : null)] : []), ...r.cells.map((c, i) => h("td", { class: i === 0 ? "first" : "", text: c })))))))); }
+    else if (b.kind === "list") { title(b.title); const l = h("div", { class: "rlist" }); if (!b.items.length && b.empty) l.append(h("div", { class: "muted small pad", text: b.empty })); for (const it of b.items) l.append(h("div", { class: "ritem" }, h("span", { class: `rdot ${TONE[it.tone || "muted"]}` }), h("div", { class: "rbody" }, h("div", { class: "rlabel" }, h("span", { text: it.label }), it.badge ? h("span", { class: "rbadge", text: it.badge }) : null), it.detail ? h("div", { class: "rdetail", text: it.detail }) : null))); out.append(l); }
+    else if (b.kind === "text") { title(b.title); out.append(h("div", { class: `rtext ${TONE[b.tone] || ""}` }, b.text.split("\n\n").map((p) => h("p", { text: p })))); }
+    else if (b.kind === "code") { title(b.title); out.append(b.lang === "json" ? jsonView(b.text) : h("pre", { class: "rcode", text: b.text })); }
+    else if (b.kind === "note") out.append(h("div", { class: `rnote ${TONE[b.tone] || ""}`, text: b.text }));
+  }
+  return out;
 }
 /** The tool picker (/tools): groups of tools, each with an On / On demand / Off switch, a search box, the cost of the tool list, and where to save. */
 const TP_STATES = [["on", "On", "Listed in every request"], ["demand", "On demand", "Found with tool_search when the model needs it: almost free until then"], ["off", "Off", "Never offered or run"]];

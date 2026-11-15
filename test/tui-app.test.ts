@@ -715,7 +715,7 @@ test("/models takes references to other providers and saved servers, refuses unk
   await t.submit("/models explore server:lab"); await t.settle();
   assert.ok(t.has("explore → server:lab/qwen-35b")); assert.equal(t.app.cfg.models?.explore, "server:lab"); assert.ok(t.app.roles.explore);
   await t.submit("/models"); await t.settle();
-  assert.ok(t.has(/explore\s+server:lab\/qwen-35b/)); assert.ok(t.has(/quarantine\s+\(main model\)/));
+  assert.ok(t.has(/explore\s+server:lab\/qwen-35b/)); assert.ok(t.has(/quarantine\s+main model/));
   const { sidebarData } = await import("../cli/tui/panel.ts"), { newPanelState } = await import("../cli/tui/panel.ts"), { getTheme } = await import("../cli/tui/themes.ts");
   assert.deepEqual(sidebarData(t.app, newPanelState(), getTheme(), Date.now()).roles, { explore: "server:lab/qwen-35b" });   // the terminal sidebar and the desktop panel both read this
   for (const front of ["terminal", "desktop"] as const) {
@@ -823,7 +823,7 @@ test("/plugins add shows what a plugin brings and asks where; hooks need their o
     assert.ok(await t.until(() => t.has("installed deploy-tools (this project)")), t.text());
     assert.ok(existsSync(join(t.dir, ".amness/skills/deploy/SKILL.md")) && !existsSync(join(t.dir, ".amness/hooks.json")));
     await t.submit("/plugins"); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "Plugins"));
-    assert.match(plain((t.app.overlay as any).lines.join("\n")), /deploy-tools\s+this project · .*plug-src[\s\S]*skills deploy/); await t.key(KEY.esc);
+    assert.match(plain((t.app.overlay as any).lines.join("\n")), /deploy-tools[\s\S]*this project[\s\S]*skills deploy[\s\S]*plug-src/); await t.key(KEY.esc);
     await t.submit("/plugins remove deploy-tools"); assert.ok(await t.until(() => t.has("Remove deploy-tools and everything it added?")));
     await t.key(KEY.down); await t.key(KEY.enter);
     assert.ok(await t.until(() => t.has("removed deploy-tools"))); assert.ok(!existsSync(join(t.dir, ".amness/skills/deploy")));

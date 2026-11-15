@@ -138,6 +138,8 @@ export class LongTextOverlay implements Overlay {
 }
 export class TextOverlay implements Overlay {
   lines: string[]; done: () => void; scroll = 0; title: string;
+  /** The same content as structured blocks (cli/tui/report.ts), for front ends that draw it natively; `prose` marks messages rather than a listing. */
+  blocks?: import("./report.ts").ReportBlock[]; prose?: boolean;
   constructor(lines: string[], done: () => void, title = "Help") { this.lines = lines; this.done = done; this.title = title; }
   render(): Drawn { return { lines: [...this.lines, dim("  Esc closes · typing goes to the input")] }; }
   key(k?: Key) {

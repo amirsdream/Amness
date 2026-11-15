@@ -14,6 +14,7 @@ import type { Block } from "../tui/blocks.ts";
 import { groupOf } from "../tui/complete.ts";
 import { ChoiceOverlay, InputOverlay, LongTextOverlay, PickerOverlay, TextOverlay } from "../tui/overlays.ts";
 import { ToolPickerOverlay, type PickResult } from "../tui/toolpicker.ts";
+import { plainBlocks, type ReportBlock } from "../tui/report.ts";
 import { harnessView } from "../tui/harnessinfo.ts";
 import { newPanelState, sidebarData, toggleStep, type PanelState } from "../tui/panel.ts";
 import { previewLines } from "../tui/session.ts";
@@ -30,7 +31,7 @@ export type DialogView =
   | { id: number; kind: "choice"; title: string; body: string[]; question: string; options: { label: string; hint?: string }[]; detail?: ChoiceOverlay["detail"] }
   | { id: number; kind: "pick"; title: string; items: { label: string; hint?: string }[]; sel: number; preview: boolean }
   | { id: number; kind: "input"; prompt: string; secret: boolean; initial: string; hint: string }
-  | { id: number; kind: "text"; title: string; lines: string[] }
+  | { id: number; kind: "text"; title: string; lines: string[]; blocks?: ReportBlock[]; plain?: string[]; prose?: boolean }
   | { id: number; kind: "longtext"; title: string; text: string; hint: string }
   /** The tool picker: groups of tools, each on, on demand or off; the answer is { states: { name: state }, scope } or null. */
   | { id: number; kind: "tools"; title: string; groups: { id: string; label: string; kind: string; tools: { name: string; description: string; tokens: number; state: string; def: string }[] }[] };
@@ -59,7 +60,7 @@ export function dialogView(o: object, id: number): DialogView | undefined {
   if (o instanceof ChoiceOverlay) return { id, kind: "choice", title: o.title, body: o.body, question: o.question, options: o.options.map((x) => ({ label: x.label, hint: x.hint })), detail: o.detail };
   if (o instanceof PickerOverlay) return { id, kind: "pick", title: o.title, items: o.items.map((x) => ({ label: x.label, hint: x.hint })), sel: o.sel, preview: !!o.preview };
   if (o instanceof InputOverlay) return { id, kind: "input", prompt: o.prompt, secret: o.secret, initial: o.ed.text, hint: o.hint };
-  if (o instanceof TextOverlay) return { id, kind: "text", title: o.title, lines: o.lines };
+  if (o instanceof TextOverlay) return { id, kind: "text", title: o.title, lines: o.lines, ...(o.blocks && { blocks: o.blocks, plain: plainBlocks(o.blocks) }), ...(o.prose && { prose: true }) };
   if (o instanceof LongTextOverlay) return { id, kind: "longtext", title: o.title, text: o.text, hint: o.hint };
   if (o instanceof ToolPickerOverlay) return { id, kind: "tools", title: o.title, groups: o.groups.map((g) => ({ id: g.id, label: g.label, kind: g.kind, tools: g.tools.map((t) => ({ name: t.name, description: t.description, tokens: t.tokens, state: t.state, def: t.def })) })) };
   return undefined;

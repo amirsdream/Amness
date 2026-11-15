@@ -16,6 +16,7 @@ import { CLAUDE_MODELS, OPENAI_MODELS, PROVIDERS, connections, forgetServer, key
 import { noStore, where } from "../keystore.ts";
 import { fetchModels, prefixCacheRate } from "../models.ts";
 import { argOptions } from "./argcomplete.ts";
+import { GROUP_ORDER, groupOf } from "./complete.ts";
 import { STAGE_GLYPH, roundOf, stagesOf } from "./looppanel.ts";
 import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
@@ -26,7 +27,8 @@ import { execFile } from "node:child_process";
 import { caseFromWorkspace, commitLog, createPr, currentBranch, defaultBase, diffForReview, draftPr, hasUpstream, pushBranch, reviewWork, formatMining, Hooks, Permissions, SANDBOX_MODES, cacheWaste, pluginFingerprint, projectConfigFingerprint, sandboxHelp, sandboxKind, type SandboxMode } from "../../src/index.ts";
 import { isTrustedDir, loadState, saveState } from "../state.ts";
 import { KNOWN_CATALOGS, addCatalog, catalogEntries, describeBundle, fetchEntry, fetchExtension, inspectBundle, installBundle, listCatalogs, listInstalled, refreshCatalogs, removeCatalog, removeInstalled, type ExtScope, type ExtSource, type Fetched, type Installed } from "../extensions.ts";
-import { tokenReport } from "./tokens.ts";
+import { tokenBlocks } from "./tokens.ts";
+import type { ReportBlock } from "./report.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
 import { helpLines, renderDiff, toolCall, todoList } from "./view.ts";
 
@@ -116,6 +118,11 @@ function jsonLines(v: unknown, max = 400_000): string[] {
   return cut ? [...lines, "", yellow(`… cut at ${max.toLocaleString()} characters: /context export writes all of it to a file`)] : lines;
 }
 const clock = (t: number) => new Date(t).toTimeString().slice(0, 8);
+/** A value as a JSON code block (with a title), cut at `max` characters with a note so a huge request stays usable. */
+function jsonBlocks(v: unknown, title?: string, max = 400_000): ReportBlock[] {
+  const text = JSON.stringify(v, null, 2) ?? "undefined";
+  return [{ kind: "code", lang: "json", title, text: text.length > max ? text.slice(0, max) : text }, ...(text.length > max ? [{ kind: "note" as const, tone: "warn" as const, text: `Cut at ${max.toLocaleString()} characters: /context export writes all of it to a file.` }] : [])];
+}
 /** One line about a message: its position, role and the start of its text or its tool calls. */
 const msgLabel = (m: Message, i: number) => `#${i} ${m.role}${m.tool_calls?.length ? ` → ${m.tool_calls.map((c) => c.function.name).join(", ")}` : ""}${m.tool_call_id ? ` (${m.tool_call_id.slice(0, 10)})` : ""}`;
 const msgHint = (m: Message) => (m.content ?? "").replace(/\s+/g, " ").trim().slice(0, 80) || (m.tool_calls?.length ? m.tool_calls.map((c) => c.function.arguments).join(" ").slice(0, 80) : "(empty)");
@@ -211,7 +218,12 @@ async function settingsPage(a: App) {
 
 export function buildCommands(): Cmd[] {
   return [
-    { name: "help", alias: "?", help: "keys and commands", live: true, run: (a) => a.openPager(helpLines(a.cmds, (a.io.output.columns || 80) - 1), "help") },
+    { name: "help", alias: "?", help: "keys and commands", live: true, run: (a) => {
+      if (!a.structured) return a.openPager(helpLines(a.cmds, (a.io.output.columns || 80) - 1), "help");
+      const groups = new Map<string, Cmd[]>(); for (const c of a.cmds) groups.set(groupOf(c.name), [...(groups.get(groupOf(c.name)) ?? []), c]);
+      a.report("Help", [...GROUP_ORDER.filter((g) => groups.has(g)).map((g) => ({ kind: "table" as const, title: g, columns: ["Command", "What it does"], rows: groups.get(g)!.map((c) => ({ cells: [`/${c.name}${c.args ? ` ${c.args}` : ""}`, c.help + (c.alias ? ` (also /${c.alias})` : "")] })) })),
+        { kind: "note", text: "@ mentions a file · ! runs a shell command · # saves a memory note · Shift+Tab changes the permission mode · Esc stops the agent" }]);
+    } },
     { name: "model", help: "switch model", args: "[id]", run: async (a, arg) => {
       let id: string | undefined = arg;
       if (!id) {
@@ -361,7 +373,7 @@ export function buildCommands(): Cmd[] {
         a.cfg.embeddings = tail === "on"; a.saveConfig(); a.buildAgent();
         return void a.say(tail === "on" ? "semantic memory search on: note text and your messages are sent to your provider's /embeddings endpoint (stored vectors live in memory/embeddings.json)" : "semantic memory search off", dim);
       }
-      if (sub === "graph") { const all = m.list(), rows = all.map((e) => [e, m.neighbors(e, all)] as const).filter(([, n]) => n.length); return void (rows.length ? a.report("Related notes", [...rows.map(([e, n]) => `  ${cyan(e.name.padEnd(24))} ${dim("↔")} ${n.map((x) => x.name).join(", ")}`), dim("  links come from [[name]] mentions and from notes that keep being retrieved together")]) : a.say("no links yet. Mention [[other-note]] in a note, or keep using memory: notes retrieved together get linked.", dim)); }
+      if (sub === "graph") { const all = m.list(), rows = all.map((e) => [e, m.neighbors(e, all)] as const).filter(([, n]) => n.length); return void (rows.length ? a.report("Related notes", [{ kind: "table", columns: ["Note", "Linked to"], rows: rows.map(([e, n]) => ({ cells: [e.name, n.map((x) => x.name).join(", ")] })) }, { kind: "note", text: "Links come from [[name]] mentions and from notes that keep being retrieved together." }]) : a.say("no links yet. Mention [[other-note]] in a note, or keep using memory: notes retrieved together get linked.", dim)); }
       if (sub === "consolidate") {
         a.say("asking the model to tidy memory (merge duplicates, archive obsolete notes)…", dim);
         const plan = await m.consolidate(a.roles.compact ?? a.model);
@@ -371,11 +383,11 @@ export function buildCommands(): Cmd[] {
         if (ok === 0) { const r = m.applyPlan(plan); a.say(`merged ${r.merged}, archived ${r.archived}`, dim); }
         return;
       }
-      if (sub === "stale") { const st = m.stale(); return void (st.length ? a.report("Never-used notes (older than 90 days, surfaced at most once)", [...st.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}] last used ${e.used ?? e.updated}`)}`), dim("  /memory prune moves them to an archive folder (reversible)")]) : a.say("no stale notes", dim)); }
+      if (sub === "stale") { const st = m.stale(); return void (st.length ? a.report("Never-used notes", [{ kind: "table", columns: ["Note", "Kind", "Last used"], rows: st.map((e) => ({ cells: [e.name, `${e.scope} · ${e.type}`, String(e.used ?? e.updated)] })) }, { kind: "note", text: "Older than 90 days and surfaced at most once. /memory prune moves them to an archive folder (reversible)." }]) : a.say("no stale notes", dim)); }
       if (sub === "prune") { const gone = m.prune(); return void a.say(gone.length ? `archived ${gone.length} stale note${gone.length === 1 ? "" : "s"}: ${gone.join(", ")} (moved to memory/archive/)` : "nothing stale to archive", dim); }
       const all = m.list();
       if (!all.length) return void a.say("no memory notes yet. Use `# note` or ask me to remember something.", dim);
-      a.report("Memory", [...all.map((e) => `  ${cyan(e.name.padEnd(24))} ${dim(`[${e.scope}/${e.type}]${e.hits ? ` · used ${e.hits}×` : ""}`)} ${e.description}`)]);
+      a.report("Memory", [{ kind: "list", items: all.map((e) => ({ label: e.name, tone: "accent" as const, badge: `${e.scope} · ${e.type}${e.hits ? ` · used ${e.hits}×` : ""}`, detail: e.description })) }, { kind: "note", text: "/memory graph · /memory stale · /memory consolidate · # <note> saves one" }]);
     } },
     { name: "resume", help: "continue an earlier conversation", alias: "sessions", run: async (a) => {
       const list = a.store.list().filter((s) => s.id !== a.session.id);
@@ -446,17 +458,18 @@ export function buildCommands(): Cmd[] {
       return a.openPager(out, "loop trace");
     } },
     { name: "tokens", alias: "cost", help: "context window, what fills it, tokens and cost", live: true, run: (a) => {
-      const report = tokenReport({ model: a.cfg.model, window: a.window, messages: a.session.messages, usage: a.session.usage, series: a.session.usage.series ?? [], lastPrompt: a.lastPrompt, turnTokens: a.runTokens, turnBudget: a.running ? a.cfg.maxTokens : 0, width: a.width,
+      const report = tokenBlocks({ model: a.cfg.model, window: a.window, messages: a.session.messages, usage: a.session.usage, series: a.session.usage.series ?? [], lastPrompt: a.lastPrompt, turnTokens: a.runTokens, turnBudget: a.running ? a.cfg.maxTokens : 0, width: a.width,
         toolDefChars: JSON.stringify(a.agent.registry.visible({ step: 0, messages: [] }).map((t) => ({ name: t.name, description: t.description, parameters: t.schema }))).length });
       // The last turn's spending per model, when more than one model worked on it (a local explorer, a cheaper reviewer).
       const bm = Object.entries(a.budget.byModel);
-      if (bm.length > 1) report.push("", bold("  Last turn by model"), ...bm.map(([id, e]) => `  ${dim((e.tier ?? "?").padEnd(9))}${id.padEnd(32)} ${String(e.calls).padStart(3)} calls  ${fmtTokens(e.tokens).padStart(7)} tokens  ${(e.ms / 1000).toFixed(1).padStart(6)}s waiting`));
+      if (bm.length > 1) report.push({ kind: "table", title: "Last turn by model", columns: ["Model", "Tier", "Calls", "Tokens", "Waiting"], rows: bm.map(([id, e]) => ({ cells: [id, e.tier ?? "?", String(e.calls), fmtTokens(e.tokens), `${(e.ms / 1000).toFixed(1)}s`] })) });
       a.report("Tokens and cost", report);
     } },
     { name: "todos", help: "show the agent's checklist, or change it: /todos edit", args: "[edit]", live: true, run: async (a, arg) => {
       if (arg.trim() === "edit") return void (await a.editTodos());
       if (!a.todos.length) return void a.say("no todo list right now", dim);
-      a.report("Todos", [...todoList(a.todos, a.width), "", dim("  /todos edit changes it")]);
+      const doneN = a.todos.filter((x) => x.status === "done").length;
+      a.report("Todos", [{ kind: "meter", label: "done", pct: Math.round((doneN / a.todos.length) * 100), detail: `${doneN} of ${a.todos.length}` }, { kind: "list", items: a.todos.map((x) => ({ label: x.content, tone: x.status === "done" ? "ok" as const : x.status === "in_progress" ? "warn" as const : "muted" as const, badge: x.status === "in_progress" ? "now" : x.status === "done" ? "done" : undefined })) }, { kind: "note", text: "/todos edit changes it" }]);
     } },
     { name: "edit", help: "edit one of your earlier messages and send it again from there (the old version is kept as a branch)", args: "[n]", run: async (a, arg) => {
       if (a.running) return void a.say("wait for the current turn to finish", dim);
@@ -531,17 +544,17 @@ export function buildCommands(): Cmd[] {
       const [sub, id] = arg.split(/\s+/);
       if (sub === "stop" && id) { try { const p = await a.agent.procs!.stop(id); return void a.say(`stopped ${p.id} (${p.name})`, dim); } catch (e) { return void a.say((e as Error).message, red); } }
       const l = a.agent.procs?.list() ?? [];
-      a.report("Background processes", [...(l.length ? l.map((p) => `  ${(p.status === "running" ? green : dim)(p.id.padEnd(4))} ${p.name.padEnd(28)} ${dim(`${p.status}${p.status === "exited" ? ` (${p.code})` : ""} · pid ${p.pid ?? "?"} · ${Math.round((Date.now() - p.startedAt) / 1000)}s`)}`) : [dim("  none")])]);
+      a.report("Background processes", [{ kind: "table", columns: ["Id", "Command", "Status", "Pid", "Running for"], rows: l.map((p) => ({ tone: p.status === "running" ? "ok" as const : "muted" as const, cells: [p.id, p.name, `${p.status}${p.status === "exited" ? ` (${p.code})` : ""}`, String(p.pid ?? "?"), `${Math.round((Date.now() - p.startedAt) / 1000)}s`] })) }, ...(l.length ? [] : [{ kind: "text" as const, text: "No background processes.", tone: "muted" as const }]), { kind: "note", text: "/procs stop <id> stops one" }]);
     } },
     { name: "hooks", help: "lifecycle hooks in effect (.amness/hooks.json, ~/.amness/hooks.json)", live: true, run: (a) => {
       const l = a.hooks.list(), fp = Hooks.fingerprint(a.cwd);
-      a.report("Hooks", [...(l.length ? l.map((h) => `  ${cyan(h.event.padEnd(16))} ${h.def.match ? dim(`[${h.def.match}] `) : ""}${h.def.command} ${dim(`${h.def.timeout ?? 10}s${h.def.failClosed ? " · fail closed" : ""}`)}`) : [dim("  none active")]), ...(fp && !l.some(() => true) ? [dim("  this project has .amness/hooks.json but it is not approved; restart and allow it")] : []), dim("  exit 0 allows · exit 2 blocks (stderr is shown to the model) · stdout JSON can add context or rewrite arguments")]);
+      a.report("Hooks", [l.length ? { kind: "table", columns: ["Event", "Tools", "Command", "Limit"], rows: l.map((h) => ({ cells: [h.event, h.def.match ?? "all", h.def.command, `${h.def.timeout ?? 10}s${h.def.failClosed ? " · fail closed" : ""}`] })) } : { kind: "text", text: "No hooks are active.", tone: "muted" }, ...(fp && !l.length ? [{ kind: "text" as const, text: "This project has .amness/hooks.json, but it is not approved: /trust asks again.", tone: "warn" as const }] : []), { kind: "note", text: "exit 0 allows · exit 2 blocks (stderr is shown to the model) · JSON on stdout can add context or rewrite the arguments" }]);
     } },
     { name: "trust", args: "[reset]", help: "this folder's trust: shows it and asks again about project hooks, rules and plugins you said no to; reset forgets the yes answers too", run: async (a, arg) => {
       if (!a.persist) return void a.say("nothing is saved in this session, so there is nothing to change", dim);
       const st = loadState(), cwd = a.cwd, hfp = projectConfigFingerprint(cwd), pfp = pluginFingerprint(cwd), reset = arg.trim() === "reset";
-      const what = (fp: string | undefined, yes?: Record<string, string>, no?: Record<string, string>) => !fp ? dim("none in this project") : yes?.[cwd] === fp ? green("trusted") : no?.[cwd] === fp ? yellow("you said no") : dim("not asked yet");
-      const summary = [`  folder          ${isTrustedDir(st, cwd) ? green("trusted") : yellow("not trusted")}`, `  hooks and rules ${what(hfp, st.hookTrust, st.hookDeclined)}`, `  plugins         ${what(pfp, st.pluginTrust, st.pluginDeclined)}`, dim("  remove a trusted folder in Preferences (Trusted folders)")];
+      const what = (fp: string | undefined, yes?: Record<string, string>, no?: Record<string, string>): { value: string; tone: "ok" | "warn" | "muted" } => !fp ? { value: "none in this project", tone: "muted" } : yes?.[cwd] === fp ? { value: "trusted", tone: "ok" } : no?.[cwd] === fp ? { value: "you said no", tone: "warn" } : { value: "not asked yet", tone: "muted" };
+      const summary: ReportBlock[] = [{ kind: "kv", rows: [{ key: "folder", ...(isTrustedDir(st, cwd) ? { value: "trusted", tone: "ok" as const } : { value: "not trusted", tone: "warn" as const }) }, { key: "hooks and rules", ...what(hfp, st.hookTrust, st.hookDeclined) }, { key: "plugins", ...what(pfp, st.pluginTrust, st.pluginDeclined) }] }, { kind: "note", text: "Remove a trusted folder in Preferences (Trusted folders)." }];
       for (const k of ["hookDeclined", "pluginDeclined", ...(reset ? ["hookTrust", "pluginTrust"] as const : [])] as const) { const m = st[k]; if (m) delete m[cwd]; }
       saveState(st);
       // a question to answer shows on its own (it says what it is about); otherwise the summary is the answer
@@ -557,8 +570,9 @@ export function buildCommands(): Cmd[] {
         a.loadHooks(); a.buildAgent(); return void a.say(`${list} ${rule} saved to .amness/permissions.json`, dim);
       }
       const r = a.rules.rules();
-      a.report("Permission rules", [...(["deny", "ask", "allow"] as const).flatMap((k) => r[k].map((x) => `  ${(k === "deny" ? red : k === "ask" ? yellow : green)(k.padEnd(6))} ${x}`)), ...(!r.deny.length && !r.ask.length && !r.allow.length ? [dim("  no rules yet")] : []),
-        "", dim("  always on, in every mode including yolo: no recursive delete of / or ~, no force-push to main, nothing that kills Amness itself (every program on a port, every node process), no editing .git or these rule files; curl|sh and force-pushes always ask"), dim("  precedence: that floor > deny > ask > allow > permission mode")]);
+      const rules = (["deny", "ask", "allow"] as const).flatMap((k) => r[k].map((x) => ({ tone: k === "deny" ? "err" as const : k === "ask" ? "warn" as const : "ok" as const, cells: [k, x] })));
+      a.report("Permission rules", [rules.length ? { kind: "table", columns: ["Rule", "Applies to"], rows: rules } : { kind: "text", text: "No rules yet. /permissions allow sh(npm test*) adds one.", tone: "muted" },
+        { kind: "kv", title: "Always on, in every mode (yolo too)", rows: [{ key: "refused", value: "a recursive delete of / or ~, a force-push to main, anything that kills Amness itself (every program on a port, every node process), editing .git or these rule files" }, { key: "always asks", value: "curl … | sh, and force-pushes" }, { key: "order", value: "this floor › deny › ask › allow › the permission mode" }] }]);
     } },
     { name: "budget", help: "show or set the token cap per turn (cached input counts a tenth)", args: "[tokens, e.g. 500k]", run: (a, arg) => {
       const b = a.budget, used = Math.round(b.effective);
@@ -630,14 +644,14 @@ export function buildCommands(): Cmd[] {
         if (op === "update") { a.say("reading the catalogs again…", dim); const bad = refreshCatalogs(); return void a.say(bad.length ? bad.join("\n") : `${green("✓")} ${listCatalogs().length} catalog(s) up to date`, bad.length ? yellow : undefined); }
         const cs = listCatalogs();
         if (!cs.length) return void a.say("no catalogs yet. /plugins catalog add offers some to choose from, or takes a git URL", dim);
-        return void a.report("Plugin catalogs", [...cs.map((c) => `  ${cyan(c.name.padEnd(26))} ${dim(`${catalogEntries(c.name).length} plugins · ${c.url}`)}`), "", dim("  /plugins browse · /plugins catalog add <url> · /plugins catalog remove <name> · /plugins catalog update")]);
+        return void a.report("Plugin catalogs", [{ kind: "table", columns: ["Catalog", "Plugins", "Source"], rows: cs.map((c) => ({ cells: [c.name, String(catalogEntries(c.name).length), c.url] })) }, { kind: "note", text: "/plugins browse · /plugins catalog add <url> · /plugins catalog remove <name> · /plugins catalog update" }]);
       }
       const inst = listInstalled(a.cwd), cats = listCatalogs();
       if (!a.plugins.length && !inst.length) return void a.say(`no plugins yet. /plugins browse picks one from a catalog${cats.length ? "" : " (it offers some to add)"}; /plugins add <git URL | owner/repo | npm:package> installs one. You can also write your own: see docs/plugins.md.`, dim);
       a.report("Plugins", [
-        ...(a.plugins.length ? [bold("  Loaded (code)"), ...a.plugins.map((p) => `  ${cyan(p.name.padEnd(22))} ${dim([p.tools?.length ? `${p.tools.length} tool(s)` : "", p.hooks ? `hooks: ${Object.keys(p.hooks).join(", ")}` : "", p.system ? "system prompt" : "", p.cases?.length ? `${p.cases.length} eval case(s)` : ""].filter(Boolean).join(" · "))}`)] : []),
-        ...(inst.length ? [...(a.plugins.length ? [""] : []), bold("  Installed from a source"), ...inst.flatMap((x) => [`  ${cyan(x.name.padEnd(22))} ${dim(`${x.scope === "user" ? "all your projects" : "this project"} · ${x.catalog ? `from ${x.catalog}` : x.source}${x.version ? ` · ${x.version}` : ""}`)}`, `    ${dim(installedParts(x))}`])] : []),
-        "", dim(`  ${cats.length} catalog(s) · /plugins browse · /plugins add <source> · /plugins remove <name> · /plugins update`),
+        ...(a.plugins.length ? [{ kind: "list" as const, title: "Loaded (code)", items: a.plugins.map((p) => ({ label: p.name, tone: "ok" as const, detail: [p.tools?.length ? `${p.tools.length} tool(s)` : "", p.hooks ? `hooks: ${Object.keys(p.hooks).join(", ")}` : "", p.system ? "system prompt" : "", p.cases?.length ? `${p.cases.length} eval case(s)` : ""].filter(Boolean).join(" · ") || undefined })) }] : []),
+        ...(inst.length ? [{ kind: "list" as const, title: "Installed from a source", items: inst.map((x) => ({ label: x.name, tone: "ok" as const, badge: x.scope === "user" ? "all projects" : "this project", detail: `${installedParts(x)} · ${x.catalog ? `from ${x.catalog}` : x.source}${x.version ? ` · ${x.version}` : ""}` })) }] : []),
+        { kind: "note", text: `${cats.length} catalog(s) · /plugins browse · /plugins add <source> · /plugins remove <name> · /plugins update` },
       ]);
     } },
     { name: "plans", help: "offer the plan of a similar finished task as a starting point (off until measured)", args: "[on|off]", run: (a, arg) => {
@@ -649,7 +663,7 @@ export function buildCommands(): Cmd[] {
       lines.push(s ? `plans: ${s.plans} stored, offered ${s.offered}×, led to a finished task ${s.helped}×` : "plans: off (/plans on)");
       const px = await prefixCacheRate(a.cfg.baseUrl); if (px !== undefined) lines.push(`server prefix cache: ${Math.round(px * 100)}% of prompt tokens were served from the server's cache`);
       lines.push("replies on disk: amness eval --cache / amness run --cache (reruns cost nothing)");
-      a.report("Cache", [...lines.map((l) => "  " + dim(l))]);
+      a.report("Cache", [{ kind: "kv", rows: lines.map((l) => { const i = l.indexOf(": "); return i > 0 ? { key: l.slice(0, i), value: l.slice(i + 2) } : { key: "", value: l }; }) }]);
     } },
     { name: "lsp", help: "append language-server errors to edit results (needs typescript-language-server, pyright, gopls or rust-analyzer)", args: "[on|off]", run: (a, arg) => {
       if (arg !== "on" && arg !== "off") return void a.say(`language-server diagnostics are ${a.cfg.lsp ? "on" : "off"}. /lsp on: each edit result also lists the errors an installed language server reports for that file.`, dim);
@@ -668,7 +682,7 @@ export function buildCommands(): Cmd[] {
       if (!r.diff.trim()) return void a.say(`no changes against ${r.against} to review`, dim);
       a.say(`reviewing ${r.diff.split("\n").filter((l) => l.startsWith("diff --git")).length} changed file(s) against ${r.against}…`, dim);
       const v = await reviewWork({ model: a.roles.review ?? a.model, cwd: a.cwd, task: "Review these changes as a careful colleague would before they are merged.", contract: ["the change does what its code and commit messages suggest, without introducing bugs", "edge cases and error paths are handled", "nothing unrelated or leftover (debug code, secrets, commented-out code) is included", "behaviour that changed is covered by tests, or the missing tests are named"], summary: "(a human asked for a review; there is no author summary)", diffs: r.diff.slice(0, 60_000), commands: "", verify: a.verify, budget: a.budget });
-      a.report("Review", [v.inconclusive ? `  ${yellow("?")} ${dim("the reviewer gave no usable verdict; try again, or use /reviewer on for tasks")}` : v.pass ? `  ${green("✔")} ${bold("review: no problems found")}` : `  ${yellow("✖")} ${bold(`review: ${v.findings.length} finding${v.findings.length === 1 ? "" : "s"}`)}`, ...v.findings.map((f) => `    ${yellow("•")} ${f}`)]);
+      a.report("Review", [v.inconclusive ? { kind: "text", text: "The reviewer gave no usable verdict. Try again, or use /reviewer on for tasks.", tone: "warn" } : v.pass ? { kind: "text", text: "No problems found.", tone: "ok" } : { kind: "list", title: `${v.findings.length} finding${v.findings.length === 1 ? "" : "s"}`, items: v.findings.map((f) => ({ label: f.split(/(?<=[.:])\s/)[0], detail: f.includes(" ") && f.split(/(?<=[.:])\s/).length > 1 ? f.split(/(?<=[.:])\s/).slice(1).join(" ") : undefined, tone: "warn" as const })) }]);
     } },
     { name: "pr", help: "draft a pull request from your branch and create it with gh after you confirm (/pr draft for a draft PR)", args: "[draft]", run: async (a, arg) => {
       const have = await new Promise<boolean>((res) => execFile("gh", ["--version"], (e) => res(!e)));
@@ -694,11 +708,11 @@ export function buildCommands(): Cmd[] {
         const check = await a.askText(`A command that exits 0 only when "${last.text.slice(0, 50).replace(/\s+/g, " ")}" is really done (the agent never sees it)`); if (!check) return void a.say("cancelled", dim);
         const r = caseFromWorkspace(a.cwd, { name, task: last.text, check, verify: a.verify }); return void a.say(`wrote ${r.path.replace(a.cwd + "/", "")} (${r.files} files from git HEAD). Run: amness eval --cases .amness/evals/cases --variants ab`, dim);
       }
-      a.report("Recurring problems", [...formatMining(join(a.cwd, ".amness", "traces")).split("\n").map((l) => "  " + l)]);
+      a.report("Recurring problems", [{ kind: "code", lang: "text", text: formatMining(join(a.cwd, ".amness", "traces")) }]);
     } },
     { name: "models", help: "use other models for some jobs: /models <role> <model|off>; a model is an id, provider:model or server:<name>[/model]", args: "[role model]", run: (a, arg) => {
       const [role, id] = arg.split(/\s+/), roles: readonly string[] = ROLE_NAMES;
-      if (!role) { const m = a.cfg.models ?? {}, lab = a.wired?.labels ?? {}; return void a.report("Models", [`  ${dim("main".padEnd(11))} ${a.cfg.server ? `server:${a.cfg.server}/` : `${a.cfg.provider}:`}${a.cfg.model}`, ...roles.map((r) => `  ${dim(r.padEnd(11))} ${(lab as Record<string, string | undefined>)[r] ?? ((m as Record<string, string | undefined>)[r] ? `${(m as Record<string, string>)[r]} ${dim("(same as main)")}` : dim("(main model)"))}`), `  ${dim("fallback".padEnd(11))} ${lab.fallback ?? a.cfg.fallback ?? dim("(none)")}`, dim("  e.g. /models explore server:lab   /models compact anthropic:claude-haiku-5-5   /models review off")]); }
+      if (!role) { const m = a.cfg.models ?? {}, lab = a.wired?.labels ?? {}; return void a.report("Models", [{ kind: "kv", rows: [{ key: "main", value: `${a.cfg.server ? `server:${a.cfg.server}/` : `${a.cfg.provider}:`}${a.cfg.model}` }, ...roles.map((r) => { const l = (lab as Record<string, string | undefined>)[r], set = (m as Record<string, string | undefined>)[r]; return l ? { key: r, value: l } : set ? { key: r, value: set, hint: "same as main" } : { key: r, value: "main model", tone: "muted" as const }; }), { key: "fallback", ...(lab.fallback ?? a.cfg.fallback ? { value: (lab.fallback ?? a.cfg.fallback)! } : { value: "none", tone: "muted" as const }) }] }, { kind: "note", text: "e.g. /models explore server:lab · /models compact anthropic:claude-haiku-5-5 · /models review off" }]); }
       if (role !== "fallback" && !roles.includes(role)) return void a.say(`usage: /models ${roles.join("|")}|fallback <model | off>`, red);
       if (!id) return void a.say(`usage: /models ${role} <model | off>`, red);
       let label = id; if (id !== "off") { try { label = resolveConfig(id, a.cfg).label; } catch (e) { return void a.say((e as Error).message, red); } }
@@ -716,15 +730,14 @@ export function buildCommands(): Cmd[] {
       const [sub, n] = arg.trim().split(/\s+/), id = Number(n);
       if (!arg.trim()) {
         if (!a.bg.tasks.length) return void a.say("no background tasks. Start one with /bg <task>: it runs in its own git worktree while you keep working here", dim);
-        return void a.report("Background tasks", [...a.bg.tasks.map((t) => "  " + bgLine(t)), dim("  /bg show <n> · /bg apply <n> (take its changes) · /bg drop <n> · /bg stop <n>")]);
+        return void a.report("Background tasks", [{ kind: "table", columns: ["#", "Task", "Status", "Branch"], rows: a.bg.tasks.map((t) => ({ tone: t.status === "running" ? "ok" as const : t.status === "done" ? "accent" as const : "muted" as const, cells: [String(t.id), t.task, t.status, t.branch] })) }, { kind: "note", text: "/bg show <n> · /bg apply <n> (take its changes) · /bg drop <n> · /bg stop <n>" }]);
       }
       if (["show", "apply", "drop", "stop"].includes(sub) && Number.isInteger(id) && n !== undefined) {
         if (sub === "stop") return void a.say(a.bg.stop(id), dim);
         if (sub === "drop") return void a.say(await a.bg.drop(id), dim);
         if (sub === "apply") { const msg = await a.bg.apply(id); a.say(msg, /^applied/.test(msg) ? green : yellow); return; }
         const t = a.bg.get(id); if (!t) return void a.say(`no background task ${id}`, red);
-        return void a.report(`Background task ${t.id}`, [`  ${dim("task".padEnd(8))} ${t.task}`, `  ${dim("status".padEnd(8))} ${t.status}`, `  ${dim("branch".padEnd(8))} ${t.branch}  ${dim(t.dir)}`,
-          `  ${dim("changed".padEnd(8))} ${t.changed?.join(", ") || (t.status === "running" ? "(running)" : "nothing")}`, "", ...(t.summary ?? "(no summary yet)").split("\n").map((l) => "  " + l)]);
+        return void a.report(`Background task ${t.id}`, [{ kind: "kv", rows: [{ key: "task", value: t.task }, { key: "status", value: t.status, tone: t.status === "running" ? "ok" as const : undefined }, { key: "branch", value: t.branch, hint: t.dir }, { key: "changed", value: t.changed?.join(", ") || (t.status === "running" ? "(running)" : "nothing") }] }, { kind: "text", title: "Summary", text: t.summary ?? "No summary yet.", tone: t.summary ? undefined : "muted" }]);
       }
       try { const t = await a.bg.start(arg.trim()); a.say(`started background task ${t.id} in ${t.branch}; keep working, you will be told when it ends (/bg lists them)`, green); }
       catch (e) { a.say((e as Error).message, red); }
@@ -735,17 +748,17 @@ export function buildCommands(): Cmd[] {
       const m = a.wired?.byRef(ref) ?? a.model;
       a.say(`checking ${r.label}: about ten short requests…`, dim);
       let rep; try { rep = await runDoctor(m, { stated: a.window }); } catch (e) { return void a.say(`doctor failed: ${(e as Error).message}`, red); }
-      a.report("Doctor", [...formatDoctor(r.label, rep).split("\n").map((l) => "  " + l)]);
+      a.report("Doctor", [{ kind: "code", lang: "text", text: formatDoctor(r.label, rep) }]);
       if (write) { const at = new Date().toISOString().slice(0, 10); writeProfile(join(a.cwd, ".amness", "profile.json"), r.name, { ...rep.suggest, qualified: { roles: rep.qualified, at, by: "amness doctor" } }, `checked with amness doctor on ${at}`); a.say(`  saved in .amness/profile.json (${r.name})`, dim); a.buildAgent(); }
       else a.say("  /doctor " + ref + " write saves this in .amness/profile.json", dim);
     } },
     { name: "policy", help: "why recent actions were allowed, asked about or refused (rules, the safety floor, untrusted-text checks)", live: true, run: (a) => {
-      a.report("Recent policy decisions", [...(a.policyLog.length ? a.policyLog.map((l) => "  " + (l.startsWith("deny") ? red(l.slice(0, 5)) : l.startsWith("ask") ? yellow(l.slice(0, 5)) : green(l.slice(0, 5))) + l.slice(5)) : [dim("  none yet: every call so far went through the permission mode alone")]),
-        "", dim("  layers: safety floor > deny rules > untrusted-text check (commands copied from web pages or tool servers) > ask rules > allow rules > permission mode"), dim("  /permissions lists your rules, /sandbox shows OS enforcement")]);
+      a.report("Recent policy decisions", [a.policyLog.length ? { kind: "table", columns: ["Decision", "Why"], rows: a.policyLog.map((l) => { const k = l.slice(0, 5).trim(); return { tone: k.startsWith("deny") ? "err" as const : k.startsWith("ask") ? "warn" as const : "ok" as const, cells: [k, l.slice(5).trim()] }; }) } : { kind: "text", text: "None yet: every call so far went through the permission mode alone.", tone: "muted" },
+        { kind: "note", text: "Layers: safety floor › deny rules › untrusted-text check (commands copied from web pages or tool servers) › ask rules › allow rules › permission mode. /permissions lists your rules, /sandbox shows OS enforcement." }]);
     } },
     { name: "profile", help: "harness settings for this model (.amness/profile.json): guards switched off, limits", live: true, run: (a) => {
       const p = a.profile.profile;
-      a.report("Harness profile", [`  ${dim("model")}   ${a.cfg.model}`, `  ${dim("from")}    ${a.profile.sources.length ? a.profile.sources.map((s) => s.replace(a.cwd + "/", "")).join(", ") : dim("(none: built-in defaults)")}`, `  ${dim("off")}     ${p.off?.length ? p.off.join(", ") : dim("nothing: every guard is on")}`, `  ${dim("limits")}  ${[p.maxSteps !== undefined && `max steps ${p.maxSteps}`, p.stagnationTurns !== undefined && `stagnation after ${p.stagnationTurns} turns`].filter(Boolean).join(" · ") || dim("defaults")}`, ...(p.note ? [`  ${dim("note")}    ${p.note}`] : []), dim("  write one from measurements: amness eval --variants ablate --profile-out profile.json")]);
+      a.report("Harness profile", [{ kind: "kv", rows: [{ key: "model", value: a.cfg.model }, { key: "from", ...(a.profile.sources.length ? { value: a.profile.sources.map((x) => x.replace(a.cwd + sep, "")).join(", ") } : { value: "built-in defaults", tone: "muted" as const }) }, { key: "switched off", ...(p.off?.length ? { value: p.off.join(", ") } : { value: "nothing: every guard is on", tone: "muted" as const }) }, { key: "limits", value: [p.maxSteps !== undefined && `max steps ${p.maxSteps}`, p.stagnationTurns !== undefined && `stagnation after ${p.stagnationTurns} turns`].filter(Boolean).join(" · ") || "defaults" }, ...(p.note ? [{ key: "note", value: p.note }] : [])] }, { kind: "note", text: "Write one from measurements: amness eval --variants ablate --profile-out profile.json" }]);
     } },
     { name: "router", help: "route exploration steps to a cheaper model when that pays off, cache cost included (needs /models cheap <id>)", args: "[on|off]", run: (a, arg) => {
       if (!arg) return void a.say(`router is ${a.cfg.router ? "on" : "off"}${a.cfg.models?.cheap ? ` (cheap model: ${a.cfg.models.cheap})` : dim("  (set one with /models cheap <model id>)")}. Planning, edits, failures and answers always use ${a.cfg.model}; a run of read-only steps moves to the cheap model once the saving repays the cold read of the conversation on that model's own cache.`, dim);
@@ -761,7 +774,8 @@ export function buildCommands(): Cmd[] {
     } },
     { name: "agents", help: "custom subagents (.amness/agents/*.md, .claude/agents/*.md) available to the task tool", live: true, run: (a) => {
       const l = a.agent.agents ?? [], w = a.agent.agentWarnings ?? [];
-      a.report("Subagents", [`  ${cyan("explore".padEnd(16))} ${dim("[built in · read-only]")} broad searches and questions that need reading many files`, ...l.map((s) => `  ${cyan(s.name.padEnd(16))} ${dim(`[${s.scope} · ${s.tools.join(", ")}${s.isolation ? " · isolated worktree" : ""}${s.model ? " · model " + s.model : ""}]`)} ${s.description}`), ...(!l.length ? [dim("  add .amness/agents/<name>.md (front matter: name, description, tools, model, isolation) to define your own")] : []), ...w.map((x) => "  " + yellow("⚠ ") + dim(x))]);
+      a.report("Subagents", [{ kind: "list", items: [{ label: "explore", badge: "built in · read-only", tone: "ok" as const, detail: "Broad searches and questions that need reading many files." }, ...l.map((x) => ({ label: x.name, badge: `${x.scope}${x.isolation ? " · own worktree" : ""}${x.model ? ` · ${x.model}` : ""}`, tone: "ok" as const, detail: `${x.description} · tools: ${x.tools.join(", ")}` }))] },
+        ...(!l.length ? [{ kind: "note" as const, text: "Add .amness/agents/<name>.md (front matter: name, description, tools, model, isolation) to define your own." }] : []), ...(w.length ? [{ kind: "list" as const, title: "Warnings", items: w.map((x) => ({ label: x, tone: "warn" as const })) }] : [])]);
     } },
     { name: "skills", help: "see which skills exist and are in use; new, add, remove, on, off, show, draft", args: "[list|show|new|add|remove|on|off|draft|drafts|approve|reject] [name]", live: true, run: async (a, arg) => {
       const [sub = "list", ...rest] = arg.trim().split(/\s+/).filter(Boolean), name = rest[0], agent = a.agent, st = agent.skillState;
@@ -771,10 +785,12 @@ export function buildCommands(): Cmd[] {
         if (sub === "list" || sub === "ls") {
           const all = agent.allSkills ?? [], drafts = listDrafts(a.cwd);
           const row = (s: (typeof all)[number]) => { const off = st.isOff(s.name), uses = a.skillsUsed.get(s.name) ?? 0, k = st.stats[s.name]; const mark = off ? dim("⊘") : uses ? green("●") : dim("○"); const use = uses ? green(` in use ×${uses}`) : ""; const hist = k?.loaded ? dim(` · used ${k.loaded}×${k.finished || k.failed ? `, runs: ${k.finished} finished, ${k.failed} stopped` : ""}`) : ""; return `  ${mark} ${(off ? dim : cyan)(s.name.padEnd(22))} ${dim(`[${s.scope} · ${s.source}]`)}${use}${hist}${off ? dim(" · off") : ""}\n      ${dim(s.description)}`; };
-          a.report("Skills", [...(all.length ? all.flatMap((s) => row(s).split("\n")) : [dim("  none yet. /skills new <name> makes one, /skills add <folder or git URL> installs one.")]), ...(drafts.length ? ["", bold("  Drafts waiting for you"), ...drafts.map((d) => `  ${cyan(d.name.padEnd(22))} ${dim(d.description)}`), dim("  /skills approve <name> · /skills reject <name>")] : []), ...((agent.skillWarnings ?? []).map((w) => "  " + dim(w))), "", dim("  ● in use now   ○ available   ⊘ switched off   ·   /skills show|new|add|remove|on|off|draft")]);
+          a.report("Skills", [all.length ? { kind: "list", items: all.map((x) => { const off = st.isOff(x.name), uses = a.skillsUsed.get(x.name) ?? 0, k = st.stats[x.name]; return { label: x.name, tone: off ? "muted" as const : uses ? "ok" as const : "accent" as const, badge: off ? "off" : uses ? `in use ×${uses}` : `${x.scope} · ${x.source}`, detail: x.description + (k?.loaded ? ` · used ${k.loaded}×${k.finished || k.failed ? ` (runs: ${k.finished} finished, ${k.failed} stopped)` : ""}` : "") }; }) } : { kind: "text", text: "None yet. /skills new <name> makes one, /skills add <folder or git URL> installs one, /plugins browse finds some.", tone: "muted" },
+            ...(drafts.length ? [{ kind: "list" as const, title: "Drafts waiting for you", items: drafts.map((d) => ({ label: d.name, detail: d.description, tone: "warn" as const })) }] : []), ...((agent.skillWarnings ?? []).length ? [{ kind: "list" as const, title: "Warnings", items: (agent.skillWarnings ?? []).map((x) => ({ label: x, tone: "warn" as const })) }] : []),
+            { kind: "note", text: `green: in use now · blue: available · grey: switched off   ·   /skills show|new|add|remove|on|off|draft${drafts.length ? " · /skills approve|reject <name>" : ""}` }]);
           return;
         }
-        if (sub === "show") { const s = find(name); if (!s) return void a.say(name ? `no skill named ${name}` : "usage: /skills show <name>", red); const t = readFileSync(s.file, "utf8").split("\n"); a.report(s.name, [dim(`  ${s.dir}`), "", ...t.map((l) => "  " + l)]); return; }
+        if (sub === "show") { const s = find(name); if (!s) return void a.say(name ? `no skill named ${name}` : "usage: /skills show <name>", red); const t = readFileSync(s.file, "utf8").split("\n"); a.report(s.name, [{ kind: "kv", rows: [{ key: "folder", value: s.dir }, { key: "scope", value: `${s.scope} · ${s.source}` }] }, { kind: "code", lang: "text", text: t.join("\n") }]); return; }
         if (sub === "on" || sub === "off") { const s = find(name); if (!s) return void a.say(name ? `no skill named ${name}` : `usage: /skills ${sub} <name>`, red); st.setOff(s.name, sub === "off"); return void done(`${s.name} is ${sub === "off" ? "switched off: not listed to the model and not loadable" : "on again"}`); }
         if (sub === "new") { const r = scaffoldSkill(a.cwd, name ?? "", rest.slice(1).join(" ") || undefined); return void done(`created ${r.file}\nedit it: the description line decides when the model loads it. It is picked up automatically.`); }
         if (sub === "remove" || sub === "rm") {
@@ -821,19 +837,11 @@ export function buildCommands(): Cmd[] {
       const words = arg.trim().split(/\s+/).filter(Boolean), sub = words[0] ?? "";
       if (!sub || sub === "list") {
         const rows = a.mcpHub?.rows() ?? [], dot = (st: string) => st === "connected" ? green("●") : st === "connecting" ? yellow("◌") : st === "disabled" ? dim("○") : st === "pending" ? yellow("⏸") : red("✗");
-        const out: string[] = [];
-        for (const r of rows) {
-          out.push(`  ${dot(r.status)} ${bold(r.name)}  ${dim(`${SCOPE_TEXT[r.scope]} · ${r.transport}${r.era ? ` ${r.era}` : ""} · ${r.status === "connected" ? `${r.tools} tools` : r.status === "pending" ? "waits for /trust" : r.status}`)}`);
-          out.push(`    ${dim(r.target.slice(0, a.width - 6))}`);
-          if (r.error) out.push(`    ${red(r.error.slice(0, a.width - 6))}`);
-          if (r.status === "needs-login") out.push(`    ${yellow(`sign in: /mcp login ${r.name}`)}`);
-          if (r.changed.length) out.push(`    ${yellow(`${r.changed.length} changed tool(s) held back: /mcp approve ${r.name}`)}`);
-          if (Object.keys(r.warnings).length) out.push(`    ${red(`⚠ ${Object.keys(r.warnings).length} tool description(s) look suspicious: /mcp tools ${r.name}`)}`);
-        }
-        for (const m of a.mcp) out.push(`  ${green("●")} ${m.cmd}  ${dim(`this session · ${m.tools.length} tools`)}`);
-        for (const n of a.mcpNotes) out.push(`  ${yellow("!")} ${dim(n)}`);
-        if (!rows.length && !a.mcp.length) out.push(dim("  no MCP servers attached or configured."), dim("  /mcp add github https://api.githubcopilot.com/mcp/ · /mcp add fs npx -y @modelcontextprotocol/server-filesystem ."), dim("  or a .mcp.json in the project (Claude Code's format) · amness mcp --help"));
-        return void a.report("MCP servers", out);
+        const items: { label: string; tone: "ok" | "warn" | "muted" | "err"; badge?: string; detail: string }[] = rows.map((r) => ({ label: r.name, tone: r.status === "connected" ? "ok" as const : r.status === "connecting" || r.status === "pending" ? "warn" as const : r.status === "disabled" ? "muted" as const : "err" as const, badge: r.status === "connected" || r.status === "pending" ? undefined : r.status,
+          detail: [`${SCOPE_TEXT[r.scope]} · ${r.transport}${r.era ? ` ${r.era}` : ""} · ${r.status === "connected" ? `${r.tools} tools` : r.status === "pending" ? "waits for /trust" : r.status}`, r.target, r.error, r.status === "needs-login" ? `sign in: /mcp login ${r.name}` : "", r.changed.length ? `${r.changed.length} changed tool(s) held back: /mcp approve ${r.name}` : "", Object.keys(r.warnings).length ? `⚠ ${Object.keys(r.warnings).length} tool description(s) look suspicious: /mcp tools ${r.name}` : ""].filter(Boolean).join("\n") }));
+        for (const m of a.mcp) items.push({ label: m.cmd, tone: "ok", detail: `this session · ${m.tools.length} tools` });
+        return void a.report("MCP servers", [items.length ? { kind: "list", items } : { kind: "text", text: "No MCP servers attached or configured.", tone: "muted" }, ...(a.mcpNotes.length ? [{ kind: "list" as const, title: "Notes", items: a.mcpNotes.map((n) => ({ label: n, tone: "warn" as const })) }] : []),
+          { kind: "note", text: items.length ? "/mcp tools <name> · /mcp disable <name> · /mcp add <name> <command | url>" : "/mcp add github https://api.githubcopilot.com/mcp/ · /mcp add fs npx -y @modelcontextprotocol/server-filesystem . · or a .mcp.json in the project (Claude Code's format)" }]);
       }
       if (sub === "login" || sub === "logout") {
       const r = a.mcpHub?.rows().find((x) => x.name === words[1]); if (!r) return void a.say(`usage: /mcp ${sub} <name> (a remote server from /mcp)`, dim);
@@ -857,7 +865,7 @@ export function buildCommands(): Cmd[] {
       if (sub === "tools") {
         const h = words[1] ? a.mcpHub?.handle(words[1]) : undefined; if (!h) return void a.say(words[1] ? `${words[1]} is not connected (/mcp)` : "usage: /mcp tools <name>", dim);
         const row = a.mcpHub!.rows().find((x) => x.name === words[1])!, held = new Set(row.changed.map((c) => c.tool));
-        return void a.report(`${words[1]}: ${h.tools.length} tools`, [...h.listed.flatMap((d, i) => { const t = h.tools[i]; return [`  ${cyan(t.name)} ${held.has(d.name) ? red("held: changed since you approved it") : t.risky ? yellow("asks") : dim("read-only")} ${dim(t.description.split("\n")[0].slice(0, Math.max(20, a.width - t.name.length - 14)))}`, ...(row.warnings[d.name] ?? []).map((w) => `    ${red("⚠ " + w)}`)]; })]);
+        return void a.report(`${words[1]}: ${h.tools.length} tools`, [{ kind: "list", items: h.listed.map((d, i) => { const t = h.tools[i]; return { label: t.name, tone: held.has(d.name) || row.warnings[d.name]?.length ? "err" as const : t.risky ? "warn" as const : "ok" as const, badge: held.has(d.name) ? "held: changed since you approved it" : t.risky ? "asks first" : "read-only", detail: [t.description.split("\n")[0], ...(row.warnings[d.name] ?? []).map((w) => `⚠ ${w}`)].join("\n") }; }) }]);
       }
       if (sub === "remove") {
         if (!words[1]) return void a.say("usage: /mcp remove <name>", dim);
@@ -893,21 +901,24 @@ export function buildCommands(): Cmd[] {
       if (!view) view = (await a.pick("Context: what the model sees", [{ label: "System prompt", value: "system", hint: "the instructions the model gets first" }, { label: "Raw messages", value: "messages", hint: `${a.session.messages.length} messages, as stored` }, { label: "Requests", value: "requests", hint: `${a.requests.length} model calls in this window, exactly as sent` }, { label: "Export all to a file", value: "export", hint: ".amness/exports/" }])) ?? "";
       if (view === "system") {
         const sp = systemNow(a); if (!sp) return void a.say("no system prompt yet: send a message first", dim);
-        return void a.report("System prompt", [dim(`${sp.from} · ${sp.text.length.toLocaleString()} characters`), "", ...sp.text.split("\n")]);
+        return void a.report("System prompt", [{ kind: "kv", rows: [{ key: "from", value: sp.from }, { key: "size", value: `${sp.text.length.toLocaleString()} characters`, hint: `≈ ${fmtTokens(Math.round(sp.text.length / 4))} tokens` }] }, { kind: "code", lang: "text", text: sp.text }]);
       }
       if (view === "messages") {
         const ms = a.session.messages; if (!ms.length) return void a.say("no messages yet", dim);
         const pick = await a.pick<number>(`Raw messages (${ms.length}) · type to filter`, [{ label: "All messages", value: -1, hint: "the whole list as JSON" }, ...ms.map((m, i) => ({ label: msgLabel(m, i), value: i, hint: msgHint(m) })).reverse()]);
         if (pick === undefined) return;
-        return void a.report(pick < 0 ? `Raw messages (${ms.length})` : `Message ${msgLabel(ms[pick], pick)}`, jsonLines(pick < 0 ? ms : ms[pick]));
+        return void a.report(pick < 0 ? `Raw messages (${ms.length})` : `Message ${msgLabel(ms[pick], pick)}`, jsonBlocks(pick < 0 ? ms : ms[pick]));
       }
       if (view === "requests") {
         if (!a.requests.length) return void a.say("no model calls yet in this window: requests are kept from the first message you send here", dim);
         const list = [...a.requests].reverse();
         const r = await a.pick(`Requests (${list.length}, newest first)`, list.map((x) => ({ label: `${clock(x.at)}  step ${x.step + 1}${x.error ? "  failed" : ""}`, value: x, hint: `${x.messages.length} messages · ${x.tools.length} tools${x.reply?.usage ? ` · ${fmtTokens(x.reply.usage.prompt_tokens ?? 0)} in · ${fmtTokens(x.reply.usage.completion_tokens ?? 0)} out` : ""}${x.ms ? ` · ${(x.ms / 1000).toFixed(1)}s` : ""}${x.wire ? "" : " · no HTTP body"}` })));
         if (!r) return;
-        const head = [dim(r.wire ? `POST ${r.wire.url} (the API key is sent in a header, never shown)` : "this model did not report its HTTP body: below is what Amness passed it (the messages and the tool definitions)"), dim(`${clock(r.at)} · step ${r.step + 1}${r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s` : ""}`), ""];
-        return void a.report(`Request at ${clock(r.at)}`, [...head, bold("Request"), ...jsonLines(r.wire?.body ?? { messages: r.messages, tools: r.tools }), "", bold(r.error ? "Error" : "Reply"), ...(r.error ? [red(r.error)] : r.reply ? jsonLines(r.reply) : [dim("(still waiting for the reply)")])]);
+        return void a.report(`Request at ${clock(r.at)}`, [
+          { kind: "kv", rows: [r.wire ? { key: "endpoint", value: `POST ${r.wire.url}`, hint: "the API key is sent in a header and never shown" } : { key: "body", value: "this model did not report its HTTP body: below is what Amness passed it (the messages and the tool definitions)", tone: "muted" as const }, { key: "when", value: `${clock(r.at)} · step ${r.step + 1}${r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s` : ""}` }, ...(r.reply?.usage ? [{ key: "tokens", value: `${fmtTokens(r.reply.usage.prompt_tokens ?? 0)} in · ${fmtTokens(r.reply.usage.completion_tokens ?? 0)} out` }] : [])] },
+          ...jsonBlocks(r.wire?.body ?? { messages: r.messages, tools: r.tools }, "Request"),
+          ...(r.error ? [{ kind: "text" as const, title: "Error", text: r.error, tone: "err" as const }] : r.reply ? jsonBlocks(r.reply, "Reply") : [{ kind: "text" as const, title: "Reply", text: "Still waiting for the reply.", tone: "muted" as const }]),
+        ]);
       }
       if (view === "export") {
         const dir = join(a.cwd, ".amness", "exports"), file = join(dir, `context-${a.session.id}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
@@ -919,11 +930,15 @@ export function buildCommands(): Cmd[] {
     { name: "tools", help: "choose the agent's tools: on, on demand (found when needed) or off, per tool or per MCP server · /tools list shows them", args: "[list]", live: true, run: async (a, arg) => {
       if (arg.trim() !== "list") return void (await a.pickTools());
       const vis = a.agent.registry.visible({ step: 0, messages: [] });
-      a.report("Tools", [...vis.map((t) => `  ${cyan(t.name.padEnd(16))} ${dim(t.description.split(".")[0].slice(0, a.width - 22))}`)]);
+      a.report("Tools", [{ kind: "table", columns: ["Tool", "What it does"], rows: vis.map((t) => ({ cells: [t.name, t.description.split(/(?<=\.)\s/)[0]] })) }, { kind: "note", text: `${vis.length} tools in every request now · /tools chooses them (on, on demand, off)` }]);
     } },
     { name: "status", help: "model, mode, project, session", live: true, run: (a) => {
-      a.report("Status", [`  ${dim("model")}     ${a.cfg.model} ${dim("via " + a.providerInfo().label + (a.model.api ? ` · ${a.model.api()} API` : ""))}`, ...(a.cfg.effort ? [`  ${dim("effort")}    ${a.cfg.effort}`] : []), ...Object.entries(a.wired?.labels ?? {}).map(([r, l]) => `  ${dim(r.padEnd(10))}${l}`), `  ${dim("mode")}      ${a.mode}`, `  ${dim("project")}   ${a.cwd}${a.branch ? dim("  ⎇ " + a.branch) : ""}`,
-        `  ${dim("verify")}    ${a.verify ?? "none"}`, `  ${dim("session")}   ${a.session.id} ${dim(`(${a.session.turns.length} turns)`)}`, `  ${dim("memory")}    ${a.memory?.list().length ?? 0} notes`, `  ${dim("sandbox")}   ${a.cfg.sandbox ?? "off"}`, `  ${dim("trace")}     ${a.tracer?.file ? a.tracer.file.replace(a.cwd + "/", "") : "(after the first message)"}`, `  ${dim("instructions")} ${a.agent.guidance?.files.join(", ") || "none loaded (add an AGENTS.md)"}`, `  ${dim("running")}   ${a.running ? "yes, " + fmtDuration(Date.now() - a.runStart) : "no"}`]);
+      const g = a.agent.guidance?.files ?? [];
+      a.report("Status", [
+        { kind: "kv", title: "Model", rows: [{ key: "model", value: a.cfg.model, hint: `via ${a.providerInfo().label}${a.model.api ? ` · ${a.model.api()} API` : ""}` }, ...(a.cfg.effort ? [{ key: "effort", value: a.cfg.effort }] : []), ...Object.entries(a.wired?.labels ?? {}).map(([r, l]) => ({ key: r, value: l }))] },
+        { kind: "kv", title: "Session", rows: [{ key: "mode", value: a.mode, tone: a.mode === "yolo" ? "err" as const : undefined }, { key: "running", value: a.running ? `yes, ${fmtDuration(Date.now() - a.runStart)}` : "no", tone: a.running ? "ok" as const : undefined }, { key: "session", value: a.session.id, hint: `${a.session.turns.length} turn${a.session.turns.length === 1 ? "" : "s"}${a.session.title ? ` · ${a.session.title}` : ""}` }, { key: "trace", value: a.tracer?.file ? a.tracer.file.replace(a.cwd + sep, "") : "after the first message", tone: a.tracer?.file ? undefined : "muted" as const }] },
+        { kind: "kv", title: "Project", rows: [{ key: "folder", value: a.cwd, hint: a.branch ? `⎇ ${a.branch}` : undefined }, { key: "checks", value: a.verify ?? "none", tone: a.verify ? undefined : "muted" as const, hint: a.verify ? undefined : "/verify sets one" }, { key: "instructions", value: g.length ? g.join(", ") : "none loaded", tone: g.length ? undefined : "muted" as const, hint: g.length ? undefined : "add an AGENTS.md" }, { key: "memory", value: `${a.memory?.list().length ?? 0} notes` }, { key: "sandbox", value: a.cfg.sandbox ?? "off", tone: (a.cfg.sandbox ?? "off") === "off" ? "muted" as const : "ok" as const }] },
+      ]);
     } },
     { name: "theme", help: "colour theme (live preview)", args: "[name]", run: async (a, arg) => {
       const prev = a.cfg.theme;

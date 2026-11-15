@@ -52,7 +52,7 @@ test("/bg in the app: a task runs in the background while the chat stays free, a
   await t.start();
   await t.submit("/bg tidy the readme"); assert.ok(await until(() => t.has(/started background task 1/)));
   await t.submit("hello"); assert.ok(await until(() => t.has("here, still free")), "the chat answers while the task runs");
-  await t.submit("/bg"); await t.settle(); assert.ok(t.has(/1\. tidy the readme +· running/));
+  await t.submit("/bg"); await t.settle(); assert.ok(t.has(/1\s+tidy the readme\s+running/));
   g.open(); assert.ok(await until(() => t.has(/background task 1 finished: background work done/)));
   await t.submit("/bg drop 1"); assert.ok(await until(() => t.has("dropped task 1")));
 });
