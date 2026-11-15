@@ -5,6 +5,8 @@ import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, resolve, sep } from "node:path";
+import { advancedData, editMain, editParams, pauseOp, type AdvancedData, type PauseOp } from "../tui/advanced.ts";
+import type { Box } from "../tui/lifecycle.ts";
 import { PROVIDERS, cloneConfig, ready, saveConfig, windowFor, type Config, type Layer } from "../config.ts";
 import { SHELL_CHOICES, STRATEGIES, createSessionWorktree, effortsFor, isRepo, removeWorktree, worktreeIsUntouched } from "../../src/index.ts";
 import { strip } from "../ui.ts";
@@ -53,7 +55,16 @@ export type ServerEvent =
   | { type: "dialog"; dialog: DialogView } | { type: "dialogClose"; id: number }
   | { type: "toast"; level: "info" | "ok" | "warn" | "error"; text: string }
   | { type: "fileChanged"; path: string; diff: string; created: boolean }
-  | { type: "copy"; text: string } | { type: "suggestReady" } | { type: "exit" };
+  | { type: "copy"; text: string } | { type: "suggestReady" } | { type: "exit" }
+  /** The Advanced view (cli/tui/advanced.ts) as data, or null when it is closed. Sent only when it changed. */
+  | { type: "advanced"; view: AdvancedData | null };
+
+/** What the window can do in the Advanced view: open and close it, move, pick a box, set pauses, and act at a pause. */
+export type AdvancedAction =
+  | { op: "open"; file?: string } | { op: "close" } | { op: "picker" }
+  | { op: "go"; i: number } | { op: "move"; d: 1 | -1 } | { op: "step"; d: 1 | -1 } | { op: "chat"; d: 1 | -1 } | { op: "home" } | { op: "end" }
+  | { op: "box"; box: Box } | { op: "focus"; box: Box } | { op: "filter"; box?: Box } | { op: "pause"; box: Box } | { op: "pauseNext" } | { op: "play" }
+  | { op: "edit" } | { op: "params" } | ({ op: "act" } & { act: PauseOp });
 
 /** An App overlay as plain data (the window and the API show the same dialogs). */
 export function dialogView(o: object, id: number): DialogView | undefined {
@@ -163,7 +174,7 @@ export class DesktopBridge {
   }
   /** Every live chat, for the chat list: the shown one first. */
   liveView(): LiveView[] {
-    const v = (a: App, current: boolean, wt?: Live["worktree"]): LiveView => ({ id: a.session.id, title: a.session.title, project: basename(wt?.repo ?? a.cwd), provider: a.cfg.provider, model: a.cfg.model, running: a.running, waiting: !!a.overlay, current, ...(wt && { branch: wt.branch }), startedAt: a.runStart });
+    const v = (a: App, current: boolean, wt?: Live["worktree"]): LiveView => ({ id: a.session.id, title: a.session.title, project: basename(wt?.repo ?? a.cwd), provider: a.cfg.provider, model: a.cfg.model, running: a.running, waiting: !!a.overlay || !!a.pauses.waiting, current, ...(wt && { branch: wt.branch }), startedAt: a.runStart });
     return [v(this.app, true, this.fgWorktree), ...this.live.map((l) => v(l.app, false, l.worktree))];
   }
 
@@ -178,11 +189,38 @@ export class DesktopBridge {
       this.sentCount = bs.length;
     }
     this.emit({ type: "state", state: this.state() });
-    this.syncDialog();
+    this.syncDialog(); this.syncAdvanced();
   }
   fullSync() { const bs = this.app.blocks.blocks; this.sent.clear(); for (const b of bs) this.sent.set(b.id, JSON.stringify(b)); this.sentCount = bs.length; this.emit({ type: "blocks", blocks: bs }); }
   /** Everything a window needs right after it connects. */
-  hello() { this.fullSync(); this.emit({ type: "state", state: this.state() }); this.dialogOf = undefined; this.syncDialog(); }
+  hello() { this.fullSync(); this.emit({ type: "state", state: this.state() }); this.dialogOf = undefined; this.syncDialog(); this.advSent = ""; this.syncAdvanced(); }
+  private advSent = "";
+  /** Send the Advanced view when it changed (closed = null). Long detail sections are cut for the window. */
+  private syncAdvanced() {
+    const a = this.app, v = a.advanced ? advancedData(a.advanced, a.pauses, { around: 80 }) : null;
+    if (v) v.detail = v.detail.map((x) => (x.body.length > 120_000 ? { ...x, body: x.body.slice(0, 120_000) + `\n… ${x.body.length - 120_000} more characters` } : x));
+    const j = JSON.stringify(v); if (j === this.advSent) return; this.advSent = j; this.emit({ type: "advanced", view: v });
+  }
+  /** An action from the window's Advanced view. Returns an error message for a refused pause change. */
+  advanced(b: AdvancedAction): { ok: boolean; error?: string } {
+    const a = this.app, v = a.advanced; let error: string | undefined;
+    switch (b.op) {
+      case "open": a.openAdvanced(b.file && b.file.endsWith(".jsonl") && resolve(b.file).startsWith(resolve(a.cwd, ".amness", "traces") + sep) ? b.file : undefined); break;
+      case "close": a.closeAdvanced(); break;
+      case "picker": void a.openAdvancedPicker(); break;
+      case "pauseNext": a.pauses.next = !a.pauses.next; break;
+      case "pause": a.pauses.cycle(b.box); break;
+      case "edit": void editMain(a); break;
+      case "params": void editParams(a); break;
+      case "act": error = pauseOp(a.pauses, b.act); break;
+      default: if (!v) return { ok: false, error: "the Advanced view is closed" };
+        if (b.op === "go") v.go(b.i); else if (b.op === "move") { v.stopPlay(); v.move(b.d); } else if (b.op === "step") v.step(b.d); else if (b.op === "chat") v.chat(b.d);
+        else if (b.op === "home") v.home(); else if (b.op === "end") v.end(); else if (b.op === "box") v.jumpBox(b.box); else if (b.op === "focus") v.focus = b.box;
+        else if (b.op === "filter") { v.filter = b.box; if (b.box && v.frame?.box !== b.box) v.jumpBox(b.box); } else if (b.op === "play") v.togglePlay(() => this.changed());
+    }
+    a.render(); this.changed();
+    return error ? { ok: false, error } : { ok: true };
+  }
 
   state(): StateView {
     const a = this.app, now = Date.now(), sidebar = sidebarData(a, this.panel, this.theme, now);

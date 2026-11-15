@@ -403,6 +403,7 @@ These commands show a report in a window: it does not go into the conversation. 
 | `/plans [on\|off]` | Offers the plan of a similar finished task as a starting point (off until measured). With no argument it shows how many plans are stored and how often they helped. |
 | `/tokens` (alias `/cost`) | The context gauge, what fills it, tokens, cache hits and estimated cost. |
 | `/loop` (alias `/trace`) | A step-by-step trace of the agent loop: each model turn, its tools and times, and any guard that fired. |
+| `/advanced [list\|<session id>\|off]` | The Advanced view: every part of the session as boxes you step through (hooks, context, model requests, tools, guards, the finish gate), with full details. You can pause the run at a box and change the next step. See [Advanced](advanced.md). |
 | `/budget [tokens]` | Shows or sets the token cap for each turn (default 300,000). Cached input counts as a tenth. You can write `500k` or `1m`. The minimum is 10,000. |
 | `/procs [stop <id>]` | Lists background processes the agent started, or stops one. |
 | `/profile` | Shows the harness settings that apply to this model. |

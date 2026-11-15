@@ -16,7 +16,7 @@ test("hooks: exit 0 allows, exit 2 blocks with the script's message, JSON can ad
   const d = dir();
   const block = script(d, "block.sh", 'echo "no pushing" >&2; exit 2'), ok = script(d, "ok.sh", "exit 0"), ctx = script(d, "ctx.sh", "echo remember the changelog"), js = script(d, "js.sh", `echo '{"context":"c1","args":{"x":2}}'`), jb = script(d, "jb.sh", `echo '{"decision":"block","reason":"policy"}'`);
   const run = (cfg: HookConfig) => new Hooks(cfg, d).run("PreToolUse", { tool: "t", args: {} });
-  assert.deepEqual(await run({ PreToolUse: [{ command: ok }] }), { warnings: [] });
+  { const { runs, ...rest } = await run({ PreToolUse: [{ command: ok }] }); assert.deepEqual(rest, { warnings: [] }); assert.deepEqual(runs?.map((x) => [x.command, x.outcome]), [[ok, "ok"]]); }
   assert.equal((await run({ PreToolUse: [{ command: block }] })).block, "no pushing");
   assert.equal((await run({ PreToolUse: [{ command: ctx }] })).context, "remember the changelog");
   const r = await run({ PreToolUse: [{ command: js }] }); assert.deepEqual([r.context, r.args], ["c1", { x: 2 }]);

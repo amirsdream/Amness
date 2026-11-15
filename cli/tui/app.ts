@@ -1,15 +1,15 @@
 // The chat TUI: one persistent conversation with a live input box, streaming output, permission prompts and slash commands.
 import { execFile, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { onRateLimitWait } from "../model.ts";
 import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
-import { type RequestRecord, pickFor, onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { type RequestRecord, pickFor, onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, pruneTraces, readTraceLines, type TraceLine, type PausePoint, type PauseEdit, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { hubOptions, mcpEntries } from "../mcpconfig.ts";
 import { McpHub, type McpElicitation } from "../../src/mcp.ts";
-import { PROVIDERS, applyTeam, forProject, home, keyFor, keyIdOf, layerNotes, rememberWindow, saveConfig, saveTo, storeKey, windowFor, type Config } from "../config.ts";
+import { PROVIDERS, applyTeam, forProject, home, keyFor, keyIdOf, layerNotes, rememberWindow, saveConfig, saveTo, storeKey, traceLimitBytes, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { editExternally, editorCommand, readClipboardImage, savePastedImage } from "./external.ts";
 import { fileOpenCommand } from "./find.ts";
@@ -26,6 +26,9 @@ import { bold, cyan, dim, gray, green, magenta, red, yellow } from "../ui.ts";
 import { BlockStore } from "./blocks.ts";
 import { buildCommands, type Cmd } from "./commands.ts";
 import { FullView } from "./full.ts";
+import { AdvancedView, PauseBook, advancedKey, pauseHelp } from "./advanced.ts";
+import { advancedLines } from "./advancedview.ts";
+import { boxOfPause } from "./lifecycle.ts";
 import { loadCustomCommands } from "./custom.ts";
 import { argOptions } from "./argcomplete.ts";
 import { FileIndex, fuzzyScore, applySuggestion, menuRows, rankCommands, rankFiles, tokenAtCursor, type Suggestion, type Token } from "./complete.ts";
@@ -203,7 +206,7 @@ export class App {
     this.model = w.model; this.roles = w.roles; this.wired = w;
     this.agent = createCodeAgent({
       model: this.model, modelById: (id) => w.byRef(id), cwd: this.cwd, chat: true, plans: this.cfg.plans || undefined, contextWindow: () => windowFor(this.cfg), onWindow: (w, id) => { rememberWindow(this.cfg, w, id); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`, [dim(`  context window learned: ${w.toLocaleString()} tokens`)]); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      toolPicks: () => this.cfg.tools, onRequest: (r) => { this.requests.push(r); if (this.requests.length > 50) this.requests.shift(); }, signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, exploreRanges: this.cfg.exploreRanges || undefined, stableTools: this.cfg.stableTools || undefined, advisor: nativeAdvisor(this.cfg) ? "native" : w.advisor, ladder: w.ladder, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer ? (w.approve ? { model: w.approve } : true) : undefined, quarantine: this.cfg.quarantine ? (w.quarantine ? quarantineReader(w.quarantine) : true) : undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      toolPicks: () => this.cfg.tools, onRequest: (r) => { this.requests.push(r); if (this.requests.length > 50) this.requests.shift(); this.ensureTracer().request(r); }, pause: (p) => this.pauseAt(p), signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, exploreRanges: this.cfg.exploreRanges || undefined, stableTools: this.cfg.stableTools || undefined, advisor: nativeAdvisor(this.cfg) ? "native" : w.advisor, ladder: w.ladder, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer ? (w.approve ? { model: w.approve } : true) : undefined, quarantine: this.cfg.quarantine ? (w.quarantine ? quarantineReader(w.quarantine) : true) : undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
     this.mcpNamesAdded.clear(); this.syncMcpTools();
@@ -398,6 +401,8 @@ export class App {
     if (this.overlay) {
       const d = this.overlay.render(w), at = live.length;
       live.push(...d.lines); if (d.cursor) cursor = { row: at + d.cursor.row, col: d.cursor.col };
+    } else if (this.advanced) {
+      live.push(...advancedLines(this.advanced, this.pauses, w, Math.max(8, this.screen.rows - 6)));
     } else {
       live.push("");                                                              // breathing room above the input box
       if (this.sugg) live.push(...this.suggLines(w));
@@ -448,6 +453,7 @@ export class App {
     if (this.pager) return this.pager.key(k);
     if (this.overlay instanceof TextOverlay && (k.name === "paste" || (k.name === "char" && !k.ctrl && !k.alt && k.text !== "q"))) { this.overlay.done(); this.schedule(); return this.handleKey(k); }   // typing closes a report window and goes on into the input box
     if (this.overlay) { this.overlay.key(k); this.schedule(); return; }
+    if (this.advanced) { if (k.ctrl && k.name === "c") return this.ctrlC(); advancedKey(this, this.advanced, k); return; }
     if (this.full?.find && this.full.findKey(k)) return this.render();
     const ed = this.editor;
     if (this.cfg.vim && this.vim.mode === "normal" && !this.sugg) {                      // vim normal mode: keys move and edit instead of typing
@@ -631,6 +637,7 @@ export class App {
     const full = prefix ? `${prefix}\n\n${expanded}` : expanded;
     this.addUser(text, attachedNote(attached) || undefined);
     if (!this.session.title) this.session.title = one(text, 60);
+    this.ensureTracer().chat(text, attached.length ? { attachments: attached.map((a) => a.path) } : {});
     const turn: Turn = { at: this.session.messages.length, text, t: Date.now(), snaps: {} };
     this.session.turns.push(turn);
     this.turnUsage0 = { ...this.session.usage }; this.running = true; this.ac = new AbortController(); this.runStart = Date.now(); this.runTokens = 0; this.todos = []; this.runSeries = []; this.phase = undefined; this.activity = [];
@@ -681,10 +688,62 @@ export class App {
   private stepNow(): TraceStep { if (!this.trace.length) this.trace.push({ n: 1, t0: Date.now(), ms: 0, prompt: 0, completion: 0, tools: [], notes: [] }); return this.trace[this.trace.length - 1]; }
   /** The session's trace (local JSONL file, plus an OpenTelemetry collector when AMNESS_OTLP is set). */
   tracer?: Tracer; private tracerFor = "";
-  private trace_(e: Ev) {
-    if (!this.persist) return;
-    if (!this.tracer || this.tracerFor !== this.session.id) { void this.tracer?.close(); this.tracerFor = this.session.id; this.tracer = new Tracer({ file: join(this.cwd, ".amness", "traces", `${this.session.id}.jsonl`), otlp: process.env.AMNESS_OTLP, sessionId: this.session.id, model: this.cfg.model }); }
-    this.tracer.event(e as any);
+  /** This session's trace lines written in this process (newest last), for the Advanced view; the file holds the rest. */
+  traceBuf: TraceLine[] = [];
+  /** The Advanced view, while it is open (cli/tui/advanced.ts). */
+  advanced: AdvancedView | null = null;
+  /** Pauses set in the Advanced view: they stay when it is closed, and a pause opens it again. */
+  pauses = new PauseBook();
+  /** The tracer for the current session: created on first use, and again when the session changes. Without saving (persist off) it keeps lines in memory only. */
+  ensureTracer(): Tracer {
+    if (!this.tracer || this.tracerFor !== this.session.id) {
+      void this.tracer?.close(); this.tracerFor = this.session.id; this.traceBuf = [];
+      const dir = join(this.cwd, ".amness", "traces"), file = this.persist ? join(dir, `${this.session.id}.jsonl`) : undefined;
+      if (file) pruneTraces(dir, traceLimitBytes(this.cfg), file);
+      this.tracer = new Tracer({ file, sink: (l) => this.onTraceLine(l), full: () => !!this.cfg.fullTrace || !!this.advanced, otlp: this.persist ? process.env.AMNESS_OTLP : undefined, sessionId: this.session.id, model: this.cfg.model });
+    }
+    return this.tracer;
+  }
+  private onTraceLine(l: TraceLine) {
+    this.traceBuf.push(l); if (this.traceBuf.length > 50_000) this.traceBuf.splice(0, 10_000);
+    if (this.advanced?.live) this.advanced.add(l);
+  }
+  private trace_(e: Ev) { this.ensureTracer().event(e as any); }
+  /** Open the Advanced view on this session (live), or on a saved trace. Full recording is on while it is open. */
+  openAdvanced(file?: string, title?: string) {
+    this.advanced?.close();
+    if (file) { this.advanced = new AdvancedView(readTraceLines(file), { live: false, title: title ?? basename(file, ".jsonl"), file }); }
+    else {
+      const t = this.ensureTracer(), saved = t.file && existsSync(t.file) ? readTraceLines(t.file) : [];
+      this.advanced = new AdvancedView(saved.length >= this.traceBuf.length ? saved : this.traceBuf.slice(), { live: true, title: this.session.title || "this chat" });
+    }
+    this.full?.invalidate(); this.render();
+  }
+  closeAdvanced() {
+    if (this.pauses.waiting && this.advanced?.live) { this.toast("the run is still paused: /advanced and c lets it go on; Ctrl+C stops it", "warn"); }
+    this.advanced?.close(); this.advanced = null; this.full?.invalidate(); this.render();
+  }
+  /** Pick a saved trace of this project to open in the Advanced view. */
+  async openAdvancedPicker() {
+    const dir = join(this.cwd, ".amness", "traces"); let files: { f: string; at: number; size: number }[] = [];
+    try { files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => { const st = statSync(join(dir, f)); return { f, at: st.mtimeMs, size: st.size }; }).sort((a, b) => b.at - a.at); } catch { /* none yet */ }
+    const titles = new Map(this.store.list().map((x) => [x.id, x.title]));
+    const pick = await this.pick("Open a session in Advanced", [{ label: "This chat (live)", value: "", hint: this.session.title || "" }, ...files.slice(0, 200).map((x) => { const id = x.f.replace(/\.jsonl$/, ""); return { label: titles.get(id) || id, value: join(dir, x.f), hint: `${new Date(x.at).toLocaleString()} · ${`${(x.size / 1024 / 1024).toFixed(1)} MB`}` }; })]);
+    if (pick === undefined) return this.render();
+    this.openAdvanced(pick || undefined, pick ? titles.get(basename(pick, ".jsonl")) : undefined);
+  }
+  /** The harness asks at each pause point: go on at once unless a pause is set there (or at the next point). */
+  pauseAt(p: PausePoint): Promise<PauseEdit | undefined> | undefined {
+    if (!this.pauses.any || !this.pauses.take(p)) return undefined;
+    return new Promise<PauseEdit | undefined>((resolve) => {
+      const sig = this.ac?.signal, box = boxOfPause(p.at);
+      this.pauses.waiting = { point: p, box, edit: {}, since: Date.now(), resolve: (e) => { sig?.removeEventListener("abort", stop); resolve(e); this.render(); } };
+      const stop = () => this.pauses.release();
+      sig?.addEventListener("abort", stop, { once: true });
+      if (!this.advanced?.live) this.openAdvanced(); else this.advanced.end();
+      this.notifyAway("Amness is paused", pauseHelp(p).where);
+      this.render();
+    });
   }
   onEvent(e: Ev) {
     this.live?.onEvent(e as any); this.trace_(e);

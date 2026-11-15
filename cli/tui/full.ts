@@ -17,6 +17,7 @@ import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { drawModal, type ModalHit } from "./modal.ts";
 import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay } from "./overlays.ts";
+import { drawAdvanced, type AdvHit } from "./advancedview.ts";
 import { estimateCost, fmtDuration, fmtTokens } from "./pricing.ts";
 import { BOLD, F, ITAL, chip, fit, split } from "./rich.ts";
 import { renderSidebar } from "./sidebar.ts";
@@ -84,6 +85,16 @@ export class FullView {
     if (this.canvas.w !== W || this.canvas.h !== H) { this.canvas = new Canvas(W, H, t.bg); this.forceFull = true; }
     const c = this.canvas; c.defaultBg = t.bg; c.level = colorLevel; c.clear(t.bg); c.cursor = null; this.regions = [];
     const now = Date.now(); this.toasts = this.toasts.filter((x) => x.until > now);
+    if (app.advanced) {                                                              // the Advanced view owns the screen; dialogs and toasts still go on top
+      this.advHits = drawAdvanced(c, t, app.advanced, app.pauses);
+      for (const h of this.advHits) this.regions.push({ x: h.x, y: h.y, w: h.w, h: h.h, kind: "advanced", click: () => { h.act(); app.render(); } });
+      const m = app.overlay ? drawModal(c, t, app.overlay, app.frame) : undefined;
+      if (m) { for (const h of m.hits) this.regions.push({ x: h.x, y: h.y, w: h.w, h: h.h, kind: "modal", click: () => this.modalClick(h) }); if (m.cursor) c.cursor = m.cursor; }
+      this.toastBase = H - 1; this.drawToasts(c, t, W);
+      const seq = c.flush(this.forceFull); this.forceFull = false;
+      o.write("\x1b[?2026h\x1b[?25l" + seq + (c.cursor ? `\x1b[${c.cursor.y + 1};${c.cursor.x + 1}H\x1b[?25h` : "") + "\x1b[?2026l");
+      return;
+    }
 
     const sbW = this.showSidebar && W >= 104 ? Math.max(30, Math.min(40, Math.floor(W * 0.27))) : 0, mainW = W - sbW;
     const edRows = this.editorRows(mainW - 8), inputH = edRows + 2, footerY = H - 1, inputY = footerY - inputH;
@@ -297,6 +308,7 @@ export class FullView {
   }
 
   // ------------------------------------------------------------------ sidebar
+  private advHits: AdvHit[] = [];
   /** Steps the user opened in the LOOP section by clicking. */
   /** Which loop steps are open, the context-map cache and the tip: per-view state for the shared sidebar data (panel.ts). */
   private panel = newPanelState();
@@ -407,6 +419,7 @@ export class FullView {
       if (o instanceof PickerOverlay) { o.key({ name: e.action === "wheelup" ? "up" : "down" }); app.render(); return; }
       if (o instanceof TextOverlay) { o.scroll += e.action === "wheelup" ? -3 : 3; app.render(); return; }
       if (o) return;
+      if (app.advanced) { const d = e.action === "wheelup" ? -1 : 1, h = [...this.advHits].reverse().find((r) => r.wheel && e.x >= r.x && e.x < r.x + r.w && e.y >= r.y && e.y < r.y + r.h); h?.wheel?.(d); app.render(); return; }
       this.scrollBy(e.action === "wheelup" ? step : -step); return;
     }
     if (e.button !== "left") return;
@@ -414,7 +427,7 @@ export class FullView {
     if (e.action === "press") {
       const inTr0 = !app.overlay && e.x >= this.viewX && e.x < this.viewX + this.viewW - 1 && e.y >= this.viewTop && e.y < this.viewTop + this.viewH;
       this.down = { x: e.x, y: e.y, moved: false, mode: inTr0 ? "lines" : "block" }; this.sel = undefined;
-      if (this.input(e)) return;
+      if (!app.advanced && this.input(e)) return;
     } else if (e.action === "drag" && this.down) {
       if (Math.abs(e.x - this.down.x) + Math.abs(e.y - this.down.y) > 0) {
         this.down.moved = true;

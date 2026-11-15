@@ -1188,6 +1188,7 @@ For parallel parts you see one line for each part, for example `merged         d
 
    The spans use the GenAI attribute names, for example `gen_ai.usage.input_tokens`, `gen_ai.usage.cache_read.input_tokens` and `gen_ai.tool.name`.
 4. In the chat, `/loop` (or `/trace`) shows the steps and the guards that fired. It also shows how many tokens were read again at full price after cache breaks, with an estimated cost.
+5. To step through a trace frame by frame, with each exact request, the thinking, diffs and hook runs, open `/advanced`. See [Advanced](advanced.md). It also explains *full recording* and the size limit for traces (200 MB per project by default).
 
 **Example.** List the tool calls of a session:
 
@@ -1202,7 +1203,7 @@ jq -r 'select(.kind=="toolstart") | .name' .amness/traces/<session>.jsonl | sort
 - Full messages are recorded only in chat sessions and in runs with `--trace`. Replay needs them.
 - Status: default in the chat. Covered by automated tests.
 
-**Related pages.** [Agent loop](agent-loop.md), [Headless and CI](headless.md).
+**Related pages.** [Advanced](advanced.md), [Agent loop](agent-loop.md), [Headless and CI](headless.md).
 
 ## Replay (test harness changes offline)
 

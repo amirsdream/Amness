@@ -166,7 +166,37 @@ export type Event =
   /** Why a call was allowed without asking, forced to ask, or refused: the rule, the floor or the taint check. */
   | { kind: "policy"; tool: string; action: "allow" | "ask" | "deny"; reason: string }
   | { kind: "audit"; changed: string[]; testsAfterLastEdit: boolean | undefined; notes: string[] }
-  | { kind: "finish"; summary: string };
+  | { kind: "finish"; summary: string }
+  /** Lifecycle hooks ran at `event`: what they got, what each command did, and what came back (the Advanced view shows it; `hook` events stay the short form). */
+  | { kind: "hookrun"; event: string; ms: number; input: Record<string, unknown>; result: { block?: string; context?: string; args?: Record<string, unknown>; tools?: string[]; then?: string; warnings?: string[] }; runs?: HookRun[] }
+  /** A risky call was put to the user (or the approver) and this was the answer. */
+  | { kind: "approval"; tool: string; id?: string; reason?: string; ok: boolean; answer: string }
+  /** The user changed something while the run was paused (see Options.pause). */
+  | { kind: "override"; at: PauseAt; step: number; detail: string };
+
+/** One hook command's run, as the hook runner reports it. */
+export type HookRun = { command: string; ms: number; outcome: "ok" | "block" | "context" | "args" | "warning"; output?: string };
+
+/** Where a run can be paused (Options.pause): before a model call, after its reply, before and after a tool call, and when the model calls `finish`. */
+export type PauseAt = "model" | "reply" | "tool" | "result" | "finish";
+export type PausePoint =
+  | { at: "model"; step: number; max: number; messages: readonly Message[]; tools: string[] }
+  | { at: "reply"; step: number; content: string | null; calls: { id: string; name: string; args: string }[] }
+  | { at: "tool"; step: number; id: string; name: string; args: Record<string, unknown> }
+  | { at: "result"; step: number; id: string; name: string; args: Record<string, unknown>; result: string }
+  | { at: "finish"; step: number; summary: string };
+/**
+ * What the user changed at a pause. Loop settings (`maxSteps`, `off`, `on`) apply at any point; the rest only where they make sense:
+ * `note` and `tools` before a model call, `content` and `calls` to a reply, `args`, `skip` and `deny` before a tool call, `result` after it, `reject` and `accept` at a finish.
+ */
+export type PauseEdit = {
+  maxSteps?: number; off?: Guard[]; on?: Guard[];
+  note?: string; tools?: string[];
+  content?: string | null; calls?: { id: string; name: string; args: string }[];
+  args?: Record<string, unknown>; skip?: string; deny?: string;
+  result?: string;
+  reject?: string; accept?: boolean;
+};
 
 /** Shared token/time cap. Pass one instance to a harness (and its subagents) to bound the whole run. */
 /** Servers that report no token usage (many local ones) would make every cap useless, so estimate it: about 4 characters per token. Marked, so a UI can show it as approximate. */
@@ -317,11 +347,16 @@ export type Options = {
   /** Emit `run` and `model` events with full message content, so a trace can be replayed later (see `replay`). Larger traces; off unless asked. */
   record?: boolean;
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
-  hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit" | "PreModel" | "PostModel", payload: Record<string, unknown>): Promise<{ block?: string; context?: string; args?: Record<string, unknown>; tools?: string[]; then?: string; warnings: string[] }> };
+  hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit" | "PreModel" | "PostModel", payload: Record<string, unknown>): Promise<{ runs?: HookRun[]; block?: string; context?: string; args?: Record<string, unknown>; tools?: string[]; then?: string; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
   signal?: AbortSignal | (() => AbortSignal | undefined);
   /** Polled at the start of every turn: messages the user typed while the agent was working ("steering"). They join the conversation immediately. */
   inbox?: () => string[];
+  /**
+   * Pause points (the Advanced view): called at each PauseAt. Return undefined at once to go on (the usual case: it costs one call), or wait for the user
+   * and return what they changed. Every change is reported as an `override` event. Edited arguments still go through policy, permissions and approval.
+   */
+  pause?: (p: PausePoint) => PauseEdit | undefined | Promise<PauseEdit | undefined>;
   onEvent?: (e: Event) => void;
 };
 
@@ -524,7 +559,8 @@ export function createHarness(o: Options) {
   /** Run lifecycle hooks, report what they did, and fail open (a broken hook only warns). */
   const hook = async (event: Parameters<NonNullable<Options["hooks"]>["run"]>[0], payload: Record<string, unknown>) => {
     if (!o.hooks) return undefined;
-    const r = await o.hooks.run(event, payload).catch((e: Error) => ({ warnings: [`hook error: ${e.message}`] } as { block?: string; context?: string; args?: Record<string, unknown>; tools?: string[]; then?: string; warnings: string[] }));
+    const t0 = Date.now(), r = await o.hooks.run(event, payload).catch((e: Error) => ({ warnings: [`hook error: ${e.message}`] } as { block?: string; context?: string; args?: Record<string, unknown>; tools?: string[]; then?: string; warnings: string[]; runs?: HookRun[] }));
+    if (r.runs?.length || r.block || r.context || r.args || r.tools || r.warnings.length) emit({ kind: "hookrun", event, ms: Date.now() - t0, input: payload, result: { block: r.block, context: r.context, args: r.args, tools: r.tools, then: r.then, warnings: r.warnings }, ...(r.runs && { runs: r.runs }) });
     for (const w of r.warnings) emit({ kind: "hook", event, detail: w, blocked: false });
     if (r.block) emit({ kind: "hook", event, detail: r.block, blocked: true });
     else if (r.context) emit({ kind: "hook", event, detail: "added context", blocked: false });
@@ -571,7 +607,22 @@ export function createHarness(o: Options) {
     meter = lad ? new RiskMeter() : undefined; lad?.moveTo(lad.start);   // every run (a task, a chat turn, an eval case) starts on the start tier
     const adviceFor = async (why: "start" | "stuck" | "finish") => { if (!o.advise || advised.has(why)) return undefined; advised.add(why); try { const a = (await o.advise(why, msgs))?.trim(); if (a) emit({ kind: "hook", event: "Advisor", detail: `${why}: ${a.slice(0, 160)}`, blocked: false }); return a || undefined; } catch { return undefined; } };
     let epoch = 0, ledgerRejects = 0, reviewRejects = 0, coverageRejects = 0, stagnationWarned = false; const progress = new ProgressTracker(); let turnCalls: TurnFacts["calls"] = [], turnEdits: TurnFacts["edits"] = [];   // bumped by every file edit: repeating a call is only suspicious if nothing changed in between (re-running tests after an edit is normal)
-    const max = o.maxSteps ?? card.maxSteps ?? 30;
+    let max = o.maxSteps ?? card.maxSteps ?? 30;
+    /** Ask the pause handler (if any), apply the loop settings the user changed, and report every change. */
+    const paused = async (p: PausePoint): Promise<PauseEdit | undefined> => {
+      if (!o.pause) return undefined;
+      const pe = await o.pause(p); if (!pe) return undefined;
+      const said: string[] = [];
+      if (pe.maxSteps !== undefined && pe.maxSteps > p.step && pe.maxSteps !== max) { max = Math.floor(pe.maxSteps); said.push(`step limit ${max}`); }
+      for (const g of pe.off ?? []) if (!off.has(g)) { off.add(g); said.push(`guard ${g} off`); }
+      for (const g of pe.on ?? []) if (off.has(g)) { off.delete(g); said.push(`guard ${g} on`); }
+      if (pe.note) said.push("added a note"); if (pe.tools) said.push(`tools for this call: ${pe.tools.join(", ") || "none"}`);
+      if (pe.content !== undefined) said.push("edited the reply"); if (pe.calls) said.push(`edited the tool calls (${pe.calls.length})`);
+      if (pe.args) said.push("edited the arguments"); if (pe.skip !== undefined) said.push("skipped the call"); if (pe.deny) said.push("denied the call");
+      if (pe.result !== undefined) said.push("edited the result"); if (pe.reject) said.push("rejected the finish"); if (pe.accept) said.push("accepted the finish");
+      if (said.length) emit({ kind: "override", at: p.at, step: p.step, detail: said.join("; ") });
+      return pe;
+    };
     /** Rewrite old messages with `run` only where that pays (src/rewrite.ts). `force` is for when the window needs the room whatever it costs. Returns the characters saved. */
     const rewrite = (stepNow: number, force: boolean, run: (xs: Message[]) => void): number => {
       const chars = (xs: Message[]) => xs.reduce((n, x) => n + (x.content?.length ?? 0) + (x.tool_calls ?? []).reduce((k, c) => k + c.function.arguments.length, 0), 0), before = chars(msgs);
@@ -673,6 +724,9 @@ export function createHarness(o: Options) {
         if (pre?.block) { emit({ kind: "loop", detail: `stopped by a PreModel hook: ${pre.block}` }); o.checkpoint?.(msgs); return end(`stopped: ${pre.block}`, false, step, "blocked"); }
         if (pre?.context) msgs.push({ role: "user", content: pre.context });
         allowNow = pre?.tools ? new Set(pre.tools) : undefined; thenNext = pre?.then; }
+      { const pe = await paused({ at: "model", step, max, messages: msgs, tools: specs.map((x) => x.name) });
+        if (pe?.note) msgs.push({ role: "user", content: pe.note });
+        if (pe?.tools) allowNow = new Set(pe.tools); }
       // Inspecting without ever starting: a local model re-read the same four data files five ways (read_file, xxd, od) and never wrote the program the task asked for.
       if (o.writeFirst && !off.has("wrapup") && epoch === 0 && (step === 6 || step === 10)) {
         emit({ kind: "nudge", detail: `write-first: ${step} steps without an edit` });
@@ -727,6 +781,9 @@ export function createHarness(o: Options) {
       }
       ceiling = low ? { reported: lastPrompt, est: sentEst } : undefined;
       if (win && !m.usage?.estimated && lastPrompt > 0 && !low) calib = calibration(lastPrompt, sentEst);      // `msgs` is exactly what was sent: learn how far our estimate is from the provider's count
+      if (o.pause) { const pe = await paused({ at: "reply", step, content: m.content ?? null, calls: (m.tool_calls ?? []).map((c) => ({ id: c.id, name: c.function.name, args: c.function.arguments })) });
+        if (pe?.content !== undefined) m.content = pe.content;
+        if (pe?.calls) m.tool_calls = pe.calls.length ? pe.calls.map((c, i) => ({ id: c.id || `user-${step}-${i}`, type: "function" as const, function: { name: c.name, arguments: c.args } })) : undefined; }
       if (o.record) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
       emit({ kind: "turn", step, tokens, prompt: m.usage?.prompt_tokens ?? 0, completion: m.usage?.completion_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0, reasoning: m.usage?.reasoning_tokens ?? 0 });
       if (m.content?.trim()) emit({ kind: "assistant", text: m.content, streamed });
@@ -775,6 +832,9 @@ export function createHarness(o: Options) {
         const errs = schema ? validate(args, schema) : [`unknown tool "${name}".${(() => { const c = closestName(name, [...names, "finish", ...[...reg.tools.keys()]]); return c ? ` Did you mean "${c}"?` : ""; })()} Available: ${[...names, "finish"].join(", ")}`];
         if (errs.length) { emit({ kind: "repair", detail: errs.join("; ") }); return `ERROR: ${errs.join("; ")}`; }
         if (name === "finish") {
+          { const pe = await paused({ at: "finish", step, summary: String(args.summary ?? "") });
+            if (pe?.reject) { emit({ kind: "rejected", detail: `by you: ${pe.reject}` }); return `REJECTED by the user: ${clip(pe.reject, 3000)}\nFix this, then finish again.`; }
+            if (pe?.accept) { done = args.summary; emit({ kind: "finish", summary: args.summary }); return "accepted"; } }
           const stop = await hook("Stop", { summary: args.summary, task, ...(o.ledger ? o.ledger.audit(task) : { changed: [], notes: [] }) });
           if (stop?.block) { emit({ kind: "rejected", detail: stop.block }); return `REJECTED by a hook: ${clip(stop.block, 3000)}\nFix the problem, then finish again.`; }
           // Re-read the task once before finishing (local tier): the largest single effect in one local-model harness's ablation (Mingbird, arXiv 2610.02001, read; weak evidence).
@@ -812,6 +872,10 @@ export function createHarness(o: Options) {
         const pre = await hook("PreToolUse", { tool: name, args });
         if (pre?.block) { emit({ kind: "denied", detail: `${name}: blocked by a hook` }); return `BLOCKED BY A HOOK: ${clip(pre.block, 2000)}\nDo not retry the same call; choose another approach or explain what you could not do.`; }
         if (pre?.args) { const e2 = validate(pre.args, t!.schema); if (e2.length) return `ERROR: a hook rewrote the arguments into something invalid (${e2.join("; ")})`; args = pre.args; }
+        if (o.pause) { const pe = await paused({ at: "tool", step, id: c.id, name, args });
+          if (pe?.deny) { emit({ kind: "denied", detail: `${name}: by you: ${pe.deny}` }); return `DENIED by the user: ${clip(pe.deny, 2000)}. Do not retry this; choose another approach.`; }
+          if (pe?.skip !== undefined) return `SKIPPED by the user${pe.skip ? `: ${clip(pe.skip, 2000)}` : ""}. The call did not run.`;
+          if (pe?.args) { const e3 = validate(pe.args, t!.schema); if (e3.length) return `ERROR: the arguments you set are invalid (${e3.join("; ")})`; args = pe.args; raw = JSON.stringify(args); } }
         const taint = o.taint !== "off" && (name === "sh" || name === "sh_start") ? taintedBy(String(args.cmd ?? ""), untrustedPool) : undefined;
         if (taint && o.taint === "deny") { emit({ kind: "denied", detail: `${name}: contains text from ${taint}` }); return `DENIED: this command contains text copied from ${taint}, an untrusted source. Write the command yourself instead of copying it from fetched content, or ask the user.`; }
         let perm = o.permissions?.check(name, args);
@@ -834,6 +898,7 @@ export function createHarness(o: Options) {
           const ask = approvals.then(() => o.approve?.({ name, args, reason: typeof risk === "string" ? risk : undefined, preview, id: c.id, floor: perm?.floor || !!taint }) ?? false);
           approvals = ask.catch(() => {});
           const ok = await ask;
+          emit({ kind: "approval", tool: name, id: c.id, ...(typeof risk === "string" && { reason: risk }), ok: ok === true, answer: ok === true ? "allowed" : typeof ok === "string" ? ok : "not approved" });
           if (ok !== true) {
             const why = typeof ok === "string" ? ok : "not approved";
             emit({ kind: "denied", detail: `${name}: ${why}` });
@@ -870,6 +935,7 @@ export function createHarness(o: Options) {
         }
         if (deduped && ckey) tcache!.drop(ckey);                                                                                            // the transcript holds markers, not the full text: a "same as call X" pointer to it would mislead
         if (fixes.length && !/^(ERROR|DENIED)/.test(result)) result += `\n\n(note: your call was corrected before it ran: ${fixes.join("; ")}. Send it in this shape next time.)`;
+        if (o.pause) { const pe = await paused({ at: "result", step, id: c.id, name, args, result }); if (pe?.result !== undefined) result = pe.result; }
         turnCalls.push({ name, args, result });
         const post = await hook("PostToolUse", { tool: name, args, result: clip(result, 4000), ok: !/^(ERROR|DENIED)/.test(result) });
         if (post?.context) result += `\n\n[hook] ${clip(post.context, 2000)}`;

@@ -78,6 +78,8 @@ Tools from [MCP servers](docs/mcp.md): yours, and the project's `.mcp.json` once
 
 <p align="center"><img src="docs/images/serve-phone.png" alt="Amness in a phone-sized browser through amness serve" width="300"></p>
 
+Want to see everything? `/advanced` shows the whole session as boxes you step through, forward and back: hooks, context, each exact model request, tools, guards and the finish gate. You can pause the run at a box and change the next step (a note to the model, the arguments of a call, a result). See [Advanced](docs/advanced.md).
+
 More screenshots (subagents, the loop view, themes) are in the [step-by-step guide](docs/getting-started.md).
 
 ## Examples

@@ -42,5 +42,8 @@ export function formatEvent(e: Event & { agent?: string }): string {
     case "audit": return e.changed.length || e.notes.length ? `${who}${e.notes.length ? yellow("◐ audit") : green("◉ audit")} ${dim(`${e.changed.length} file(s) changed${e.testsAfterLastEdit === true ? " · tests passed after the last edit" : ""}${e.notes.length ? " · " + e.notes.join("; ") : ""}`)}` : "";
     case "hook": return `${who}${e.blocked ? red("⛔ hook") : yellow("⚙ hook")} ${dim(e.event + ": " + one(e.detail, 90))}`;
     case "finish": return `${who}${green("✔ finish")} ${dim(one(e.summary, 80))}`;
+    case "hookrun": return `${who}${dim(`⚙ ${e.event} hooks: ${(e.runs ?? []).map((r) => `${r.outcome} ${r.ms}ms`).join(", ") || "ran"}`)}`;
+    case "approval": return `${who}${e.ok ? green("✓ allowed") : red("✗ not allowed")} ${e.tool} ${dim(one(e.ok ? "" : e.answer, 70))}`;
+    case "override": return `${who}${yellow(`✋ you changed (${e.at}, step ${e.step + 1}):`)} ${dim(one(e.detail, 80))}`;
   }
 }

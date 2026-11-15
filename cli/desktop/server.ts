@@ -73,6 +73,7 @@ export async function startDesktopServer(o: { cfg: Config; cwd: string; version:
     "POST /api/command": async (b) => bridge.commandWithReports(String(b.text ?? "")),
     "POST /api/scheme": (b) => { bridge.setScheme(b.scheme === "light" || b.scheme === "retro" ? b.scheme : "dark"); return { ok: true }; },
     "POST /api/step": (b) => { bridge.toggleStep(Number(b.n)); return { ok: true }; },
+    "POST /api/advanced": (b) => bridge.advanced(b && typeof b === "object" && typeof b.op === "string" ? b : { op: "close" }),
     "GET /api/commands": () => bridge.commands(),
     "POST /api/suggest": (b) => bridge.suggest(String(b.text ?? ""), Number(b.cursor ?? 0)),
     "GET /api/sessions": (_b, q) => bridge.sessions(q.get("q") ?? ""),

@@ -22,6 +22,7 @@ const INSPECT = [
   { group: "This conversation" },
   { label: "Tokens and cost", cmd: "/tokens", tip: "What fills the context window, tokens in and out, cache and an estimated cost" },
   { label: "Agent loop", cmd: "/loop", tip: "Every step of the last run: model calls, tools and what the guards did" },
+  { label: "Advanced", cmd: "/advanced", tip: "Step through everything the harness did (hooks, loop, chats, full details) and pause a box to change things" },
   { label: "Todos", cmd: "/todos", tip: "The agent's checklist for this task" },
   { label: "Status", cmd: "/status", tip: "Model, mode, project and session" },
   { group: "What the model sees" },
@@ -514,6 +515,7 @@ function onServer(e) {
     case "copy": copy(e.text); break;
     case "suggestReady": refreshSuggest(); break;
     case "exit": window.close(); break;
+    case "advanced": adv = e.view; drawAdvanced(); break;
   }
 }
 
@@ -1297,3 +1299,106 @@ $("paletteKey").textContent = /Mac/.test(navigator.platform) ? "⌘K" : "Ctrl K"
 // ------------------------------------------------------------------ start
 if (!TOKEN) document.body.replaceChildren(h("div", { class: "empty" }, h("h1", { text: "Open Amness with the amness-desktop command." }), h("p", { class: "muted", text: "This page needs the access link that the command opens." })));
 else api("/api/prefs").then((p) => { prefs = p || {}; }, () => {}).finally(() => { applyPrefs(); applyLayout(); connect(); input.focus(); });
+
+// ------------------------------------------------------------------ Advanced view (cli/tui/advanced.ts sends it as data; the terminal draws the same)
+let adv = null, advEditDirty = false;
+const advAct = async (body) => { const r = await tryApi("/api/advanced", body); if (r && r.ok === false && r.error) toast("warn", r.error); return r; };
+function svgEl(tag, attrs, ...kids) { const el = document.createElementNS(SVGNS, tag); for (const [k, v] of Object.entries(attrs || {})) { if (v === undefined || v === null || v === false) continue; if (k.startsWith("on")) el.addEventListener(k.slice(2), v); else if (k === "text") el.textContent = v; else el.setAttribute(k, String(v)); } for (const c of kids.flat()) if (c) el.append(c); return el; }
+function advDiagram(a) {
+  const n = a.boxes.length, W = 1000, bw = 104, gap = (W - n * bw) / (n - 1), bh = 64, y = 14, xs = a.boxes.map((_, i) => i * (bw + gap));
+  const root = svgEl("svg", { viewBox: `0 0 ${W} 132`, class: "adv-svg", role: "img", "aria-label": "The agent loop" });
+  root.append(svgEl("defs", {}, svgEl("marker", { id: "adv-arrow", viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" }, svgEl("path", { d: "M0 0 L10 5 L0 10 z", class: "adv-arrowhead" }))));
+  a.boxes.forEach((b, i) => { if (i < n - 1) { const hot = b.from && a.boxes[i + 1].active; root.append(svgEl("line", { x1: xs[i] + bw + 4, y1: y + bh / 2, x2: xs[i + 1] - 6, y2: y + bh / 2, class: `adv-edge${hot ? " hot" : ""}`, "marker-end": "url(#adv-arrow)" })); } });
+  const mi = a.boxes.findIndex((b) => b.id === "model"), gi = a.boxes.findIndex((b) => b.id === "guards");
+  if (mi >= 0 && gi >= 0) { const x1 = xs[gi] + bw / 2, x0 = xs[mi] + bw / 2, yb = y + bh + 6; const back = a.boxes[gi].from && a.boxes[mi].active;
+    root.append(svgEl("path", { d: `M ${x1} ${yb} C ${x1} ${yb + 40}, ${x0} ${yb + 40}, ${x0} ${yb + 2}`, class: `adv-edge loop${back ? " hot" : ""}`, "marker-end": "url(#adv-arrow)" }), svgEl("text", { x: (x0 + x1) / 2, y: yb + 36, class: "adv-looplabel", "text-anchor": "middle", text: "↺ next step" })); }
+  a.boxes.forEach((b, i) => {
+    const g = svgEl("g", { class: `adv-box${b.active ? " active" : ""}${b.from ? " from" : ""}${b.id === a.focus ? " focus" : ""}${b.paused ? " paused" : ""}${a.filter && a.filter !== b.id ? " faded" : ""}`, transform: `translate(${xs[i]},${y})`, tabindex: "0", role: "button", onclick: () => advAct({ op: "box", box: b.id }) },
+      svgEl("title", { text: `${b.label}: ${b.help}${b.pausable ? " · pause dot: stop the run here" : ""}` }),
+      svgEl("rect", { width: bw, height: bh, rx: 10, class: "adv-rect" }),
+      svgEl("text", { x: 12, y: 26, class: "adv-glyph", text: b.glyph }), svgEl("text", { x: 30, y: 26, class: "adv-label", text: b.label }),
+      svgEl("text", { x: 12, y: 50, class: "adv-count", text: b.paused ? "waiting" : b.count ? `${b.count} in this chat` : "·" }));
+    if (b.pausable) g.append(svgEl("g", { class: `adv-pause${b.pause ? " on" : ""}${b.pause === "once" ? " once" : ""}`, transform: `translate(${bw - 18},${16})`, onclick: (e) => { e.stopPropagation(); advAct({ op: "pause", box: b.id }); } },
+      svgEl("title", { text: !b.pause ? "Pause here every time" : b.pause === "always" ? "Pausing every time: click for once" : "Pausing once: click to remove" }), svgEl("circle", { r: 8 }), svgEl("text", { "text-anchor": "middle", y: 4, text: b.pause === "once" ? "1" : "⏸" })));
+    root.append(g);
+  });
+  return root;
+}
+function advSection(s) {
+  const pre = h("pre", { class: `adv-pre ${s.kind || "text"}` });
+  if (s.kind === "diff") for (const l of s.body.split("\n")) pre.append(h("span", { class: l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : "", text: l + "\n" }));
+  else pre.textContent = s.body;
+  return h("section", { class: "adv-sec" }, h("div", { class: "adv-sech" }, h("span", { text: s.title }), h("button", { class: "ghost tiny", title: "Copy", onclick: () => copy(s.body) }, "copy")), pre);
+}
+function advPaused(p) {
+  const ta = h("textarea", { class: "adv-edit", rows: p.target.field === "args" || p.target.field === "result" ? 8 : 3, spellcheck: "false", placeholder: p.target.label, oninput: () => { advEditDirty = true; } });
+  ta.value = p.target.text;
+  const apply = () => advAct({ op: "act", act: { op: "set", field: p.target.field, text: ta.value } }).then(() => { advEditDirty = false; });
+  ta.onkeydown = (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); apply(); } e.stopPropagation(); };
+  const btn = (label, act, cls = "", tip) => h("button", { class: cls, title: tip, onclick: () => advAct({ op: "act", act }) }, label);
+  const extra = [];
+  if (p.at === "model") {
+    const tools = h("input", { type: "text", class: "adv-in", placeholder: `tools for this call (of ${p.tools.length}), comma separated`, onkeydown: (e) => { e.stopPropagation(); if (e.key === "Enter") advAct({ op: "act", act: { op: "tools", names: tools.value.trim() ? tools.value.split(/[\s,]+/).filter(Boolean) : null } }); } });
+    const steps = h("input", { type: "number", class: "adv-in small", placeholder: `step limit (${p.max})`, onkeydown: (e) => { e.stopPropagation(); if (e.key === "Enter" && steps.value) advAct({ op: "act", act: { op: "steps", n: Number(steps.value) } }); } });
+    extra.push(h("div", { class: "adv-row" }, tools, steps));
+  }
+  if (p.at === "reply") {
+    const calls = h("textarea", { class: "adv-edit", rows: 6, spellcheck: "false", onkeydown: (e) => e.stopPropagation() }); calls.value = p.calls || "[]";
+    extra.push(h("div", { class: "adv-lbl", text: "Tool calls (JSON list of { name, args })" }), calls, h("div", { class: "adv-row" }, h("button", { onclick: () => advAct({ op: "act", act: { op: "calls", json: calls.value } }) }, "Set the tool calls")));
+  }
+  const guard = h("select", { class: "adv-in small", onchange: () => { if (guard.value) { const [g, on] = guard.value.split(":"); advAct({ op: "act", act: { op: "guard", guard: g, on: on === "on" } }); guard.value = ""; } } },
+    h("option", { value: "", text: "Guard…" }), p.guards.flatMap((g) => [h("option", { value: `${g}:off`, text: `${g}: off from now on` }), h("option", { value: `${g}:on`, text: `${g}: on again` })]));
+  return h("div", { class: "adv-paused" },
+    h("div", { class: "adv-ph" }, h("span", { class: "adv-badge", text: "⏸ Paused" }), h("b", { text: p.where }), h("span", { class: "muted", text: ` · you can ${p.edit}` })),
+    p.changes ? h("div", { class: "adv-changes", text: `Your changes: ${p.changes}` }) : null,
+    h("div", { class: "adv-lbl", text: p.target.label }), ta,
+    ...extra,
+    h("div", { class: "adv-row" },
+      h("button", { onclick: apply, title: "Ctrl+Enter" }, p.target.field === "reject" ? "Set reject reason" : "Apply change"),
+      p.at === "tool" ? btn("Skip call", { op: "skip" }, "", "The call does not run; the model is told") : null,
+      p.at === "tool" ? btn("Deny", { op: "deny", why: "denied while paused" }, "danger") : null,
+      p.at === "finish" ? btn("Accept now", { op: "accept" }, "", "Accept without the checks") : null,
+      guard, btn("Discard changes", { op: "discard" }, "ghost"),
+      h("span", { class: "grow" }),
+      btn("Go on, pause at next", { op: "next" }, "", "N"), btn("Continue", { op: "continue" }, "primary", "C")));
+}
+function drawAdvanced() {
+  const root = $("advancedRoot");
+  if (!adv) { root.classList.add("hidden"); root.replaceChildren(); document.body.classList.remove("adv-open"); return; }
+  const a = adv, cur = a.list.find((f) => f.i === a.cur);
+  const focused = document.activeElement, keepEdit = advEditDirty && focused && focused.classList.contains("adv-edit") && root.contains(focused);
+  if (keepEdit) { root.querySelector(".adv-svgwrap")?.replaceChildren(advDiagram(a)); return; }       // do not wipe what you are typing
+  document.body.classList.add("adv-open"); root.classList.remove("hidden");
+  const state = a.paused ? h("span", { class: "adv-chip warn", text: "⏸ paused" }) : a.live ? h("span", { class: `adv-chip ${a.follow ? "ok" : ""}`, text: a.follow ? "● live" : "○ live · End follows" }) : h("span", { class: "adv-chip", text: "saved trace" });
+  const tbtn = (label, body, tip) => h("button", { class: "ghost", title: tip, onclick: () => advAct(body) }, label);
+  const timeline = h("div", { class: "adv-timeline", title: "The whole session: click to jump" }, a.timeline.map((b, k) => h("span", { class: `t-${b.tone}${b.here ? " here" : ""}${k && a.timeline[k - 1].chat !== b.chat ? " chat" : ""}`, onclick: () => advAct({ op: "go", i: b.at }) })));
+  const list = h("div", { class: "adv-list" }, a.list.map((f) => h("button", { class: `adv-item t-${f.tone}${f.i === a.cur ? " on" : ""}`, onclick: () => advAct({ op: "go", i: f.i }) },
+    h("span", { class: "n", text: String(f.i + 1) }), h("span", { class: "g", text: (a.boxes.find((b) => b.id === f.box) || {}).glyph || "·" }), h("span", { class: "tt", text: f.title }), h("span", { class: "sm", text: f.summary }))));
+  const detail = h("div", { class: "adv-detail" }, a.total ? a.detail.map(advSection) : h("div", { class: "muted pad", text: a.live ? "Send a message: every step of the run shows up here as it happens." : "This trace is empty." }));
+  root.replaceChildren(h("div", { class: "adv" },
+    h("div", { class: "adv-top" }, h("span", { class: "adv-title" }, h("span", { class: "logo", text: "◆" }), " Advanced"), h("span", { class: "muted", text: a.title }),
+      h("span", { class: "adv-where", text: a.total ? `chat ${a.chat || "–"}/${a.chats.length} · step ${cur?.step || "–"} · frame ${a.cur + 1}/${a.total}` : "nothing recorded yet" }), state,
+      a.next ? h("span", { class: "adv-chip warn", text: "pausing at next point" }) : null, h("span", { class: "grow" }),
+      tbtn("Open…", { op: "picker" }, "Open a saved session of this project"), tbtn(a.next ? "Cancel pause at next" : "Pause at next", { op: "pauseNext" }, "Stop at the next pause point, whatever box it is in (.)"), h("button", { class: "ghost", title: "Close (Esc)", onclick: () => advAct({ op: "close" }) }, "✕")),
+    h("div", { class: "adv-svgwrap" }, advDiagram(a)),
+    h("div", { class: "adv-bar" },
+      tbtn("⏮", { op: "home" }, "First (Home)"), tbtn("◀◀ chat", { op: "chat", d: -1 }, "Previous chat (PgUp)"), tbtn("◀ step", { op: "step", d: -1 }, "Previous step ([)"), tbtn("‹", { op: "move", d: -1 }, "Previous frame (←)"),
+      tbtn(a.playing ? "❚❚" : "▶", { op: "play" }, "Play (Space)"),
+      tbtn("›", { op: "move", d: 1 }, "Next frame (→)"), tbtn("step ▶", { op: "step", d: 1 }, "Next step (])"), tbtn("chat ▶▶", { op: "chat", d: 1 }, "Next chat (PgDn)"), tbtn("⏭", { op: "end" }, "Last, and follow (End)"),
+      h("span", { class: "grow" }),
+      h("select", { class: "adv-in small", title: "Show only one box", onchange: (e) => advAct({ op: "filter", box: e.target.value || undefined }) }, h("option", { value: "", text: "Every box" }), a.boxes.map((b) => h("option", { value: b.id, text: `Only ${b.label}`, ...(a.filter === b.id ? { selected: true } : {}) })))),
+    timeline,
+    a.paused ? advPaused(a.paused) : null,
+    h("div", { class: "adv-body" }, list, detail)));
+  advEditDirty = false;
+  root.querySelector(".adv-item.on")?.scrollIntoView({ block: "nearest" });
+}
+document.addEventListener("keydown", (e) => {
+  if (!adv || $("modalRoot").children.length) return;
+  const t = e.target; if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT")) return;
+  const k = e.key, go = (body) => { e.preventDefault(); e.stopPropagation(); advAct(body); };
+  if (k === "Escape") go({ op: "close" }); else if (k === "ArrowLeft") go({ op: "move", d: -1 }); else if (k === "ArrowRight") go({ op: "move", d: 1 });
+  else if (k === "[") go({ op: "step", d: -1 }); else if (k === "]") go({ op: "step", d: 1 }); else if (k === "PageUp") go({ op: "chat", d: -1 }); else if (k === "PageDown") go({ op: "chat", d: 1 });
+  else if (k === "Home") go({ op: "home" }); else if (k === "End") go({ op: "end" }); else if (k === " ") go({ op: "play" }); else if (k === ".") go({ op: "pauseNext" });
+  else if (adv.paused && (k === "c" || k === "C")) go({ op: "act", act: { op: "continue" } }); else if (adv.paused && (k === "n" || k === "N")) go({ op: "act", act: { op: "next" } });
+}, true);

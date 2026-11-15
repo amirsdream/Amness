@@ -11,7 +11,7 @@ export type HookEvent = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "Po
 export const HOOK_EVENTS: HookEvent[] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "Stop", "PreModel", "PostModel"];
 export type HookDef = { /** tool names this applies to, as a regex (tool events only); default: all */ match?: string; command: string; /** seconds, default 10 */ timeout?: number; /** a crash or timeout blocks instead of being ignored */ failClosed?: boolean };
 export type HookConfig = Partial<Record<HookEvent, HookDef[]>>;
-export type HookResult = { block?: string; context?: string; args?: Record<string, unknown>; /** PreModel only: the tools that may be called in this turn (a call to any other is refused with an explanation) */ tools?: string[]; /** PreModel only: a text-only reply to this request is not the final answer; add this message and ask for the next step (for a planning phase) */ then?: string; warnings: string[] };
+export type HookResult = { /** each command that ran, in order: what it did and how long it took (the Advanced view shows these) */ runs?: import("./harness.ts").HookRun[]; block?: string; context?: string; args?: Record<string, unknown>; /** PreModel only: the tools that may be called in this turn (a call to any other is refused with an explanation) */ tools?: string[]; /** PreModel only: a text-only reply to this request is not the final answer; add this message and ask for the next step (for a planning phase) */ then?: string; warnings: string[] };
 export type HookRunner = { run(event: HookEvent, payload: Record<string, unknown>): Promise<HookResult>; count(): number };
 
 /** The environment a hook sees: no API keys, tokens or passwords. */
@@ -44,10 +44,11 @@ export class Hooks implements HookRunner {
   list(): { event: HookEvent; def: HookDef }[] { return HOOK_EVENTS.flatMap((event) => (this.cfg[event] ?? []).map((def) => ({ event, def }))); }
 
   async run(event: HookEvent, payload: Record<string, unknown>): Promise<HookResult> {
-    const res: HookResult = { warnings: [] };
+    const res: HookResult = { warnings: [], runs: [] };
     for (const def of this.cfg[event] ?? []) {
       if (def.match && typeof payload.tool === "string" && !new RegExp(`^(?:${def.match})$`).test(payload.tool)) continue;
-      const r = await this.exec(def, { event, cwd: this.cwd, ...payload });
+      const t0 = Date.now(), r = await this.exec(def, { event, cwd: this.cwd, ...payload });
+      res.runs!.push({ command: def.command, ms: Date.now() - t0, outcome: r.warning ? "warning" : r.block !== undefined ? "block" : r.args ? "args" : r.context ? "context" : "ok", output: (r.warning ?? r.block ?? r.context ?? (r.args ? JSON.stringify(r.args) : ""))?.slice(0, 4000) });
       if (r.warning) { if (def.failClosed) { res.block = r.warning; break; } res.warnings.push(r.warning); continue; }
       if (r.block !== undefined) { res.block = r.block; break; }
       if (r.context) res.context = (res.context ? res.context + "\n" : "") + r.context;

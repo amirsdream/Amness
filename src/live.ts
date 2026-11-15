@@ -26,7 +26,7 @@ export async function startLive(o: { port?: number; title?: string } = {}) {
   return {
     url,
     onEvent(e: Event & { agent?: string }) {
-      const d = JSON.stringify({ ...e, t: Date.now(), ...("diff" in e && { diff: e.diff.slice(0, 30_000) }), ...("result" in e && { result: e.result.slice(0, 400) }) });
+      const d = JSON.stringify({ ...e, t: Date.now(), ...("diff" in e && { diff: e.diff.slice(0, 30_000) }), ...("result" in e && typeof e.result === "string" && { result: e.result.slice(0, 400) }) });
       history.push(d); if (history.length > 1000) history.shift();
       clients.forEach((c) => c.write(`data: ${d}\n\n`));
     },

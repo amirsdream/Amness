@@ -1,15 +1,21 @@
 // Tracing: every loop event goes to a local JSONL file (always, cheap, greppable) and optionally to an OpenTelemetry collector (OTLP/HTTP JSON, plain fetch).
 // The JSONL file is also what `replay` and failure mining read, so it keeps what is needed to re-run the harness logic: the model's messages and tool results.
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { randomBytes } from "node:crypto";
-import type { Event } from "./harness.ts";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import type { Event, Message, RequestRecord } from "./harness.ts";
 import { redactDeep } from "./secrets.ts";
 
 export type TraceLine = { t: string; ms: number; kind: string; [k: string]: unknown };
-export type TracerOptions = { /** receive every line as it is written (used by replay) */ sink?: (line: TraceLine) => void; file?: string; otlp?: string; sessionId: string; model?: string; /** extra resource attributes */ attrs?: Record<string, string> };
+export type TracerOptions = { /** receive every line as it is written (used by replay) */ sink?: (line: TraceLine) => void; file?: string; otlp?: string; sessionId: string; model?: string; /** extra resource attributes */ attrs?: Record<string, string>;
+  /** Full recording (the Advanced view): also write each model request (deduplicated, see `request`), the thinking text, edit diffs with the file before, and hook runs in full. Asked at every line, so it can be switched on mid-session. */
+  full?: () => boolean };
 
 const clip = (s: unknown, n: number) => { const t = typeof s === "string" ? s : JSON.stringify(s) ?? ""; return t.length > n ? t.slice(0, n) + `…[${t.length - n} more]` : t; };
+/** Every string inside `v` cut to `n` characters (objects and arrays keep their shape), so a trace line stays readable as data. */
+const clipDeep = (v: unknown, n: number, depth = 0): unknown => typeof v === "string" ? clip(v, n) : Array.isArray(v) ? (depth > 6 ? clip(v, n) : v.slice(0, 500).map((x) => clipDeep(x, n, depth + 1)))
+  : v && typeof v === "object" ? (depth > 6 ? clip(v, n) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, clipDeep(x, n, depth + 1)]))) : v;
+const hash = (s: string) => createHash("sha1").update(s).digest("hex").slice(0, 16);
 type Span = { name: string; spanId: string; parent?: string; start: number; end: number; attrs: Record<string, string | number | boolean>; error?: string };
 const hex = (n: number) => randomBytes(n).toString("hex");
 const ns = (ms: number) => String(Math.round(ms * 1e6));
@@ -21,9 +27,9 @@ export class Tracer {
   private spans: Span[] = []; private open = new Map<string, Span>(); private turnStart = 0; private textChars = 0; private pending: Promise<unknown>[] = [];
   /** Rolling data for the cache-waste figure. */
   turns: { prompt: number; cached: number; break?: boolean }[] = [];
-  constructor(o: TracerOptions) { this.file = o.file; this.sink = o.sink; this.otlp = o.otlp; this.id = o.sessionId; this.model = o.model; this.attrs = o.attrs ?? {}; if (o.file) { try { mkdirSync(dirname(o.file), { recursive: true }); } catch { /* writes below will fail quietly */ } } }
+  constructor(o: TracerOptions) { this.full = o.full ?? (() => false); this.file = o.file; this.sink = o.sink; this.otlp = o.otlp; this.id = o.sessionId; this.model = o.model; this.attrs = o.attrs ?? {}; if (o.file) { try { mkdirSync(dirname(o.file), { recursive: true }); } catch { /* writes below will fail quietly */ } } }
 
-  private agent?: string;
+  private agent?: string; private full: () => boolean; private thought = ""; private blobs = new Set<string>(); private prev = new Map<string, string[]>();
   private write(kind: string, rest: Record<string, unknown>) {
     if (!this.file && !this.sink) return;
     const line: TraceLine = { t: new Date().toISOString(), ms: Date.now() - this.t0, kind, ...(this.agent && { agent: this.agent }), ...redactDeep(rest) };       // secrets never reach the trace file
@@ -33,10 +39,34 @@ export class Tracer {
   /** Record the messages the model produced (needed for replay). */
   message(m: { role: string; content: string | null; tool_calls?: unknown }) { this.write("message", { role: m.role, content: clip(m.content ?? "", 20_000), tool_calls: m.tool_calls }); }
 
+  /** Your message, as a chat begins: the line that starts a chat in the Advanced view. */
+  chat(text: string, extra: { attachments?: string[]; command?: string } = {}) { this.agent = undefined; this.write("chat", { text: clip(text, 20_000), ...extra }); }
+  /**
+   * One model request, written only in full mode. Requests repeat most of the one before, so the system prompt and the tool list are written once as `blob` lines
+   * (by hash), and each request keeps only how many messages it shares with the previous request of the same agent, plus the messages after them (`readRequests` rebuilds it).
+   */
+  request(r: Pick<RequestRecord, "step" | "messages" | "tools"> & { agent?: string }) {
+    if (!this.full()) return;
+    const who = r.agent && r.agent !== "lead" ? r.agent : "", body = r.messages[0]?.role === "system" ? r.messages.slice(1) : r.messages;
+    const sys = r.messages[0]?.role === "system" ? this.blob("system", r.messages[0].content ?? "") : undefined, tools = this.blob("tools", r.tools);
+    const sigs = body.map((m) => hash(JSON.stringify(m))), before = this.prev.get(who) ?? [];
+    let keep = 0; while (keep < before.length && keep < sigs.length && before[keep] === sigs[keep]) keep++;
+    this.prev.set(who, sigs); this.agent = who || undefined;
+    this.write("request", { step: r.step, system: sys, tools, keep, add: body.slice(keep).map((m) => ({ ...m, raw: undefined, content: clip(m.content ?? "", 60_000) })), total: body.length });
+  }
+  private blob(of: string, value: unknown): string {
+    const text = typeof value === "string" ? value : JSON.stringify(value) ?? "", id = hash(of + "\0" + text);
+    if (!this.blobs.has(id)) { this.blobs.add(id); const a = this.agent; this.agent = undefined; this.write("blob", { id, of, value: typeof value === "string" ? clip(value, 200_000) : value }); this.agent = a; }
+    return id;
+  }
+  private flushThought() { if (this.thought) { this.write("thinking", { text: clip(this.thought, 60_000) }); this.thought = ""; } }
+
   event(e: Event & { agent?: string }) {
     const now = Date.now(); this.agent = e.agent && e.agent !== "lead" ? e.agent : undefined;
+    if (e.kind !== "thinking" && e.kind !== "text" && this.thought) this.flushThought();
     switch (e.kind) {
-      case "text": case "thinking": this.textChars += e.delta.length; return;                                   // too chatty; the finished message is recorded instead
+      case "thinking": this.textChars += e.delta.length; if (this.full()) this.thought += e.delta; return;
+      case "text": this.textChars += e.delta.length; return;                                   // too chatty; the finished message is recorded instead
       case "run": this.write("run", { messages: e.messages.map((m) => ({ ...m, content: clip(m.content ?? "", 60_000) })) }); return;
       case "model": this.write("model", { message: { ...e.message, content: clip(e.message.content ?? "", 60_000) } }); return;
       case "assistant": this.write("assistant", { chars: e.text.length, streamed: e.streamed }); this.textChars = 0; return;
@@ -56,9 +86,13 @@ export class Tracer {
         return;
       }
       case "cachebreak": { const last = this.turns.at(-1); if (last) last.break = true; this.write("cachebreak", { reason: e.reason, at: e.at }); return; }
-      case "hook": this.write("hook", { event: e.event, detail: clip(e.detail, 500), blocked: e.blocked }); this.add({ name: `hook ${e.event}`, start: now, end: now, attrs: { "amness.hook.event": e.event, "amness.hook.blocked": e.blocked } }); return;
-      case "edit": this.write("edit", { path: e.path, created: e.created, added: e.added, removed: e.removed }); return;
-      default: { const d = e as { detail?: string; summary?: string; text?: string; saved?: number; what?: string; todos?: unknown }; this.write(e.kind, { detail: clip(d.detail ?? d.summary ?? d.text ?? (d.saved !== undefined ? `${d.saved} chars: ${d.what}` : ""), 1000) }); }
+      case "hook": this.write("hook", { event: e.event, detail: clip(e.detail, this.full() ? 20_000 : 500), blocked: e.blocked }); this.add({ name: `hook ${e.event}`, start: now, end: now, attrs: { "amness.hook.event": e.event, "amness.hook.blocked": e.blocked } }); return;
+      case "edit": this.write("edit", { path: e.path, created: e.created, added: e.added, removed: e.removed, ...(this.full() && { diff: clip(e.diff, 100_000), before: e.before === undefined || e.before === null ? e.before : clip(e.before, 200_000) }) }); return;
+      default: {
+        // Every field of the event (a review's findings, an audit's notes, a policy's action), with `detail` kept as the one-line summary that replay compares.
+        const { kind: _k, agent: _a, ...rest } = e as Event & { agent?: string; [k: string]: unknown }, d = rest as { detail?: string; summary?: string; text?: string; saved?: number; what?: string; reason?: string };
+        this.write(e.kind, { ...(clipDeep(rest, this.full() ? 20_000 : 2000) as object), detail: clip(d.detail ?? d.summary ?? d.text ?? d.reason ?? (d.saved !== undefined ? `${d.saved} chars: ${d.what}` : ""), 1000) });
+      }
     }
   }
 
@@ -79,7 +113,44 @@ export class Tracer {
     const body = JSON.stringify(this.payload()); this.spans = [];
     this.pending.push(fetch(this.otlp.replace(/\/$/, "").replace(/\/v1\/traces$/, "") + "/v1/traces", { method: "POST", headers: { "content-type": "application/json" }, body }).catch(() => {}));
   }
-  async close() { this.write("end", {}); this.flush(); await Promise.allSettled(this.pending); }
+  async close() { this.flushThought(); this.write("end", {}); this.flush(); await Promise.allSettled(this.pending); }
+}
+
+/** The lines of a trace file, skipping any that do not parse (a file cut off mid-line by a crash). */
+export function readTraceLines(file: string): TraceLine[] {
+  let text = ""; try { text = readFileSync(file, "utf8"); } catch { return []; }
+  const out: TraceLine[] = []; for (const l of text.split("\n")) { if (!l.trim()) continue; try { out.push(JSON.parse(l)); } catch { /* skip */ } }
+  return out;
+}
+
+/** The exact requests of a full trace, rebuilt from its `blob` and `request` lines: index in `lines` → { system, tools, messages }. */
+export function readRequests(lines: TraceLine[]): Map<number, { step: number; agent?: string; messages: Message[]; tools: unknown[] }> {
+  const blobs = new Map<string, unknown>(), prev = new Map<string, Message[]>(), out = new Map<number, { step: number; agent?: string; messages: Message[]; tools: unknown[] }>();
+  lines.forEach((l, i) => {
+    if (l.kind === "blob") { blobs.set(String(l.id), l.value); return; }
+    if (l.kind !== "request") return;
+    const who = String(l.agent ?? ""), body = [...(prev.get(who) ?? []).slice(0, Number(l.keep) || 0), ...((l.add as Message[]) ?? [])];
+    prev.set(who, body);
+    const sys = l.system ? blobs.get(String(l.system)) : undefined, tools = l.tools ? blobs.get(String(l.tools)) : undefined;
+    out.set(i, { step: Number(l.step) || 0, ...(l.agent ? { agent: String(l.agent) } : {}), messages: [...(sys !== undefined ? [{ role: "system" as const, content: String(sys) }] : []), ...body], tools: Array.isArray(tools) ? tools : [] });
+  });
+  return out;
+}
+
+/**
+ * Keep a folder of traces under `maxBytes`: the oldest files go first, and `keep` (the session being written) never goes.
+ * Returns how many files were removed. A limit of 0 or less means no limit.
+ */
+export function pruneTraces(dir: string, maxBytes: number, keep?: string): number {
+  if (!(maxBytes > 0)) return 0;
+  let files: { path: string; size: number; at: number }[] = [];
+  try { files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => { const p = join(dir, f), st = statSync(p); return { path: p, size: st.size, at: st.mtimeMs }; }); } catch { return 0; }
+  let total = files.reduce((n, f) => n + f.size, 0), removed = 0; const k = keep ? resolve(keep) : "";
+  for (const f of files.sort((a, b) => a.at - b.at)) {
+    if (total <= maxBytes) break; if (resolve(f.path) === k) continue;
+    try { unlinkSync(f.path); total -= f.size; removed++; } catch { /* in use or gone */ }
+  }
+  return removed;
 }
 
 /**

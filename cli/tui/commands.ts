@@ -7,7 +7,7 @@ import { GUARDS, harnessView } from "./harnessinfo.ts";
 import { SCOPE_LABEL, applySettings, settingsView, showValue, type SettingChange, type SettingItem, type SettingValue } from "./settings.ts";
 import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
 import { join, resolve, sep } from "node:path";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { approveDraft, fetchSource, inspectSource, installSkills, listDrafts, rejectDraft, scaffoldSkill, trashSkill } from "../../src/index.ts";
 import { canonicalResource, collectFiles, connectMcp, effortsFor, loadMcp, oauthLogin, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
@@ -36,6 +36,7 @@ import { helpLines, renderDiff, toolCall, todoList } from "./view.ts";
 export const INSPECT: { label: string; cmd: string; tip: string }[] = [
   { label: "Tokens and cost", cmd: "/tokens", tip: "what fills the context window, usage, cache and cost" },
   { label: "Agent loop", cmd: "/loop", tip: "every step of the last run" },
+  { label: "Advanced", cmd: "/advanced", tip: "step through everything: hooks, loop, chats, full details; pause a box and change things" },
   { label: "Todos", cmd: "/todos", tip: "the agent's checklist" },
   { label: "Status", cmd: "/status", tip: "model, mode, project, session" },
   { label: "System prompt", cmd: "/context system", tip: "the instructions the model gets first" },
@@ -431,6 +432,17 @@ export function buildCommands(): Cmd[] {
       a.rewindTo(a.session.turns.length - 1);
     } },
     { name: "rewind", help: "go back to an earlier turn", run: (a) => a.openRewind() },
+    { name: "advanced", help: "step through everything the harness did (hooks, loop, chats, full details), and pause a box to change things", args: "[list|<session id>|off]", live: true, run: (a, arg) => {
+      const x = arg.trim();
+      if (x === "off" || x === "close") return a.closeAdvanced();
+      if (x === "list" || x === "open") return void a.openAdvancedPicker();
+      if (x) {
+        const dir = join(a.cwd, ".amness", "traces"); let names: string[] = []; try { names = readdirSync(dir).filter((f) => f.endsWith(".jsonl") && f.startsWith(x)); } catch { /* none */ }
+        if (names.length !== 1) return a.say(names.length ? `${names.length} sessions start with ${x}: give more of the id, or use /advanced list` : `no saved trace starts with ${x}: /advanced list shows them`, dim);
+        return a.openAdvanced(join(dir, names[0]));
+      }
+      a.openAdvanced();
+    } },
     { name: "loop", alias: "trace", help: "step-by-step trace of the agent loop: model turns, tools, guards", live: true, run: (a) => {
       const T = a.trace; if (!T.length) return a.say(dim("no loop activity yet: send a task first"));
       const tot = T.reduce((n, s) => n + s.completion + s.prompt, 0), ms = T.reduce((n, s) => n + s.ms, 0);

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Advanced view: see and pause everything the agent does** (terminal and desktop). `/advanced` shows the whole session as eight boxes (You, Hooks, Context, Model, Tools, Guards, Finish, Answer) that light up as the run moves. Step through it frame by frame, step by step or chat by chat (`←` `→`, `[` `]`, `PgUp` `PgDn`), or click a box, a frame or the timeline. The details show each exact model request, the thinking, the reply, tool arguments and results, diffs, what each hook got and returned, and why a guard or the finish gate stepped in. `/advanced list` opens an older session. `/loop` stays as the short list. See [docs/advanced.md](docs/advanced.md).
+- **Pause the run at a box and change the next step.** Put a pause on Model, Tools or Finish (`b`, or the pause dot in the desktop). While the run waits you can add a note to the model, limit its tools for one call, change the step limit, switch a guard off, edit the reply or its tool calls, edit a call's arguments, skip or deny it, edit the result the model sees, or reject or accept a finish. Changes go through the usual permission checks and are written to the trace. For library users: the `pause` option of `createHarness` and `createCodeAgent`.
+- **Full recording and a size limit for traces.** While Advanced is open (or always, with the `fullTrace` setting), the trace keeps each request (written once, then only what changed), the thinking, edit diffs and hook runs in full. Reviews, audits and policy decisions now keep all their fields. Traces of a project are kept under 200 MB by default (`traceLimitMb`; 0 = no limit): the oldest go first.
+
 ## 0.12.2 (2026-11-15)
 
 - **Preferences shows a button's result like a report, under the whole row,** with a ✕ to hide it, and scrolls it into view. Before, it was terminal text squeezed next to the button. A button that only opens a window (Tools, Browse plugins) no longer leaves a "Done." behind.

@@ -144,6 +144,10 @@ const DEFS: Def[] = [
   { group: "advanced", id: "keepWarm", label: "Keep the cache warm", help: "While you are away, keep the prompt cache alive (a few cache reads).", kind: "toggle", read: (a) => ({ value: !!a.cfg.keepWarm }), write: (_, v) => `/keepwarm ${onoff(v)}` },
   { group: "advanced", id: "stableTools", label: "Fixed tool list", help: "Tools found with tool_search are run through call_tool instead of being added to the tool list, so the list never changes and the prompt cache (or a local server's prefix cache) survives. Not measured yet.", kind: "toggle", read: (a) => ({ value: !!a.cfg.stableTools }),
     write: (_, v) => (a: App) => { a.cfg.stableTools = v === true || v === "on" || undefined; a.saveConfig(); a.buildAgent(); return `fixed tool list ${a.cfg.stableTools ? "on" : "off"}`; } },
+  { group: "advanced", id: "fullTrace", label: "Full recording", help: "Record every detail in the session traces (each model request, the thinking, edit diffs, hook runs) even when the Advanced view is closed. It is always on while Advanced is open. Larger traces.", kind: "toggle",
+    read: (a) => ({ value: !!a.cfg.fullTrace }), write: (_, v) => (a) => { a.cfg.fullTrace = onoff(v) === "on"; a.saveConfig(); return `full recording ${a.cfg.fullTrace ? "on" : "off (still on while Advanced is open)"}`; } },
+  { group: "advanced", id: "traceLimitMb", label: "Trace storage limit", help: "The most the session traces of a project may take on disk, in MB (0 = no limit). The oldest traces are removed first.", kind: "number", placeholder: "200",
+    read: (a) => ({ value: a.cfg.traceLimitMb ?? 200 }), write: (_, v) => (a) => { const n = num(v); if (!(n >= 0)) throw new Error(`a size in MB (0 = no limit), not ${v}`); a.cfg.traceLimitMb = Math.floor(n); a.saveConfig(); return n ? `traces kept under ${Math.floor(n)} MB per project` : "no limit on trace storage"; } },
   { group: "advanced", id: "plans", label: "Plan cache", help: "Offer the plan of a similar finished task as a starting point.", kind: "toggle", read: (a) => ({ value: !!a.cfg.plans }), write: (_, v) => `/plans ${onoff(v)}` },
   // terminal only
   { group: "terminal", id: "theme", label: "Colour theme", help: "The terminal app's colours.", kind: "choice", only: "terminal", read: (a) => ({ value: a.cfg.theme ?? "", options: themeNames().map((x) => ({ value: x, label: x })) }), write: (_, v) => `/theme ${v}` },
@@ -180,10 +184,10 @@ const shownIn = (d: Def, front: "terminal" | "desktop") => !d.only || d.only ===
 
 /** The config key behind a setting, for the ones kept in the config files (layers). Others (verify, check, folders) are per project already. */
 const HARNESS = ["maxSteps", "stagnationTurns", "contextBudget", "governRewrites", "harnessReset"];
-const CONFIG_IDS = new Set(["notify", "provider", "model", "effort", "fallback", "router", "api", "maxConcurrent", "contextWindow", "taskBudget", "compactAt", "sandbox", "sandboxEngine", "sandboxImage", "sandboxRuntime", "lsp", "exploreRanges", "review", "approvalReviewer", "quarantine", "embeddings", "shell", "strategy", "prompt", "keepWarm", "stableTools", "plans", "theme", "vim"]);
+const CONFIG_IDS = new Set(["notify", "provider", "model", "effort", "fallback", "router", "api", "maxConcurrent", "contextWindow", "taskBudget", "compactAt", "sandbox", "sandboxEngine", "sandboxImage", "sandboxRuntime", "lsp", "exploreRanges", "review", "approvalReviewer", "quarantine", "embeddings", "shell", "strategy", "prompt", "keepWarm", "stableTools", "plans", "theme", "vim", "fullTrace", "traceLimitMb"]);
 export const configKeyOf = (id: string): string | undefined => (id === "budget" ? "maxTokens" : HARNESS.includes(id) ? "harness" : CONFIG_IDS.has(id) ? id : undefined);
 /** Your own settings: never saved to a project file (where your key goes, how your terminal looks). */
-const PERSONAL_IDS = new Set(["provider", "notify", "embeddings", "keepWarm", "theme", "vim", "tavilyKey", "maxConcurrent"]);
+const PERSONAL_IDS = new Set(["provider", "notify", "embeddings", "keepWarm", "theme", "vim", "tavilyKey", "maxConcurrent", "fullTrace", "traceLimitMb"]);
 export const SCOPE_LABEL: Record<Layer | "default", string> = { chat: "this chat", project: "this project", team: "team (.amness/settings.json)", user: "all projects", default: "default" };
 
 /** Every setting with its current value, grouped, for one front end. */
