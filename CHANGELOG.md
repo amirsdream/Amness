@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.2 (2026-11-15)
 
 - **Preferences shows a button's result like a report, under the whole row,** with a ✕ to hide it, and scrolls it into view. Before, it was terminal text squeezed next to the button. A button that only opens a window (Tools, Browse plugins) no longer leaves a "Done." behind.
 - **One home for each thing.** The Inspect menu is for looking at the session (tokens and cost, the agent loop, todos, status, what the model sees, policy decisions, cache, background work); Preferences is for changing things (tools, plugins and catalogs, MCP servers, skills, subagents, hooks, rules, memory, limits). The duplicate buttons in the workspace panel and the token and cache items in the model menu are gone; `/inspect` in the terminal lists the same views.
