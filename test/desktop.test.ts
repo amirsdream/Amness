@@ -356,3 +356,16 @@ test("desktop: the Requests window shows the exact body sent to the server (no k
     assert.match(all.lines.join("\n").replace(/\x1b\[[0-9;]*m/g, ""), /"role": "user",[\s\S]*"content": "ping"/);
   } finally { if (saved) process.env.OPENAI_API_KEY = saved; else delete process.env.OPENAI_API_KEY; llama.close(); await d.close(); }
 });
+
+test("desktop: /tools opens the tool picker window; its answer switches a tool off", async () => {
+  const d = await boot([]);
+  try {
+    await d.api("/api/send", { text: "/tools" });
+    const w = await dialogOf(d, "tools", /Read and search/);
+    assert.ok(w.groups.some((g: any) => g.tools.some((t: any) => t.name === "grep" && t.state === "on" && t.tokens > 0)));
+    await d.api("/api/dialog", { id: w.id, value: { states: { grep: "off", read_file: "bogus" }, scope: "chat" } });
+    assert.ok(await d.until(() => d.events.some((e) => e.type === "toast" && /tools: .* 1 off/.test(e.text))));
+    await d.api("/api/send", { text: "/tools list" }); const l = await dialogOf(d, "text", /Tools/);
+    const shown = l.lines.join("\n").replace(/\x1b\[[0-9;]*m/g, ""); assert.ok(!/\bgrep\b/.test(shown) && /read_file/.test(shown), shown);
+  } finally { await d.close(); }
+});

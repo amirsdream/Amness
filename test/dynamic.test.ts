@@ -138,3 +138,17 @@ test("tool search ranks with BM25 and loads only hits close to the best one", ()
   assert.equal(reg.search("list database tables")[0].name, "db__list_tables");
   assert.deepEqual(reg.search("nothing matches this"), []);
 });
+
+test("tool choices: off is never offered, found or run; on demand moves a tool behind tool_search; on lists a tool that is deferred by default; patterns cover a whole MCP server", async () => {
+  const { pickFor } = await import("../src/index.ts");
+  const picks = { off: ["sh", "gh__*"], demand: ["grep"], on: ["gh__create_issue", "jira_create"] };
+  assert.equal(pickFor(picks, "sh"), "off"); assert.equal(pickFor(picks, "gh__list"), "off"); assert.equal(pickFor(picks, "gh__create_issue"), "on", "an exact name wins over a pattern"); assert.equal(pickFor(picks, "read_file"), undefined);
+  const reg = new Registry([mk("sh"), mk("grep", "search files"), mk("read_file"), mk("jira_create", "create a jira ticket", { deferred: true }), mk("gh__list", "list github issues", { deferred: true })]);
+  reg.choice = (n) => pickFor(picks, n);
+  const { model, specs, seen } = scripted(call(["sh", {}]), call(["tool_search", { query: "github issues" }]), call(["finish", { summary: "." }]));
+  await createHarness({ model, tools: reg }).run("t");
+  const first = names(specs[0]);
+  assert.ok(first.includes("read_file") && first.includes("jira_create") && !first.includes("sh") && !first.includes("grep"), first.join(","));
+  assert.match(specs[0].find((s) => s.name === "tool_search")!.description, /grep/); assert.doesNotMatch(specs[0].find((s) => s.name === "tool_search")!.description, /gh__list/);
+  const out = toolOut(seen); assert.match(out[0], /sh is switched off/); assert.match(out[1], /No match/);
+});

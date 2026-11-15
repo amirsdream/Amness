@@ -206,7 +206,7 @@ test("full UI: reports open as windows, not in the conversation; a one-line answ
   const t = rig([], { cols: 132, rows: 40, ui: "full" }); await t.start();
   try {
     const raws = () => t.app.blocks.blocks.filter((b) => b.kind === "raw").length, before = raws();
-    await t.submit("/tools"); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "Tools"), t.screen());
+    await t.submit("/tools list"); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "Tools"), t.screen());
     assert.match(t.screen(), /Tools[\s\S]*read_file[\s\S]*Esc closes/); assert.equal(raws(), before, "nothing was added to the conversation");
     await t.key(KEY.esc); assert.equal(t.app.overlay, null);
     await t.submit("/lsp off"); assert.ok(await t.until(() => t.has("language-server diagnostics off")), t.screen());

@@ -119,7 +119,7 @@ export class ApiSessions {
   interrupt(id: string) { this.get(id).app.interrupt(); return this.view(id); }
   setMode(id: string, mode: Mode) { if (!MODES.includes(mode)) throw Object.assign(new Error(`mode is one of ${MODES.join(", ")}`), { status: 400 }); this.get(id).app.setMode(mode); this.changed(this.get(id)); return this.view(id); }
   /** Answer the open dialog. `value`: an option or item index, the text of an input, or null to cancel. */
-  answer(id: string, dialogId: number, value: number | string | null) {
+  answer(id: string, dialogId: number, value: unknown) {
     const l = this.get(id), o = l.app.overlay;
     if (!o || dialogId !== l.dialogId) throw Object.assign(new Error(`dialog ${dialogId} is not open (the open one: ${l.dialog?.id ?? "none"})`), { status: 409 });
     answerOverlay(o, value); this.changed(l); return { ok: true };

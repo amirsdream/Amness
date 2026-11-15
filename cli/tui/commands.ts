@@ -916,7 +916,8 @@ export function buildCommands(): Cmd[] {
       }
       if (view) a.say("usage: /context [system | messages | requests | export]", red);
     } },
-    { name: "tools", help: "list the tools the agent can use right now", live: true, run: (a) => {
+    { name: "tools", help: "choose the agent's tools: on, on demand (found when needed) or off, per tool or per MCP server · /tools list shows them", args: "[list]", live: true, run: async (a, arg) => {
+      if (arg.trim() !== "list") return void (await a.pickTools());
       const vis = a.agent.registry.visible({ step: 0, messages: [] });
       a.report("Tools", [...vis.map((t) => `  ${cyan(t.name.padEnd(16))} ${dim(t.description.split(".")[0].slice(0, a.width - 22))}`)]);
     } },

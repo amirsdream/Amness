@@ -28,7 +28,7 @@ const INSPECT = [
   { label: "Raw messages", cmd: "/context messages", tip: "Every message of this conversation as stored, as JSON: pick one or see them all" },
   { label: "Requests", cmd: "/context requests", tip: "Each model call exactly as it was sent (the JSON body, without the key) and its reply" },
   { group: "Agent" },
-  { label: "Tools", cmd: "/tools", tip: "The tools the agent can use right now", ws: true },
+  { label: "Tools…", cmd: "/tools", tip: "Choose the agent's tools: on, on demand (found when needed) or off, per tool or per MCP server", ws: true },
   { label: "Harness", cmd: "/harness", tip: "The agent loop's settings: guards, step limit, context budget" },
   { label: "Permission rules", cmd: "/permissions", tip: "What runs without asking, what asks and what is refused" },
   { label: "Policy decisions", cmd: "/policy", tip: "Why recent actions were allowed, asked about or refused" },
@@ -772,7 +772,45 @@ function showDialog(d) {
       h("div", { class: "body" }, ansiLines(d.lines, "term dialog-term")), h("footer", {}, h("span", { class: "spacer" }), h("button", { class: "btn primary", autofocus: true, onclick: () => answer(d.id, null) }, "Close")));
     m.addEventListener("keydown", (e) => { if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); answer(d.id, null); } });
     modal(m, { onCancel: () => answer(d.id, null) }); dialogOpen = d.id;
+  } else if (d.kind === "tools") {
+    showToolPicker(d);
   }
+}
+/** The tool picker (/tools): groups of tools, each with an On / On demand / Off switch, a search box, the cost of the tool list, and where to save. */
+const TP_STATES = [["on", "On", "Listed in every request"], ["demand", "On demand", "Found with tool_search when the model needs it: almost free until then"], ["off", "Off", "Never offered or run"]];
+function showToolPicker(d) {
+  const states = {}, open = new Set(d.groups.filter((g) => g.kind === "builtin" && g.tools.length <= 8).map((g) => g.id));
+  for (const g of d.groups) for (const t of g.tools) states[t.name] = t.state;
+  const q = h("input", { type: "search", placeholder: "Search tools", autofocus: true }), list = h("div", { class: "tp-list" }), sum = h("span", { class: "muted small" });
+  const scope = h("select", { class: "tp-scope", title: "Where the choice applies" }, h("option", { value: "project", text: "This project" }), h("option", { value: "user", text: "All your projects" }), h("option", { value: "chat", text: "This chat only" }));
+  const fmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const gstate = (g) => { const s = new Set(g.tools.map((t) => states[t.name])); return s.size === 1 ? [...s][0] : "mixed"; };
+  const seg = (cur, set, label) => h("div", { class: "segmented tp-seg", role: "radiogroup", "aria-label": label }, TP_STATES.map(([v, l, tip]) => h("button", { class: cur === v ? "on" : "", "data-s": v, title: tip, role: "radio", "aria-checked": String(cur === v), onclick: (e) => { e.stopPropagation(); set(v); draw(); } }, l)));
+  const draw = () => {
+    const f = q.value.trim().toLowerCase(), rows = [];
+    for (const g of d.groups) {
+      const ts = f ? g.tools.filter((t) => `${t.name} ${t.description} ${g.label}`.toLowerCase().includes(f)) : g.tools;
+      if (f && !ts.length) continue;
+      const on = g.tools.filter((t) => states[t.name] === "on"), shown = f || open.has(g.id);
+      rows.push(h("div", { class: "tp-group", onclick: () => { open.has(g.id) ? open.delete(g.id) : open.add(g.id); draw(); } },
+        h("span", { class: "tp-chev", text: shown ? "▾" : "▸" }), h("span", { class: "tp-label", text: g.label }),
+        h("span", { class: "faint small", text: `${on.length}/${g.tools.length} on${on.length ? ` · ${fmt(on.reduce((n, t) => n + t.tokens, 0))} tokens` : ""}` }), h("span", { class: "spacer" }),
+        seg(gstate(g), (v) => { for (const t of g.tools) states[t.name] = v; }, `${g.label}: all tools`)));
+      if (shown) for (const t of ts) rows.push(h("div", { class: `tp-tool s-${states[t.name]}` },
+        h("div", { class: "tp-name" }, h("span", { class: "mono", text: t.name }), h("span", { class: "faint small", text: `${fmt(t.tokens)} tokens${states[t.name] !== t.def ? " · changed" : ""}` })),
+        h("div", { class: "tp-desc muted small", text: t.description.split(/(?<=\.)\s/)[0] }), seg(states[t.name], (v) => { states[t.name] = v; }, t.name)));
+    }
+    list.replaceChildren(...(rows.length ? rows : [h("div", { class: "muted small pad", text: "No tool matches." })]));
+    const all = d.groups.flatMap((g) => g.tools), on = all.filter((t) => states[t.name] === "on");
+    sum.textContent = `${on.length} on (≈ ${fmt(on.reduce((n, t) => n + t.tokens, 0))} tokens in every request) · ${all.filter((t) => states[t.name] === "demand").length} on demand · ${all.filter((t) => states[t.name] === "off").length} off`;
+  };
+  q.oninput = draw;
+  const save = () => answer(d.id, { states, scope: scope.value });
+  const m = h("div", { class: "modal wide tp" }, h("header", {}, h("span", { text: "Tools" }), h("span", { class: "sub", text: "what the agent can use" })),
+    h("div", { class: "body" }, h("div", { class: "muted small pad", text: "On: listed in every request. On demand: the model finds it with tool_search when it needs it, so it costs almost nothing until then. Off: never used." }), q, list),
+    h("footer", {}, sum, h("span", { class: "spacer" }), h("label", { class: "muted small" }, "Save for ", scope), h("button", { class: "btn", onclick: () => answer(d.id, null) }, "Cancel"), h("button", { class: "btn primary", onclick: save }, "Save")));
+  m.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); if (q.value) { q.value = ""; draw(); } else answer(d.id, null); } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); } });
+  modal(m, { onCancel: () => answer(d.id, null) }); dialogOpen = d.id; draw();
 }
 function popover(anchor, items) {
   closePopover(); const r = anchor.getBoundingClientRect(), p = h("div", { class: "popover", style: `left:${Math.max(8, Math.min(r.left, innerWidth - 430))}px; top:${r.bottom + 6}px` }, items);

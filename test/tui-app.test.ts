@@ -507,7 +507,8 @@ test("settings: tool choice is saved in this model's profile (keeping the rest o
     await t.type("extend"); await t.key(KEY.enter);
     assert.ok(await t.until(() => ["Plugins", "Hooks", "Skills", "Subagents", "MCP servers", "Model profile", "Tools"].every((x) => t.has(x))));
     await t.type("tools"); await t.key(KEY.enter);                                     // an action runs, then the same group comes back (it used to leave /settings)
-    assert.ok(await t.until(() => t.has("Model profile") && t.has("Subagents") && t.has("Show…")));
+    assert.ok(await t.until(() => t.has("Space on / on demand / off"))); await t.key(KEY.esc);   // the tool picker; leaving it changes nothing
+    assert.ok(await t.until(() => t.has("Model profile") && t.has("Subagents") && t.has("Choose…")));
   } finally { await t.key(KEY.esc); await t.key(KEY.esc); await t.key(KEY.ctrlD); }
 });
 
@@ -845,5 +846,20 @@ test("/context: the system prompt, a raw message as JSON, and a request (a model
     await t.submit("/context export"); assert.ok(await t.until(() => t.has("wrote .amness")));
     const { readdirSync, readFileSync } = await import("node:fs"), dir = join(t.dir, ".amness", "exports"), f = readdirSync(dir)[0];
     const j = JSON.parse(readFileSync(join(dir, f), "utf8")); assert.equal(j.requests.length, 1); assert.ok(j.messages.some((m: any) => m.content === "hi there")); assert.match(j.system, /You are/);
+  } finally { await t.key(KEY.ctrlD); }
+});
+
+test("/tools: switch a tool off for this chat; the next request no longer offers it, and a call to it is refused", async () => {
+  const t = rig([say("ok"), call("grep", { pattern: "x" }), say("done")], { cols: 140, rows: 40 }); await t.start();
+  try {
+    await t.submit("/tools"); assert.ok(await t.until(() => t.has("Space on / on demand / off")));
+    for (const ch of "grep") await t.type(ch, 10);
+    await t.key(KEY.down); await t.type(" ", 20); await t.type(" ", 20); await t.key(KEY.enter);              // grep: on → on demand → off
+    assert.ok(await t.until(() => t.has("Where should it apply?"))); await t.key(KEY.down); await t.key(KEY.down); await t.key(KEY.enter);   // this chat only
+    assert.ok(await t.until(() => t.app.cfg.tools?.off?.includes("grep") === true), JSON.stringify(t.app.cfg.tools));
+    await t.submit("hello"); assert.ok(await t.until(() => t.idle()));
+    assert.ok(!t.seen.at(-1)!.tools.includes("grep") && t.seen.at(-1)!.tools.includes("read_file"));
+    await t.submit("search please"); assert.ok(await t.until(() => t.idle() && t.has("done")));
+    assert.ok(t.seen.at(-1)!.msgs.some((m) => /grep is switched off/.test(m.content ?? "")));
   } finally { await t.key(KEY.ctrlD); }
 });

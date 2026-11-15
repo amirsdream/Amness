@@ -13,6 +13,7 @@ import { App, NOT_TRUSTED } from "../tui/app.ts";
 import type { Block } from "../tui/blocks.ts";
 import { groupOf } from "../tui/complete.ts";
 import { ChoiceOverlay, InputOverlay, LongTextOverlay, PickerOverlay, TextOverlay } from "../tui/overlays.ts";
+import { ToolPickerOverlay, type PickResult } from "../tui/toolpicker.ts";
 import { harnessView } from "../tui/harnessinfo.ts";
 import { newPanelState, sidebarData, toggleStep, type PanelState } from "../tui/panel.ts";
 import { previewLines } from "../tui/session.ts";
@@ -30,7 +31,9 @@ export type DialogView =
   | { id: number; kind: "pick"; title: string; items: { label: string; hint?: string }[]; sel: number; preview: boolean }
   | { id: number; kind: "input"; prompt: string; secret: boolean; initial: string; hint: string }
   | { id: number; kind: "text"; title: string; lines: string[] }
-  | { id: number; kind: "longtext"; title: string; text: string; hint: string };
+  | { id: number; kind: "longtext"; title: string; text: string; hint: string }
+  /** The tool picker: groups of tools, each on, on demand or off; the answer is { states: { name: state }, scope } or null. */
+  | { id: number; kind: "tools"; title: string; groups: { id: string; label: string; kind: string; tools: { name: string; description: string; tokens: number; state: string; def: string }[] }[] };
 
 export type StateView = {
   version: string; cwd: string; project: string; provider: string; providerLabel: string; model: string; mode: string; ready: boolean;
@@ -58,10 +61,13 @@ export function dialogView(o: object, id: number): DialogView | undefined {
   if (o instanceof InputOverlay) return { id, kind: "input", prompt: o.prompt, secret: o.secret, initial: o.ed.text, hint: o.hint };
   if (o instanceof TextOverlay) return { id, kind: "text", title: o.title, lines: o.lines };
   if (o instanceof LongTextOverlay) return { id, kind: "longtext", title: o.title, text: o.text, hint: o.hint };
+  if (o instanceof ToolPickerOverlay) return { id, kind: "tools", title: o.title, groups: o.groups.map((g) => ({ id: g.id, label: g.label, kind: g.kind, tools: g.tools.map((t) => ({ name: t.name, description: t.description, tokens: t.tokens, state: t.state, def: t.def })) })) };
   return undefined;
 }
 /** Answer an overlay: an option index (choice), an item index (pick), the text (input, long text), or null (cancel / close). */
-export function answerOverlay(o: object, value: number | string | null) {
+export function answerOverlay(o: object, value: unknown) {
+  if (o instanceof ToolPickerOverlay) { const v = value as { states?: Record<string, string>; scope?: string } | null; const ok = (x: unknown) => x === "on" || x === "demand" || x === "off";
+    return o.done(v && typeof v === "object" && v.states && typeof v.states === "object" ? { states: Object.fromEntries(Object.entries(v.states).filter(([, x]) => ok(x))) as PickResult["states"], scope: v.scope === "user" || v.scope === "project" || v.scope === "chat" ? v.scope : undefined } : undefined); }
   if (o instanceof ChoiceOverlay) o.done(typeof value === "number" && value >= 0 && value < o.options.length ? value : undefined);
   else if (o instanceof PickerOverlay) o.done(typeof value === "number" && o.items[value] ? o.items[value].value : undefined);
   else if (o instanceof InputOverlay) o.done(typeof value === "string" ? value : undefined);
@@ -235,7 +241,7 @@ export class DesktopBridge {
 
   // ------------------------------------------------------------------ window -> App
   /** The answer to dialog `id`: an option index (choice), an item index (pick), the text (input), or nothing (cancel / close). */
-  answer(id: number, value: number | string | null) {
+  answer(id: number, value: unknown) {
     const o = this.app.overlay; if (!o || id !== this.dialogId) return;
     answerOverlay(o, value);
     this.changed();

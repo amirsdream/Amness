@@ -4,6 +4,7 @@ import type { Canvas } from "./canvas.ts";
 import { renderDiffRows, langOf } from "./diffview.ts";
 import { renderMarkdown, highlightWith } from "./markdown.ts";
 import { ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, type Overlay } from "./overlays.ts";
+import { ToolPickerOverlay } from "./toolpicker.ts";
 import { BOLD, F, chip, fit, split, themeSkin } from "./rich.ts";
 import { cellWidth, clipWidth, wrapAnsi } from "./text.ts";
 import type { Theme } from "./themes.ts";
@@ -89,6 +90,12 @@ export function drawModal(c: Canvas, t: Theme, o: Overlay, frame: number): Modal
     return { hits, box: { x, y, w, h }, cursor: { x: x + 4 + Math.min(cellWidth(shown), inner - 5), y: y + 3 } };
   }
 
+  if (o instanceof ToolPickerOverlay) {
+    const w = Math.min(c.w - 6, 116), inner = w - 4, h = Math.max(12, c.h - 6), { x, y } = card(w, h, t.accent, "Tools", "⚒");
+    const lines = o.render(inner, h - 9).lines;
+    lines.slice(0, h - 2).forEach((l, i) => c.ansi(x + 2, y + 1 + i, fit(l, inner, t.surface), {}, inner));
+    return { hits, box: { x, y, w, h } };
+  }
   if (o instanceof TextOverlay) {
     // As wide as the longest line needs (between 56 and 110 columns, never wider than the screen); long lines wrap instead of being cut.
     const max = Math.min(c.w - 6, 110), need = Math.max(cellWidth(o.title) + 8, ...o.lines.map((l) => cellWidth(l) + 2), 52) + 4;

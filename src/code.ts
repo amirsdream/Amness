@@ -47,6 +47,19 @@ const RISKY: [RegExp, string][] = [
 ];
 export const riskOf = (cmd: string): string | false => { const views = commandViews(cmd); return RISKY.find(([re]) => views.some((v) => re.test(v)))?.[1] ?? (OBFUSCATED_EXEC.test(cmd) || OBFUSCATED_EXEC.test(views[1] ?? "") ? "decodes or downloads a payload and runs it" : false); };
 
+/** The user's tool choices: tools listed in every request (`on`, also for one that is deferred by default), found with tool_search when needed (`demand`), or never offered (`off`). Entries are tool names or `<prefix>*` (a whole MCP server: `github__*`). */
+export type ToolPicks = { on?: string[]; demand?: string[]; off?: string[] };
+/** The choice for one tool: an exact name wins over a pattern; among patterns the longest wins. */
+export function pickFor(p: ToolPicks | undefined, name: string): "on" | "demand" | "off" | undefined {
+  if (!p) return undefined;
+  let best: { len: number; v: "on" | "demand" | "off" } | undefined;
+  for (const v of ["on", "demand", "off"] as const) for (const e of p[v] ?? []) {
+    if (e === name) return v;
+    if (e.endsWith("*") && name.startsWith(e.slice(0, -1)) && (!best || e.length > best.len)) best = { len: e.length, v };
+  }
+  return best?.v;
+}
+
 /** How much the agent may do without asking. default: ask for edits and non-trivial shell; acceptEdits: ask only for shell; plan: read-only; yolo: never ask. */
 export type PermMode = "default" | "acceptEdits" | "plan" | "yolo";
 /** Inspection-only shell commands (no chaining, redirects or substitutions): always allowed, even in plan mode. */
@@ -300,6 +313,8 @@ export type CodeAgentOptions = {
   /** The model's tier. "local" uses the short local prompt, the lean tool set and compact tool specs whatever the window. Default: the model card's tier when its profile sets one. */
   tier?: ModelTier;
   /** Only these tools (and finish) are offered. Default: the model card's profile `tools`. */
+  /** The user's tool choices (the tool picker): per tool name, or `<server>__*` for a whole MCP server. Read at every request. */
+  toolPicks?: () => ToolPicks | undefined;
   toolAllow?: string[];
   /**
    * A stronger model to consult. "native": the main model carries Anthropic's advisor tool itself (only the prompt lines are added here).
@@ -475,6 +490,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
   rescan(); rescanIndex();
   registry.lean = { when: lean, names: new Set(["memory_save", "memory_search", "memory_forget", "todo_write", "skill", "task", "repo_map", "impact", "find_refs", "sh_start", "sh_read", "sh_stop", "sh_list", "apply_patch"]) };
   { const allow = o.toolAllow ?? o.model.card?.profile?.tools; if (allow?.length) registry.allow = new Set([...allow, "finish", "tool_search"]); }
+  if (o.toolPicks) registry.choice = (name) => pickFor(o.toolPicks!(), name);
   let todos: { content: string; status: "pending" | "in_progress" | "done" }[] = [];
   if (o.chat) {
     registry.add(
@@ -534,7 +550,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
             if (why && em !== o.model) return note + takeover("explore", label, why, r.text);
             return note + (checked?.ok ? checked.text : clip(r.text || "(the explorer returned nothing)", 8000));                 // subagents hand back a condensed result (Anthropic: 1-2k tokens), never their working notes
           }
-          const names = plan ? d.tools.filter((t) => !WRITE_TOOLS.has(t)) : d.tools, isolated = d.isolation === "worktree" && isWriter(d) && !plan;
+          const names = (plan ? d.tools.filter((t) => !WRITE_TOOLS.has(t)) : d.tools).filter((t) => pickFor(o.toolPicks?.(), t) !== "off"), isolated = d.isolation === "worktree" && isWriter(d) && !plan;
           // The agent's `model:` key: an entry of agentModels, a role name (explore, review, cheap, compact), or a model reference resolved by modelById.
           let agentModel: Model = o.model;
           if (d.model) { const k = d.model as keyof Roles; try { agentModel = o.agentModels?.[d.model] ?? o.models?.[k] ?? o.modelById?.(d.model) ?? o.model; } catch (e) { return `ERROR: agent ${d.name} names model "${d.model}", which cannot be used: ${(e as Error).message}`; } }

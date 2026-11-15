@@ -5,11 +5,11 @@ import { join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { onRateLimitWait } from "../model.ts";
 import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
-import { type RequestRecord, onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { type RequestRecord, pickFor, onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { hubOptions, mcpEntries } from "../mcpconfig.ts";
 import { McpHub, type McpElicitation } from "../../src/mcp.ts";
-import { PROVIDERS, applyTeam, forProject, home, keyFor, keyIdOf, layerNotes, rememberWindow, saveConfig, storeKey, windowFor, type Config } from "../config.ts";
+import { PROVIDERS, applyTeam, forProject, home, keyFor, keyIdOf, layerNotes, rememberWindow, saveConfig, saveTo, storeKey, windowFor, type Config } from "../config.ts";
 import { noStore, where } from "../keystore.ts";
 import { editExternally, editorCommand, readClipboardImage, savePastedImage } from "./external.ts";
 import { fileOpenCommand } from "./find.ts";
@@ -34,6 +34,7 @@ import { KeyParser, PASTE_OFF, PASTE_ON, type Key } from "./keys.ts";
 import { renderMarkdown, takeCompleteBlocks } from "./markdown.ts";
 import { expandMentions, attachedNote } from "./mentions.ts";
 import { copyToClipboard } from "./clipboard.ts";
+import { FIXED, ToolPickerOverlay, fmtTok, groupTools, picksFrom, totals, type PickGroup, type PickResult, type PickState } from "./toolpicker.ts";
 import { LongTextOverlay, ChoiceOverlay, InputOverlay, PickerOverlay, TextOverlay, editKey, type ChoiceDetail, type Overlay, type PickItem } from "./overlays.ts";
 import { Pager, transcriptLines } from "./pager.ts";
 import { TIPS, at, brandOf, fg, palette, shimmer, sparkline } from "./theme.ts";
@@ -201,7 +202,7 @@ export class App {
     this.model = w.model; this.roles = w.roles; this.wired = w;
     this.agent = createCodeAgent({
       model: this.model, modelById: (id) => w.byRef(id), cwd: this.cwd, chat: true, plans: this.cfg.plans || undefined, contextWindow: () => windowFor(this.cfg), onWindow: (w, id) => { rememberWindow(this.cfg, w, id); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`, [dim(`  context window learned: ${w.toLocaleString()} tokens`)]); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      onRequest: (r) => { this.requests.push(r); if (this.requests.length > 50) this.requests.shift(); }, signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, exploreRanges: this.cfg.exploreRanges || undefined, stableTools: this.cfg.stableTools || undefined, advisor: nativeAdvisor(this.cfg) ? "native" : w.advisor, ladder: w.ladder, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer ? (w.approve ? { model: w.approve } : true) : undefined, quarantine: this.cfg.quarantine ? (w.quarantine ? quarantineReader(w.quarantine) : true) : undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      toolPicks: () => this.cfg.tools, onRequest: (r) => { this.requests.push(r); if (this.requests.length > 50) this.requests.shift(); }, signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, exploreRanges: this.cfg.exploreRanges || undefined, stableTools: this.cfg.stableTools || undefined, advisor: nativeAdvisor(this.cfg) ? "native" : w.advisor, ladder: w.ladder, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer ? (w.approve ? { model: w.approve } : true) : undefined, quarantine: this.cfg.quarantine ? (w.quarantine ? quarantineReader(w.quarantine) : true) : undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
     this.mcpNamesAdded.clear(); this.syncMcpTools();
@@ -286,6 +287,29 @@ export class App {
       }
       this.commit(["", ...t.split("\n").flatMap((p) => wrapAnsi(paint(p), this.width - 2)).map((l) => "  " + l)]);
     }
+  }
+  /** Every tool the agent could use, grouped, with its state, its default and its cost (for /tools and the desktop's Tools window). */
+  toolGroups(): PickGroup[] {
+    const reg = this.agent.registry, keep = reg.choice; reg.choice = undefined;
+    const plugin = new Map(this.plugins.flatMap((p) => (p.tools ?? []).map((t) => [t.name, p.name] as const)));
+    const tools = [...reg.tools.values()].filter((t) => !FIXED.has(t.name) && (!reg.allow || reg.allow.has(t.name))).map((t) => {
+      const def: PickState = reg.isDeferred(t) ? "demand" : "on";
+      return { name: t.name, description: t.description, tokens: Math.round(JSON.stringify({ name: t.name, description: t.description, parameters: t.schema }).length / 4), def, state: (pickFor(this.cfg.tools, t.name) ?? def) as PickState };
+    });
+    reg.choice = keep;
+    return groupTools(tools, { mcp: (n) => (n.includes("__") ? n.slice(0, n.indexOf("__")) : undefined), plugin: (n) => plugin.get(n) });
+  }
+  /** /tools: choose which tools the agent has, then where to save the choice. */
+  async pickTools() {
+    const groups = this.toolGroups();
+    const r = await new Promise<PickResult | undefined>((res) => { this.overlay = new ToolPickerOverlay(groups, (v) => { this.overlay = null; this.render(); res(v); }); this.render(); });
+    if (!r || !Object.keys(r.states).some((k) => groups.some((g) => g.tools.some((t) => t.name === k && t.state !== r.states[k])))) return;
+    let scope = r.scope;
+    if (!scope) { const i = await this.confirm("Save the tool choice", [`${totals(groups, r.states).on} tools on, ${totals(groups, r.states).demand} on demand, ${totals(groups, r.states).off} off`], "Where should it apply?", [{ label: "This project", hint: ".amness/settings.local.json" }, { label: "All your projects", hint: "~/.amness/config.json" }, { label: "This chat only" }]); if (i === undefined) return; scope = (["project", "user", "chat"] as const)[i]; }
+    saveTo(this.cfg, scope);
+    try { const p = picksFrom(groups, r.states, this.cfg.tools); this.cfg.tools = Object.keys(p).length ? p : undefined; this.saveConfig(); } finally { saveTo(this.cfg, undefined); }
+    const t = totals(this.toolGroups(), {});
+    this.toast(`tools: ${t.on} on (≈ ${fmtTok(t.tokens)} tokens per request), ${t.demand} on demand, ${t.off} off · ${scope === "user" ? "all your projects" : scope === "chat" ? "this chat" : "this project"}`, "ok");
   }
   /** The list of reports (the header chip in the full-screen UI, /inspect). */
   inspect() { if (!this.overlay) void this.runCommand("/inspect"); }

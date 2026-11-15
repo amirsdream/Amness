@@ -159,7 +159,7 @@ const DEFS: Def[] = [
   { group: "extend", id: "agents", label: "Subagents", help: "Custom subagents in .amness/agents/*.md that the agent can hand work to.", kind: "action", command: "/agents", button: "Show…" },
   { group: "extend", id: "mcp", label: "MCP servers", help: "Tool servers attached to this session. Attach one with /mcp <command>.", kind: "action", command: "/mcp list", button: "Show…" },
   { group: "extend", id: "profile", label: "Model profile", help: "Settings for this model only (~/.amness/profile.json, .amness/profile.json): guards off, limits, tool choice.", kind: "action", command: "/profile", button: "Show…" },
-  { group: "extend", id: "tools", label: "Tools", help: "Every tool the agent can use right now, built in and added.", kind: "action", command: "/tools", button: "Show…" },
+  { group: "extend", id: "tools", label: "Tools", help: "Choose the agent's tools: on, on demand (found when it needs them) or off, per tool or per MCP server.", kind: "action", command: "/tools", button: "Choose…" },
 ];
 
 /** Set (or with undefined, remove) one field of `model`'s entry in the user's profile file, keeping everything else in it. */

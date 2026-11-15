@@ -72,13 +72,18 @@ export class Registry {
   lean?: { when: () => boolean; names: Set<string> };
   /** When set, only these tools (and finish) are offered at all, even through tool_search: a per-model tool set from the profile (`tools`). */
   allow?: Set<string>;
-  isDeferred(t: Tool) { return !!t.deferred || (!!this.lean && this.lean.names.has(t.name) && this.lean.when()); }
+  /** The user's choice per tool (the tool picker, `tools` in the settings): "off" is never offered or run, "demand" is found with tool_search instead of listed, "on" is listed even when it would be deferred. `finish` cannot be switched off. */
+  choice?: (name: string) => "on" | "demand" | "off" | undefined;
+  isOff(t: Tool) { return t.name !== "finish" && this.choice?.(t.name) === "off"; }
+  isDeferred(t: Tool) { const c = this.choice?.(t.name); if (c === "demand") return true; if (c === "on") return false; return !!t.deferred || (!!this.lean && this.lean.names.has(t.name) && this.lean.when()); }
+  /** The deferred tools not loaded yet: what tool_search lists. */
+  menu() { return [...this.tools.values()].filter((t) => !this.isOff(t) && this.isDeferred(t) && !this.loaded.has(t.name) && (!this.allow || this.allow.has(t.name))); }
   add(...ts: Tool[]) { for (const t of ts) this.tools.set(t.name, t); return this; }
   remove(name: string) { this.loaded.delete(name); return this.tools.delete(name); }
   get(name: string) { return this.tools.get(name); }
-  hasDeferred() { return [...this.tools.values()].some((t) => this.isDeferred(t)); }
+  hasDeferred() { return [...this.tools.values()].some((t) => !this.isOff(t) && this.isDeferred(t)); }
   visible(s: { step: number; messages: Message[] }) {
-    return [...this.tools.values()].filter((t) => (!this.allow || this.allow.has(t.name)) && (!this.isDeferred(t) || this.loaded.has(t.name)) && (!t.when || t.when(s)));
+    return [...this.tools.values()].filter((t) => !this.isOff(t) && (!this.allow || this.allow.has(t.name)) && (!this.isDeferred(t) || this.loaded.has(t.name)) && (!t.when || t.when(s)));
   }
   /**
    * Rank the not-yet-loaded deferred tools for a query: BM25 over the tool's name (counted twice: names are the strongest signal) and
@@ -87,7 +92,7 @@ export class Registry {
    * does not load a handful of tools that were never wanted (each loaded tool stays in every later request).
    */
   search(q: string, n = 5) {
-    const pool = [...this.tools.values()].filter((t) => this.isDeferred(t) && !this.loaded.has(t.name) && (!this.allow || this.allow.has(t.name)));
+    const pool = this.menu();
     const exact = q.split(/[\s,]+/).filter(Boolean).flatMap((w) => { const full = pool.find((t) => t.name === w); if (full) return [full]; const tail = pool.filter((t) => t.name.split("__").at(-1) === w); return tail.length === 1 ? tail : []; });
     if (exact.length) return [...new Set(exact)].slice(0, n);
     const words = [...new Set(searchWords(q))];
@@ -509,7 +514,7 @@ export function createHarness(o: Options) {
       if (o.stableTools) return hits.length ? "Found. Run one with call_tool({\"name\": ..., \"args\": {...}}):\n" + hits.map((t) => `- ${t.name}: ${t.description}\n  schema: ${JSON.stringify(t.schema)}`).join("\n") : `No match. Tools you can find: ${[...reg.tools.values()].filter((t) => reg.isDeferred(t)).map((t) => t.name).join(", ") || "(none)"}`;
       hits.forEach((t) => reg.loaded.add(t.name));
       return hits.length ? "Loaded (callable from your next turn; their full definitions are now in your tool list):\n" + hits.map((t) => `- ${t.name}: ${t.description}`).join("\n")
-        : (() => { const rest = [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)); return rest.length ? "No match. " + toolMenu(rest, true) : "No match: every tool is already loaded."; })();
+        : (() => { const rest = reg.menu(); return rest.length ? "No match. " + toolMenu(rest, true) : "No match: every tool is already loaded."; })();
     },
   };
   /** The tool list of a request. In stable mode (`stableTools`) the list never changes in a session: tool_search only describes what it finds and `call_tool` runs it, so loading a tool does not break the prompt cache. */
@@ -547,7 +552,7 @@ export function createHarness(o: Options) {
    * the prefix, a fraction of what a cold re-read costs). Returns how many prompt tokens were served from cache.
    */
   async function warm(msgs: Message[], opts: { signal?: AbortSignal } = {}): Promise<{ prompt: number; cached: number }> {
-    const visible = reg.visible({ step: lastStep, messages: msgs }), menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)) : [];
+    const visible = reg.visible({ step: lastStep, messages: msgs }), menu = reg.hasDeferred() ? reg.menu() : [];
     const specs = specsFor(visible, menu);
     const m = await o.model(msgs, specs, { signal: opts.signal, maxTokens: 16 });
     o.budget?.add(m, o.model.card);
@@ -631,7 +636,7 @@ export function createHarness(o: Options) {
         }
       } else if (over) { emit({ kind: "budget", detail: over }); return end(`stopped: ${over}`, false, step, "budget"); }
       const visible = reg.visible({ step, messages: msgs }), names = new Set(visible.map((t) => t.name));
-      const menu = reg.hasDeferred() ? [...reg.tools.values()].filter((t) => reg.isDeferred(t) && !reg.loaded.has(t.name)) : [];
+      const menu = reg.hasDeferred() ? reg.menu() : [];
       const specs = specsFor(visible, menu);
       const r = o.rollover, size = msgs.reduce((n, x) => n + (x.content?.length ?? 0), 0);
       if (win) {
@@ -757,6 +762,7 @@ export function createHarness(o: Options) {
         }
         let t = name === "tool_search" && menu.length ? searchTool : reg.get(name);
         if (!t && name !== "finish" && !off.has("argfix")) { const sure = exactName(name, [...names, "finish", ...(menu.length ? ["tool_search"] : [])]); if (sure) { fixes.push(`tool name "${name}" → "${sure}"`); name = sure; t = name === "tool_search" && menu.length ? searchTool : reg.get(name); } }
+        if (t && reg.isOff(t)) return `ERROR: ${name} is switched off: the user turned it off in the tool list (/tools). Do the task with the tools you have, or say what you would need.`;
         if (allowNow && !allowNow.has(name)) return `ERROR: ${name} is not allowed in this phase. ${allowNow.size ? `Allowed now: ${[...allowNow].join(", ")}.` : "Do not call any tool yet: answer in text."}`;
         const stableOk = !!t && !!o.stableTools && reg.isDeferred(t) && (!reg.allow || reg.allow.has(name)) && (!t.when || t.when({ step, messages: msgs }));   // a deferred tool runs without being added to the list
         if (t && name !== "finish" && t !== searchTool && !names.has(name) && !stableOk) {
