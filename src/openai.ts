@@ -215,7 +215,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
       ...opts.extra, ...o.request,
     };
     for (const k of dropped) delete body[k];
-    const r = await post("/responses", body, o.signal);
+    o.onWire?.({ url: base + "/responses", body }); const r = await post("/responses", body, o.signal);
     const resp = (r.headers.get("content-type") ?? "").includes("text/event-stream") ? await readResponsesStream(r, o) : await r.json();
     if (resp.error) throw new Error(`response failed: ${resp.error.message ?? JSON.stringify(resp.error)}`);
     return fromResponse(resp, model);
@@ -237,7 +237,7 @@ export function openai(opts: OpenAIOptions = {}): Model {
     // and tool_choice "required" did not bring it back (arXiv 2606.25605, read). Tools win; the schema goes; the user is told once.
     if (tools.length && !official) { const gone = SCHEMA_KEYS.filter((k) => k in body); if (gone.length) { for (const k of gone) delete body[k]; warnOnce(`not sent with tools to ${base}: ${gone.join(", ")} (a response schema together with tools can stop a local server from calling tools; use it in a tool-free request instead)`); } }
     for (const k of dropped) delete body[k];
-    const r = await post("/chat/completions", body, o.signal);
+    o.onWire?.({ url: base + "/chat/completions", body }); const r = await post("/chat/completions", body, o.signal);
     if ((r.headers.get("content-type") ?? "").includes("text/event-stream")) return readChatStream(r, o.onText ?? (() => {}), o.onThinking, !!o.keepThinking);
     const j = await r.json(), m = j.choices[0].message;                           // server ignored `stream`, or we did not ask
     if (stream && m.content) o.onText!(m.content);

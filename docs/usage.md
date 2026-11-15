@@ -393,6 +393,7 @@ These commands show a report in a window: it does not go into the conversation. 
 | Command | What it does |
 |---|---|
 | `/inspect` | A list of the reports below; pick one to open it. |
+| `/context [system \| messages \| requests \| export]` | What the model sees. `system`: the system prompt sent with the last request. `messages`: the conversation's messages as stored, as JSON (pick one, or all). `requests`: each model call of the last 50 in this window, exactly as sent: the endpoint and the JSON body (the API key is in a header and never shown), then the reply. A model that does not build an HTTP body itself (a plugin or test model) shows what Amness passed it instead, and says so. `export` writes all of it to `.amness/exports/context-<session>-<time>.json`. Requests are kept in memory only, from the first message you send in this window. |
 | `/help` (alias `/?`), `/status`, `/tools`, `/todos` | Help, session facts, tools the agent can use, the agent's checklist. `/todos edit` changes the checklist. |
 | `/harness` | The agent loop's guards and limits. See [Tune the agent loop](#tune-the-agent-loop-harness). |
 | `/settings` | Every setting in groups, applied together. See [Change settings in one place](#change-settings-in-one-place-settings). |

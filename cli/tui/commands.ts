@@ -7,7 +7,7 @@ import { GUARDS, harnessView } from "./harnessinfo.ts";
 import { SCOPE_LABEL, applySettings, settingsView, showValue, type SettingChange, type SettingItem, type SettingValue } from "./settings.ts";
 import { SHELL_CHOICES, STRATEGIES, chooseShell, currentShell, loadPrompts, setShell, shellFallbackNote } from "../../src/index.ts";
 import { join, resolve, sep } from "node:path";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { approveDraft, fetchSource, inspectSource, installSkills, listDrafts, rejectDraft, scaffoldSkill, trashSkill } from "../../src/index.ts";
 import { canonicalResource, collectFiles, connectMcp, effortsFor, loadMcp, oauthLogin, readBundle, writeBundle, type Bundle } from "../../src/index.ts";
@@ -19,6 +19,7 @@ import { argOptions } from "./argcomplete.ts";
 import { STAGE_GLYPH, roundOf, stagesOf } from "./looppanel.ts";
 import { bold, cyan, dim, green, red, yellow } from "../ui.ts";
 import type { App } from "./app.ts";
+import type { Message } from "../../src/index.ts";
 import { estimateCost, fmtCost, fmtDuration, fmtTokens } from "./pricing.ts";
 import { codeBlocks } from "./clipboard.ts";
 import { execFile } from "node:child_process";
@@ -35,6 +36,9 @@ export const INSPECT: { label: string; cmd: string; tip: string }[] = [
   { label: "Agent loop", cmd: "/loop", tip: "every step of the last run" },
   { label: "Todos", cmd: "/todos", tip: "the agent's checklist" },
   { label: "Status", cmd: "/status", tip: "model, mode, project, session" },
+  { label: "System prompt", cmd: "/context system", tip: "the instructions the model gets first" },
+  { label: "Raw messages", cmd: "/context messages", tip: "every message as stored, as JSON" },
+  { label: "Requests", cmd: "/context requests", tip: "each model call exactly as it was sent, and its reply" },
   { label: "Tools", cmd: "/tools", tip: "the tools the agent can use now" },
   { label: "Harness", cmd: "/harness", tip: "guards, step limit, context budget" },
   { label: "Permission rules", cmd: "/permissions", tip: "allow, ask and deny rules" },
@@ -104,6 +108,22 @@ async function addCatalogDialog(a: App, url?: string): Promise<boolean> {
   try { const { catalog, entries } = addCatalog(url); a.say(`${green("✓")} added catalog ${catalog.name}: ${entries.length} plugins. /plugins browse shows them`); return true; }
   catch (e) { a.say((e as Error).message, red); return false; }
 }
+
+/** Pretty JSON with colours (keys, strings, numbers), one string per line; cut at `max` characters with a note, so a huge request stays usable. */
+function jsonLines(v: unknown, max = 400_000): string[] {
+  let text = JSON.stringify(v, null, 2) ?? "undefined", cut = false; if (text.length > max) { text = text.slice(0, max); cut = true; }
+  const lines = text.split("\n").map((l) => l.replace(/^(\s*)("(?:[^"\\]|\\.)*")(\s*:)/, (_m, sp, k, c) => sp + cyan(k) + c).replace(/(:\s*|^\s*)("(?:[^"\\]|\\.)*")(,?)$/, (_m, pre, v2, c) => pre + green(v2) + c).replace(/(:\s*|^\s*)(-?\d+(?:\.\d+)?|true|false|null)(,?)$/, (_m, pre, n, c) => pre + yellow(n) + c));
+  return cut ? [...lines, "", yellow(`… cut at ${max.toLocaleString()} characters: /context export writes all of it to a file`)] : lines;
+}
+const clock = (t: number) => new Date(t).toTimeString().slice(0, 8);
+/** One line about a message: its position, role and the start of its text or its tool calls. */
+const msgLabel = (m: Message, i: number) => `#${i} ${m.role}${m.tool_calls?.length ? ` → ${m.tool_calls.map((c) => c.function.name).join(", ")}` : ""}${m.tool_call_id ? ` (${m.tool_call_id.slice(0, 10)})` : ""}`;
+const msgHint = (m: Message) => (m.content ?? "").replace(/\s+/g, " ").trim().slice(0, 80) || (m.tool_calls?.length ? m.tool_calls.map((c) => c.function.arguments).join(" ").slice(0, 80) : "(empty)");
+/** The system prompt the model really got: the one in the last request, else the conversation's. */
+const systemNow = (a: App): { text: string; from: string } | undefined => {
+  const last = [...a.requests].reverse().find((r) => r.messages[0]?.role === "system"); if (last) return { text: last.messages[0].content ?? "", from: `sent with the request at ${clock(last.at)} (step ${last.step + 1})` };
+  const m = a.session.messages.find((x) => x.role === "system"); return m ? { text: m.content ?? "", from: "this conversation (no request sent yet in this window)" } : undefined;
+};
 
 /** Make a cloud provider the one in use, with its saved key (or asking for one). Returns false if the user gave up. */
 async function switchProvider(a: App, id: ProviderId): Promise<boolean> {
@@ -867,6 +887,34 @@ export function buildCommands(): Cmd[] {
     { name: "inspect", help: "open a report as a window: tokens, tools, status, MCP servers, skills, hooks and more", live: true, run: async (a) => {
       const c = await a.pick("Inspect", INSPECT.map((x) => ({ label: x.label, value: x.cmd, hint: `${x.cmd} · ${x.tip}` })));
       if (c) await a.runCommand(c);
+    } },
+    { name: "context", help: "what the model sees: the system prompt, the raw messages, and each request exactly as it was sent", args: "[system | messages | requests | export]", live: true, run: async (a, arg) => {
+      let view = arg.trim().split(/\s+/)[0] || "";
+      if (!view) view = (await a.pick("Context: what the model sees", [{ label: "System prompt", value: "system", hint: "the instructions the model gets first" }, { label: "Raw messages", value: "messages", hint: `${a.session.messages.length} messages, as stored` }, { label: "Requests", value: "requests", hint: `${a.requests.length} model calls in this window, exactly as sent` }, { label: "Export all to a file", value: "export", hint: ".amness/exports/" }])) ?? "";
+      if (view === "system") {
+        const sp = systemNow(a); if (!sp) return void a.say("no system prompt yet: send a message first", dim);
+        return void a.report("System prompt", [dim(`${sp.from} · ${sp.text.length.toLocaleString()} characters`), "", ...sp.text.split("\n")]);
+      }
+      if (view === "messages") {
+        const ms = a.session.messages; if (!ms.length) return void a.say("no messages yet", dim);
+        const pick = await a.pick<number>(`Raw messages (${ms.length}) · type to filter`, [{ label: "All messages", value: -1, hint: "the whole list as JSON" }, ...ms.map((m, i) => ({ label: msgLabel(m, i), value: i, hint: msgHint(m) })).reverse()]);
+        if (pick === undefined) return;
+        return void a.report(pick < 0 ? `Raw messages (${ms.length})` : `Message ${msgLabel(ms[pick], pick)}`, jsonLines(pick < 0 ? ms : ms[pick]));
+      }
+      if (view === "requests") {
+        if (!a.requests.length) return void a.say("no model calls yet in this window: requests are kept from the first message you send here", dim);
+        const list = [...a.requests].reverse();
+        const r = await a.pick(`Requests (${list.length}, newest first)`, list.map((x) => ({ label: `${clock(x.at)}  step ${x.step + 1}${x.error ? "  failed" : ""}`, value: x, hint: `${x.messages.length} messages · ${x.tools.length} tools${x.reply?.usage ? ` · ${fmtTokens(x.reply.usage.prompt_tokens ?? 0)} in · ${fmtTokens(x.reply.usage.completion_tokens ?? 0)} out` : ""}${x.ms ? ` · ${(x.ms / 1000).toFixed(1)}s` : ""}${x.wire ? "" : " · no HTTP body"}` })));
+        if (!r) return;
+        const head = [dim(r.wire ? `POST ${r.wire.url} (the API key is sent in a header, never shown)` : "this model did not report its HTTP body: below is what Amness passed it (the messages and the tool definitions)"), dim(`${clock(r.at)} · step ${r.step + 1}${r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s` : ""}`), ""];
+        return void a.report(`Request at ${clock(r.at)}`, [...head, bold("Request"), ...jsonLines(r.wire?.body ?? { messages: r.messages, tools: r.tools }), "", bold(r.error ? "Error" : "Reply"), ...(r.error ? [red(r.error)] : r.reply ? jsonLines(r.reply) : [dim("(still waiting for the reply)")])]);
+      }
+      if (view === "export") {
+        const dir = join(a.cwd, ".amness", "exports"), file = join(dir, `context-${a.session.id}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+        mkdirSync(dir, { recursive: true }); writeFileSync(file, JSON.stringify({ session: a.session.id, title: a.session.title, model: a.cfg.model, system: systemNow(a)?.text, messages: a.session.messages, requests: a.requests }, null, 2));
+        return void a.say(`${green("✓")} wrote ${file.replace(a.cwd + sep, "")}`);
+      }
+      if (view) a.say("usage: /context [system | messages | requests | export]", red);
     } },
     { name: "tools", help: "list the tools the agent can use right now", live: true, run: (a) => {
       const vis = a.agent.registry.visible({ step: 0, messages: [] });

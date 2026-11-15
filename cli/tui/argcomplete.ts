@@ -68,6 +68,7 @@ export function argOptions(a: App, cmd: string, words: string[]): ArgResult {
       if (words.length === 1 && words[0] === "add") return { options: [], open: true };
       return ok([]);
     }
+    case "context": return first ? ok([["system", "the system prompt"], ["messages", "the raw messages, as JSON"], ["requests", "each model call exactly as sent"], ["export", "all of it to a file"]].map(([value, detail]) => ({ value, detail }))) : ok([]);
     case "plugins": {
       if (first) return ok([["browse", "pick a plugin from your catalogs"], ["add", "install from a git URL, owner/repo, npm:package or folder"], ["remove", "take an installed plugin away"], ["update", "install the newest version"], ["catalog", "list, add or remove catalogs"]].map(([value, detail]) => ({ value, detail, more: value !== "browse" })));
       if (words.length === 1 && ["remove", "update"].includes(words[0])) return ok(listInstalled(a.cwd).map((x) => ({ value: x.name, detail: x.catalog ?? x.source })));

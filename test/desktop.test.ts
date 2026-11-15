@@ -334,3 +334,25 @@ test("desktop: /plugins add opens the same install dialog as the terminal; the a
     assert.ok(await d.until(() => d.events.some((e) => (e.type === "toast" && /installed plug-src/.test(e.text)) || (e.type === "dialog" && e.dialog.kind === "text" && e.dialog.lines.some((l: string) => /installed plug-src/.test(l))))));
   } finally { await d.close(); }
 });
+
+test("desktop: the Requests window shows the exact body sent to the server (no key), the reply, the system prompt and the raw messages", async () => {
+  const saved = process.env.OPENAI_API_KEY; process.env.OPENAI_API_KEY = "sk-never-shown-1234567890";
+  const llama = await llamaBehindNginx("sk-never-shown-1234567890");
+  const d = await boot([], undefined, { cfg: { baseUrl: llama.url, model: "qwen-coder", api: "chat", apiKey: "sk-never-shown-1234567890" }, realModel: true });
+  try {
+    await d.api("/api/send", { text: "ping" });
+    assert.ok(await d.until(() => JSON.stringify(d.events).includes("pong from llama.cpp"), 8000));
+    await d.api("/api/send", { text: "/context requests" });
+    const pick = await dialogOf(d, "pick", /Requests \(1/); await d.api("/api/dialog", { id: pick.id, value: 0 });
+    const win = await dialogOf(d, "text", /Request at/), text = win.lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+    assert.match(text, /POST http:\/\/127\.0\.0\.1:\d+\/v1\/chat\/completions/); assert.match(text, /"model": "qwen-coder"/); assert.match(text, /"role": "system"/); assert.match(text, /"content": "ping"/);
+    assert.match(text, /Reply[\s\S]*pong from llama\.cpp/); assert.ok(!text.includes("sk-never-shown"), "the key is never in the window");
+    await d.api("/api/dialog", { id: win.id, value: null });
+    await d.api("/api/send", { text: "/context system" }); const sys = await dialogOf(d, "text", /System prompt/);
+    assert.match(sys.lines.join("\n"), /sent with the request at/);
+    await d.api("/api/dialog", { id: sys.id, value: null });
+    await d.api("/api/send", { text: "/context messages" }); const mp = await dialogOf(d, "pick", /Raw messages/);
+    await d.api("/api/dialog", { id: mp.id, value: 0 }); const all = await dialogOf(d, "text", /Raw messages \(/);
+    assert.match(all.lines.join("\n").replace(/\x1b\[[0-9;]*m/g, ""), /"role": "user",[\s\S]*"content": "ping"/);
+  } finally { if (saved) process.env.OPENAI_API_KEY = saved; else delete process.env.OPENAI_API_KEY; llama.close(); await d.close(); }
+});

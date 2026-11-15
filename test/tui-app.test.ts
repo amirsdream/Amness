@@ -828,3 +828,22 @@ test("/plugins add shows what a plugin brings and asks where; hooks need their o
     assert.ok(await t.until(() => t.has("removed deploy-tools"))); assert.ok(!existsSync(join(t.dir, ".amness/skills/deploy")));
   } finally { await t.key(KEY.ctrlD); }
 });
+
+test("/context: the system prompt, a raw message as JSON, and a request (a model with no HTTP body says so); /context export writes them all", async () => {
+  const t = rig([say("hello back")], { cols: 140, rows: 40 }); await t.start();
+  try {
+    await t.submit("hi there"); assert.ok(await t.until(() => t.idle() && t.has("hello back")));
+    await t.submit("/context system"); assert.ok(await t.until(() => (t.app.overlay as any)?.title === "System prompt"));
+    assert.match(plain((t.app.overlay as any).lines.join("\n")), /sent with the request at[\s\S]*You are/); await t.key(KEY.esc);
+    await t.submit("/context messages"); assert.ok(await t.until(() => t.has("Raw messages (")));
+    await t.key(KEY.enter); assert.ok(await t.until(() => /Raw messages \(\d+\)/.test((t.app.overlay as any)?.title ?? "")));
+    assert.match(plain((t.app.overlay as any).lines.join("\n")), /"content": "hi there"/); await t.key(KEY.esc);
+    await t.submit("/context requests"); assert.ok(await t.until(() => t.has("Requests (1")));
+    const shown = () => (t.app.overlay as any) ?? (t.app as any).pager;                    // the inline view shows a report taller than the screen in its pager
+    await t.key(KEY.enter); assert.ok(await t.until(() => /Request at/.test(shown()?.title ?? "")));
+    assert.match(plain(shown().lines.join("\n")), /did not report its HTTP body[\s\S]*"tools"[\s\S]*Reply[\s\S]*hello back/); await t.key("q"); await t.key(KEY.esc);
+    await t.submit("/context export"); assert.ok(await t.until(() => t.has("wrote .amness")));
+    const { readdirSync, readFileSync } = await import("node:fs"), dir = join(t.dir, ".amness", "exports"), f = readdirSync(dir)[0];
+    const j = JSON.parse(readFileSync(join(dir, f), "utf8")); assert.equal(j.requests.length, 1); assert.ok(j.messages.some((m: any) => m.content === "hi there")); assert.match(j.system, /You are/);
+  } finally { await t.key(KEY.ctrlD); }
+});

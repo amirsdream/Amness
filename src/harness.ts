@@ -18,7 +18,11 @@ export type Message = { role: "system" | "user" | "assistant" | "tool"; content:
   thinking?: string };
 export type ToolSpec = { name: string; description: string; parameters: Schema };
 /** Any chat model: messages + tool specs in, assistant message out (attach `usage` if known). See openai.ts. */
-export type ModelOpts = { signal?: AbortSignal; /** "required": the model must call a tool (the server then constrains its output to a valid call); default "auto". */ toolChoice?: "auto" | "required"; /** Cap on generated tokens for this call (used for cache keep-alive pings; adapters may ignore it). */ maxTokens?: number; /** Cap on thinking tokens for this call (OpenAI-compatible servers that support it; others ignore it). */ thinkingBudget?: number; /** Send the earlier replies' thinking back with the history, so the model does not work it all out again. */ keepThinking?: boolean; /** Extra fields for the request body (from the model's profile). */ request?: Record<string, unknown>; /** Called with each piece of assistant text as it is generated (streaming adapters only). */ onText?: (delta: string) => void; /** Called with pieces of the model's reasoning summary, where the provider exposes one. */ onThinking?: (delta: string) => void };
+export type ModelOpts = { signal?: AbortSignal; /** Told the exact body an adapter sends to the provider (after any retry it is the last one sent), and where to. Adapters that build an HTTP body call it; others do not. */ onWire?: (w: WireRequest) => void; /** "required": the model must call a tool (the server then constrains its output to a valid call); default "auto". */ toolChoice?: "auto" | "required"; /** Cap on generated tokens for this call (used for cache keep-alive pings; adapters may ignore it). */ maxTokens?: number; /** Cap on thinking tokens for this call (OpenAI-compatible servers that support it; others ignore it). */ thinkingBudget?: number; /** Send the earlier replies' thinking back with the history, so the model does not work it all out again. */ keepThinking?: boolean; /** Extra fields for the request body (from the model's profile). */ request?: Record<string, unknown>; /** Called with each piece of assistant text as it is generated (streaming adapters only). */ onText?: (delta: string) => void; /** Called with pieces of the model's reasoning summary, where the provider exposes one. */ onThinking?: (delta: string) => void };
+/** The exact request an adapter sent: the endpoint (no key) and the JSON body. */
+export type WireRequest = { url: string; body: unknown };
+/** One model call as the harness made it: what it passed the model, the body the adapter sent, and the reply. Filled in as the call goes. */
+export type RequestRecord = { at: number; step: number; ms?: number; messages: Message[]; tools: ToolSpec[]; wire?: WireRequest; reply?: Message; error?: string };
 export type Model = ((messages: Message[], tools: ToolSpec[], opts?: ModelOpts) => Promise<Message>) & {
   /** Set by adapters whose provider binds reasoning to the exact history (Claude): the harness then never edits past turns. */
   appendOnly?: boolean;
@@ -269,6 +273,8 @@ export type Options = {
   thinkingBudget?: number;
   /** Extra fields merged into every model request (the profile's `request`). */
   request?: Record<string, unknown>;
+  /** Called at each model call with its record (see RequestRecord), which is filled in as the call goes: the exact body when the adapter reports it, then the reply. For an inspector; it must not change anything. */
+  onRequest?: (r: RequestRecord) => void;
   /** Send the model's earlier thinking back with the history (OpenAI-compatible servers). Without it a thinking model works out the same analysis again at every step. */
   keepThinking?: boolean;
   /**
@@ -671,8 +677,11 @@ export function createHarness(o: Options) {
       let m!: Message;
       let streamed = false, callStart = Date.now();
       for (;;) {
-        try { callStart = Date.now(); m = await o.model(msgs, specs, { signal: sig(), ...(o.toolChoice && specs.length && { toolChoice: o.toolChoice }), ...(o.thinkingBudget !== undefined && { thinkingBudget: o.thinkingBudget }), ...(o.keepThinking && { keepThinking: true }), ...(o.request && { request: o.request }), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); recoveries = 0; lastModelAt = Date.now(); sinceRewrite++; break; }
+        const rec: RequestRecord | undefined = o.onRequest ? { at: Date.now(), step, messages: msgs.slice(), tools: specs } : undefined;
+        if (rec) try { o.onRequest!(rec); } catch { /* an inspector must not stop the loop */ }
+        try { callStart = Date.now(); m = await o.model(msgs, specs, { signal: sig(), ...(rec && { onWire: (w: WireRequest) => { rec.wire = w; } }), ...(o.toolChoice && specs.length && { toolChoice: o.toolChoice }), ...(o.thinkingBudget !== undefined && { thinkingBudget: o.thinkingBudget }), ...(o.keepThinking && { keepThinking: true }), ...(o.request && { request: o.request }), onText: (delta) => { streamed = true; emit({ kind: "text", delta }); }, onThinking: (delta) => emit({ kind: "thinking", delta }) }); if (rec) { rec.reply = m; rec.ms = Date.now() - callStart; } recoveries = 0; lastModelAt = Date.now(); sinceRewrite++; break; }
         catch (e) {
+          if (rec) { rec.error = (e as Error).message; rec.ms = Date.now() - callStart; }
           if (sig()?.aborted) { o.checkpoint?.(msgs); emit({ kind: "aborted", detail: "interrupted" }); return end("stopped: interrupted", false, step, "aborted"); }
           // The provider says the request does not fit. Learn the window from the message (or guess it from our own estimate), shrink harder, and ask again.
           if (!isOverflow(e) || off.has("compact") || recoveries >= 3) throw e;

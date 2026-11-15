@@ -24,6 +24,9 @@ const INSPECT = [
   { label: "Agent loop", cmd: "/loop", tip: "Every step of the last run: model calls, tools and what the guards did", ws: true },
   { label: "Todos", cmd: "/todos", tip: "The agent's checklist for this task" },
   { label: "Status", cmd: "/status", tip: "Model, mode, project and session", ws: true },
+  { label: "System prompt", cmd: "/context system", tip: "The instructions the model gets first, as sent with the last request" },
+  { label: "Raw messages", cmd: "/context messages", tip: "Every message of this conversation as stored, as JSON: pick one or see them all" },
+  { label: "Requests", cmd: "/context requests", tip: "Each model call exactly as it was sent (the JSON body, without the key) and its reply" },
   { group: "Agent" },
   { label: "Tools", cmd: "/tools", tip: "The tools the agent can use right now", ws: true },
   { label: "Harness", cmd: "/harness", tip: "The agent loop's settings: guards, step limit, context budget" },
@@ -599,7 +602,8 @@ function renderPanel() {
   out.push(sec("Context", d.series?.length > 1 ? `${d.series.length} requests` : "", d.requests?.length > 1 ? requestChart(d.requests, d.ctxMax) : d.series?.length > 1 ? spark(d.series, 248, 26) : null,
     d.map?.length ? h("div", { class: "ctxbar" }, d.map.filter((m) => m.pct > 0).map((m) => h("span", { title: `${m.label} ${m.pct}%`, style: `width:${m.pct}%;background:${themeColor(m.color)}` }))) : null,
     d.map?.length ? h("div", { class: "ctxmap" }, d.map.filter((m) => m.pct > 0).map((m) => h("div", { class: "cm" }, h("span", { class: "sw", style: `background:${themeColor(m.color)}` }), h("span", { text: m.label }), h("span", { class: "faint", text: `${m.pct}%` })))) : null,
-    kv([u.reasoning ? ["reasoning", fmtTokens(u.reasoning)] : null, b !== null ? ["budget", `${b}% of ${fmtTokens(d.budget.max)}`] : null, ["requests", String(u.calls)]])));
+    kv([u.reasoning ? ["reasoning", fmtTokens(u.reasoning)] : null, b !== null ? ["budget", `${b}% of ${fmtTokens(d.budget.max)}`] : null, ["requests", String(u.calls)]]),
+    h("div", { class: "row-btns" }, [["System prompt", "/context system", "The instructions the model gets first"], ["Raw messages", "/context messages", "Every message as stored, as JSON"], ["Requests", "/context requests", "Each model call exactly as sent, and its reply"]].map(([l, c, tip]) => h("button", { class: "btn xs", title: `${tip} (${c})`, onclick: () => run(c) }, l)))));
   out.push(sec("Session", d.model, kv([["model", d.model], d.api && ["api", d.api], d.effort && ["effort", d.effort], ...Object.entries(d.roles || {}).map(([r, l]) => [r, l]), ["branch", d.branch || "no git"], ["mode", { default: "Ask", acceptEdits: "Auto-edit", plan: "Plan", yolo: "Yolo" }[d.mode] || d.mode], d.sandbox && d.sandbox !== "off" && ["sandbox", d.sandbox]])));
   if (d.tasks?.length) out.push(sec("Tasks", String(d.tasks.filter((x) => x.status === "running").length || d.tasks.length), ...d.tasks.map((x) => h("div", { class: "proc", title: `/bg show ${x.id}` }, h("span", { class: `dot ${x.status === "running" ? "on" : ""}` }), h("span", { text: `${x.id}. ${x.task.slice(0, 48)}` }), h("span", { class: "faint", text: x.status === "running" ? `${x.secs}s` : x.changed ? `${x.status} · ${x.changed} files · /bg apply ${x.id}` : x.status })))));
   if (d.procs?.length) out.push(sec("Background", String(d.procs.length), ...d.procs.map((p) => h("div", { class: "proc" }, h("span", { class: `dot ${p.status === "running" ? "on" : ""}` }), h("span", { class: "mono", text: p.name }), h("span", { class: "faint", text: `${p.status} · ${p.secs}s` })))));

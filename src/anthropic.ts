@@ -134,6 +134,7 @@ export function anthropic(o: AnthropicOptions = {}): Model {
     // Streaming avoids HTTP timeouts on long outputs; we only need the assembled message.
     const betas = [...(fallbacks ? ["server-side-fallback-2026-07-01"] : []), ...(taskBudget ? ["task-budgets-2026-03-13"] : []), ...(advisorTool ? ["advisor-tool-2026-03-01"] : [])];
     const send = (body: typeof req) => {
+      opts?.onWire?.({ url: "https://api.anthropic.com/v1/messages", body: betas.length ? { ...body, betas, ...(fallbacks && { fallbacks: "default" }) } : body });
       const stream = betas.length
         ? client.beta.messages.stream({ ...body, betas, ...(fallbacks && { fallbacks: "default" }) }, { signal: opts?.signal })
         : client.messages.stream(body, { signal: opts?.signal });
