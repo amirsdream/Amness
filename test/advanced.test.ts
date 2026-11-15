@@ -199,3 +199,40 @@ test("desktop: /advanced sends the view as data; a pause set from the window sto
   await api("/api/advanced", { op: "close" });
   assert.ok(await until(() => view() === null), "closing sends null");
 });
+
+test("subagents pause too, one at a time, with their name; the u switch turns that off", async (tt) => {
+  const t = rig([call("task", { description: "look at a.txt" }), call("read_file", { path: "a.txt" }), call("finish", { summary: "a.txt has two lines" }), call("finish", { summary: "done" })], { cfg: { mode: "yolo" } });
+  await t.start(); t.app.setMode("yolo");
+  t.app.pauses.boxes.set("tools", "always");
+  const seen: string[] = [];
+  const pump = setInterval(() => { const w = t.app.pauses.waiting; if (w) { seen.push(`${w.point.agent ?? "lead"}:${w.point.at}:${"name" in w.point ? w.point.name : ""}`); t.app.pauses.release(); } }, 10);
+  tt.after(() => clearInterval(pump));
+  await t.submit("explore it");
+  assert.ok(await t.until(() => t.idle() && seen.length >= 4, 8000), JSON.stringify(seen));
+  assert.ok(seen.includes("lead:tool:task") && seen.includes("explore:tool:read_file") && seen.includes("explore:result:read_file"), JSON.stringify(seen));
+  seen.length = 0; t.app.pauses.subagents = false;
+  (t.app as any).pauseNow = undefined;                                                    // not used: only checks that pauseAt refuses before queueing
+  assert.equal(t.app.pauseAt({ at: "tool", step: 0, id: "x", name: "read_file", args: {}, agent: "explore" }), undefined, "a subagent does not pause with the switch off");
+  await t.key(KEY.ctrlD);
+});
+
+test("replay a chat with the current harness, and fork a new chat from a recorded request", async () => {
+  const t = rig([call("read_file", { path: "a.txt" }), call("finish", { summary: "read it" })], { ui: "full", cols: 130, rows: 40, cfg: { mode: "yolo" } });
+  await t.start(); t.app.setMode("yolo");
+  await t.submit("/advanced"); await t.key(KEY.esc);
+  t.app.openAdvanced();                                                                    // full recording is on while it is open
+  t.app.closeAdvanced(); (t.app.cfg as any).fullTrace = true;
+  await t.submit("read a.txt"); assert.ok(await t.until(() => t.idle()));
+  t.app.openAdvanced();
+  await t.app.replayChat();
+  assert.match(t.app.advanced!.source.title, /^replay of chat 1: same as recorded/, String(t.app.advanced!.lc.lines[0].detail));
+  assert.equal(t.app.advanced!.frames[0].title, "Replay report");
+  assert.ok(t.app.advanced!.frames.some((f) => f.kind === "request"), "the replay is recorded in full");
+  t.app.openAdvanced(); const v = t.app.advanced!;
+  v.go(v.frames.findIndex((f) => f.kind === "request" && f.step === 2));
+  const before = t.app.session.id; t.app.forkHere();
+  assert.notEqual(t.app.session.id, before); assert.match(t.app.session.title, /^Fork of .* at step 2$/);
+  assert.equal(t.app.session.messages[0].role, "system"); assert.equal(t.app.session.messages.at(-1)!.role, "tool", "it starts after the read, where the model was");
+  assert.equal(t.app.advanced, null);
+  await t.key(KEY.ctrlD);
+});

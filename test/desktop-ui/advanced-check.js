@@ -26,6 +26,15 @@
     r.runEnds = await until(() => !$(".app").classList.contains("running") && $$(".adv-item .tt").some((x) => x.textContent === "Your message"), 15000);
     $$(".adv-item")[1]?.click(); await sleep(150);
     r.detailShows = $$(".adv-sec").length >= 1;
+    const btn = (t) => [...$$(".adv-top button")].find((b) => b.textContent === t);
+    click(btn("Subagents pause")); r.subagentSwitch = await until(() => !!btn("Subagents run on"));
+    click(btn("Replay chat"));
+    r.replayOpens = await until(() => /replay of chat 1/.test($(".adv-top").textContent) && $$(".adv-item .tt")[0]?.textContent === "Replay report");
+    await run("/advanced"); await until(() => !/replay of chat/.test($(".adv-top").textContent));
+    click([...$$(".adv-item")].find((b) => /Request/.test(b.textContent) && /step 2/.test(b.textContent))); await sleep(200);
+    click(btn("Fork here"));
+    r.forkOpensNewChat = await until(() => $("#advancedRoot").classList.contains("hidden") && /Fork of/.test(document.body.textContent));
+    await run("/advanced"); await until(() => !$("#advancedRoot").classList.contains("hidden"));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     r.escCloses = await until(() => $("#advancedRoot").classList.contains("hidden"));
   } catch (e) { r.error = String((e && e.stack) || e); }

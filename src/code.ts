@@ -378,8 +378,8 @@ export type CodeAgentOptions = {
   /** Commands that contain text copied from untrusted tool results (web pages, MCP servers): "ask" (default), "deny" or "off". */
   taint?: "ask" | "deny" | "off";
   /** Record full messages in events so a trace can be replayed (`replay`). */
-  record?: boolean;
-  /** Pause points for the main loop (the Advanced view; see Options.pause in src/harness.ts). Subagents do not pause. */
+  record?: boolean | (() => boolean);
+  /** Pause points (the Advanced view; see Options.pause in src/harness.ts). Subagents get them too, with their name in `agent`. */
   pause?: import("./harness.ts").Options["pause"];
   /** Structural code index tools (repo_map, find_refs, impact), offered when the repository has at least `minFiles` source files (default 25). */
   index?: boolean | { minFiles?: number };
@@ -545,7 +545,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
             // The explorer runs with its own model's settings: its window comes from the card (the harness reads it), and a small window or a local tier gets compact tool specs and a short prompt.
             const em = (takeovers.get("explore") ?? 0) >= TAKEOVER_LIMIT ? o.model : (o.models?.explore ?? o.model), ew = windowOf(em), emLocal = em.card?.tierFrom === "profile" && em.card.tier === "local";
             const ranges = !!o.exploreRanges, label = em.card?.id ?? (em === o.model ? "the main model" : "the explore model");
-            const r = await createHarness({ model: em, system: (emLocal || (ew !== undefined && ew <= 16_384) ? EXPLORE_LOCAL : EXPLORE_SYSTEM) + (ranges ? RANGES_FORMAT : ""), compactSpecs: () => emLocal || (ew !== undefined && ew <= 16_384), tools: codeTools(o.cwd, { mode: () => "plan", dirs: o.dirs, outside: o.outside, related: o.off?.includes("anchor") ? undefined : (files) => (codeIndex ? relatedFiles(codeIndex, files) : "") }), maxSteps: 14, contextBudget: 120_000, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") }).run(description);
+            const r = await createHarness({ model: em, system: (emLocal || (ew !== undefined && ew <= 16_384) ? EXPLORE_LOCAL : EXPLORE_SYSTEM) + (ranges ? RANGES_FORMAT : ""), compactSpecs: () => emLocal || (ew !== undefined && ew <= 16_384), tools: codeTools(o.cwd, { mode: () => "plan", dirs: o.dirs, outside: o.outside, related: o.off?.includes("anchor") ? undefined : (files) => (codeIndex ? relatedFiles(codeIndex, files) : "") }), maxSteps: 14, contextBudget: 120_000, policy: policyFn, budget: track(o.budget?.slice(0.12, 60_000)), signal: ctx.signal, onEvent: emitAs("explore") , pause: o.pause ? (p) => o.pause!({ ...p, agent: "explore" }) : undefined }).run(description);
             const note = unknown ? `(no agent named "${unknown}"; the read-only explorer answered. Available: explore${agentList.map((a) => ", " + a.name).join("")})\n` : "";
             const checked = ranges && r.finished ? checkRanges(o.cwd, r.text) : undefined;
             const why = !r.finished ? `it stopped before finishing (${r.stopped ?? "no finish"})` : !r.text.trim() ? "it returned nothing" : checked && !checked.ok ? checked.why : undefined;
@@ -562,7 +562,7 @@ export function createCodeAgent(o: CodeAgentOptions) {
             if (names.includes("skill") && skillList.length) base.push(skillTool(() => skillList, onSkillLoad));
             const r = await createHarness({
               model: agentModel, system: `${d.prompt}\n\nYou are a subagent working for another engineer. You see only the brief below. Finish with \`finish(summary)\`: what you found or did, concretely, with file paths.`, tools: base, maxSteps: d.maxSteps,
-              budget: track(o.budget?.slice(0.25, 120_000)), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), policy: policyFn, hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name),
+              budget: track(o.budget?.slice(0.25, 120_000)), signal: ctx.signal, approve, permissions: o.rules === false ? undefined : o.rules ?? new Permissions({}, wt?.dir ?? o.cwd), policy: policyFn, hooks: o.hooks, ledger: isolated ? undefined : isWriter(d) ? ledger : undefined, onEvent: emitAs(d.name), pause: o.pause ? (p) => o.pause!({ ...p, agent: d.name }) : undefined,
             }).run(description);
             if ((!r.finished || !r.text.trim()) && agentModel !== o.model && !isWriter(d)) return takeover(d.name, agentModel.card?.id ?? d.model ?? d.name, !r.finished ? `it stopped before finishing (${r.stopped ?? "no finish"})` : "it returned nothing", r.text);
             let out = clip(r.finished ? r.text : `(${d.name} did not finish cleanly) ${r.text}`, 8000);

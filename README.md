@@ -11,6 +11,8 @@
 
 > **Who is this for?** Power users who outgrow closed tools: people who want to choose the model, read the loop, write their own guardrails, and *test* whether a change to the harness actually helps. If you want something that works with zero setup, Claude Code and Codex are excellent and you should use them. Amness is for when you want to open the hood. Newer features here are tested but not yet proven on real tasks; see [Status](#status-what-is-and-is-not-proven).
 
+**Nothing is hidden.** Type `/advanced` and the whole session opens as a diagram you step through, forward and back: your messages, hooks, context, each exact model request, tools, guards and the finish gate. Put a pause on a box and the run stops there, so you can change the next step before it happens. See [Advanced mode](#advanced-mode-see-and-pause-every-step).
+
 ## Quick start
 
 You need **Node 22.18+**, git, and an API key (OpenAI or Anthropic) or a local model server.
@@ -78,9 +80,27 @@ Tools from [MCP servers](docs/mcp.md): yours, and the project's `.mcp.json` once
 
 <p align="center"><img src="docs/images/serve-phone.png" alt="Amness in a phone-sized browser through amness serve" width="300"></p>
 
-Want to see everything? `/advanced` shows the whole session as boxes you step through, forward and back: hooks, context, each exact model request, tools, guards and the finish gate. You can pause the run at a box and change the next step (a note to the model, the arguments of a call, a result). See [Advanced](docs/advanced.md).
-
 More screenshots (subagents, the loop view, themes) are in the [step-by-step guide](docs/getting-started.md).
+
+## Advanced mode: see and pause every step
+
+Normal use stays simple. When you want to look inside, `/advanced` (or **Inspect → Advanced**) shows the session as eight boxes: **You → Hooks → Context → Model → Tools → Guards → Finish → Answer**. The box that is running lights up, and an arrow shows where the run came from.
+
+<p align="center"><img src="docs/images/advanced-terminal.png" alt="The Advanced view in the terminal: the eight boxes, the session timeline, a run paused at Finish with your change, the list of frames and the details" width="900"></p>
+
+This is a real run (`gpt-6-luna`, 7 model calls, about $0.0004). A pause on **Finish** stopped the model's first finish, and the reason you typed sent it back to run the test once more.
+
+- **Step through everything.** `←` `→` one frame, `[` `]` one loop step, `PgUp` `PgDn` one chat, `Space` to play. Click a box to jump to the next time it ran. The timeline marks warnings and errors.
+- **Full details.** Each exact request (system prompt, messages, tools), the thinking, the reply and its tokens, tool arguments and results, diffs, what each hook got and returned, and why a guard or the finish gate stepped in.
+- **Pause and change.** Put a pause on Model, Tools or Finish (`b`, or the pause dot in the desktop app). While the run waits you can add a note to the model, limit its tools, change the step limit, switch a guard off, edit the reply or its tool calls, edit a call's arguments, skip or deny it, edit a result, or reject or accept a finish. Subagents pause too, one at a time. Your changes still go through the permission checks.
+- **Replay and fork.** `r` replays a chat through the harness as it is set now, with no model calls, and shows what it would do differently. `F` starts a new chat from exactly what the model saw at that step.
+- **Older sessions.** `/advanced list` opens any saved session of the project.
+
+The desktop app has the same view, with buttons and an editor in place:
+
+<p align="center"><img src="docs/images/advanced.png" alt="The Advanced view in the desktop app: the Tools box paused, the result open for editing, the frame list and the details" width="900"></p>
+
+Full recording (each request, the thinking, diffs, hook runs) is on while the view is open, or always with `/set fullTrace on`. On 84 recorded sessions it made traces 1.6 times larger. Traces are kept under 200 MB per project (`/set traceLimitMb <n>`). Details: [Advanced](docs/advanced.md).
 
 ## Examples
 
@@ -204,6 +224,22 @@ amness eval --plugin .amness/plugins/house-rules.ts --variants full,strict --tri
 
 More plugin ideas (finish gates, policies, loop strategies, custom metrics) are in [Plugins](docs/plugins.md) and the [Cookbook](docs/cookbook.md).
 
+### 7. Stop the agent before a step and change it
+
+```
+❯ /advanced
+```
+
+Press `Tab` until **Tools** is chosen, press `b` (a pause on every tool call), then `Esc`. Now ask for something:
+
+```
+❯ run the tests and fix what fails
+```
+
+**What happens.** Before the first tool call runs, the run stops and the Advanced view opens with "⏸ Paused before sh runs". Press `e` to edit the arguments (for example remove a `--watch` flag), `s` to skip the call, or `d` to deny it with a reason. Press `c` to go on, or `n` to go on and stop again at the next call. The timeline marks every change you made.
+
+**Why it is useful.** You can test an idea about the loop (a hint, a different argument, a guard switched off) on a real run, without changing any code. Then `r` replays the chat with the harness as it is now, to see what a settings change would do. See [Advanced](docs/advanced.md).
+
 ## What you get
 
 | | |
@@ -213,6 +249,7 @@ More plugin ideas (finish gates, policies, loop strategies, custom metrics) are 
 | **Cost under control** | Staged context trimming that keeps the provider's prompt cache valid, each file line sent once (a re-read sends only new lines), a shared rate limiter for parallel agents (honours `Retry-After`), subagent budget slices, optional routing of exploration to a cheaper model, optional server-side compaction. |
 | **Mix models** | Give each job its own model, on any provider or your own server (`/models explore server:lab`), each with its own key and settings. Check a model first with `amness doctor`. A stronger model can advise a cheaper one, and a recovery ladder starts cheap and moves up only when trouble adds up. Local models get help: broken tool calls are repaired, calls written as text can be taken, and a server that cuts the prompt is noticed. See [Models per job](docs/features.md#models-per-job-and-a-fallback). |
 | **Make it yours** | [Plugins](docs/plugins.md) (in-process hooks on 8 loop events, tools, prompt rewrites, eval graders and variants), shell hooks, skills, custom subagents, MCP servers, your own slash commands, `AGENTS.md`, a library API. |
+| **See inside, change it live** | `/advanced`: the whole session as boxes you step through (hooks, context, each exact request, tools, guards, the finish gate), with full details. Pause at a box and change the next step, replay a chat with the current harness, or fork a new chat from any step. Terminal and desktop. See [Advanced mode](#advanced-mode-see-and-pause-every-step). |
 | **Evaluate and improve** | `amness eval` (ablations, SWE-bench-format suites, injection suite, leak audit), trace replay, failure mining, `amness tune` (changes kept only if they hold on unseen tasks). |
 | **Works where you work** | Several things at once: `/bg <task>` runs a task in the background in its own worktree, the desktop app keeps a chat working while you open another (each with its own provider), and `amness run --background` from scripts. A desktop app (`amness-desktop`), full-screen and inline terminal UI, headless mode, git worktree sessions with `/review` and `/pr`, scheduled runs, a GitHub Action, an editor server (`amness acp`), image input, session branching. |
 
@@ -226,8 +263,9 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 
 ## Status: what is and is not proven
 
-- **Tested:** about 680 automated tests (scripted models, mock servers, real git repositories, a pseudo-terminal), plus about 120 checks that drive the real desktop window (`npm run test:desktop-ui`, run on macOS only so far), CI on Linux and Windows, and a Docker and npm-package smoke test.
+- **Tested:** about 780 automated tests (scripted models, mock servers, real git repositories, a pseudo-terminal), plus about 130 checks that drive the real desktop window (`npm run test:desktop-ui`, run on macOS only so far), CI on Linux and Windows, and a Docker and npm-package smoke test.
 - **Measured on real models (small):** the guards and the reviewer showed no detectable pass-rate effect on [these tasks and models](docs/evaluation.md#measured-results-so-far); the guards and reviewer cost extra tokens, most visibly on strong models. Every newer feature (models per job, the advisor, the recovery ladder, `amness doctor`, routing, `tune`, best-of-n, parallel parts, language-server diagnostics, the approval reviewer) is implemented and unit-tested but **not yet shown to help on real work**. The [roadmap](ROADMAP.md) lists the measurements still to run.
+- **Advanced mode:** tested (automated tests and the real desktop window) and tried once on a real task. Full recording measured at 1.6 times the normal trace size on 84 real sessions.
 - **Platforms:** developed on macOS and Linux. Windows runs the test suite but has no OS sandbox. Installed from npm; the Claude SDK comes with it.
 - Cost figures are estimates. Small local models vary widely in tool-calling quality.
 
@@ -238,6 +276,7 @@ Models: OpenAI (Responses and Chat), Claude, and any OpenAI-compatible local ser
 | [Getting started](docs/getting-started.md) | a step-by-step first session, with screenshots |
 | [Cookbook](docs/cookbook.md) | 12 task-based recipes: CI, best-of-n, budgets, plugins, evals, schedules |
 | [Using the chat](docs/usage.md) | commands, keys, modes, mentions, images |
+| [Advanced mode](docs/advanced.md) | step through everything the agent did, pause at a box and change the next step, replay and fork |
 | [The desktop app](docs/desktop.md) | `amness-desktop`: the same agent in a window |
 | [Features in depth](docs/features.md) | everything above, one section each |
 | [Plugins: the harness as code](docs/plugins.md) | write your own loop rules, guardrails, tools and graders |

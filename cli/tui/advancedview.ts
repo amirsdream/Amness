@@ -10,7 +10,7 @@ import { BOXES, type Frame, type Section } from "./lifecycle.ts";
 
 export type AdvHit = { x: number; y: number; w: number; h: number; act: () => void; wheel?: (d: number) => void };
 
-const KEYS_RUN = "←→ frame · [ ] step · PgUp PgDn chat · Tab box · Enter jump · b pause · f filter · . pause next · Space play · o open · Esc close";
+const KEYS_RUN = "←→ frame · [ ] step · PgUp PgDn chat · Tab box · Enter jump · b pause · . pause next · u subagents · f filter · Space play · r replay chat · F fork here · o open · Esc close";
 const KEYS_PAUSED = "c go on · n go on, pause at next · e edit · p change… · s skip · d deny · a accept · x discard";
 
 /** The lines of a detail section, wrapped to `w` and coloured by kind (a diff in green and red, JSON dimmed). */

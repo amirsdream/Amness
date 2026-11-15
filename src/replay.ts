@@ -10,9 +10,14 @@ const SIGNIFICANT = new Set(["nudge", "loop", "repair", "rejected", "denied", "h
 
 /** Split a JSONL trace into runs (one per `run` event). Events of subagents are ignored: they are not regenerated. */
 export function readTrace(file: string): TraceRun[] {
+  const lines: TraceLine[] = [];
+  for (const l of readFileSync(file, "utf8").split("\n")) { if (!l.trim()) continue; try { lines.push(JSON.parse(l)); } catch { /* a line cut off by a crash */ } }
+  return traceRuns(lines);
+}
+/** The same, from trace lines already read (the Advanced view has them in memory). */
+export function traceRuns(lines: TraceLine[]): TraceRun[] {
   const runs: TraceRun[] = []; let cur: TraceRun | undefined; const pending = new Map<string, { name: string; args: string }>();
-  for (const l of readFileSync(file, "utf8").split("\n")) {
-    if (!l.trim()) continue; let e: TraceLine; try { e = JSON.parse(l); } catch { continue; }
+  for (const e of lines) {
     if (e.agent) continue;
     if (e.kind === "run") { cur = { messages: e.messages as Message[], models: [], results: new Map(), tools: [], lines: [] }; runs.push(cur); pending.clear(); continue; }
     if (!cur) continue;
@@ -35,7 +40,7 @@ export type ReplayCost = { requests: number; prompt: number; cached: number };
 /** Cost in "fresh input token" units when cached input costs `cachedPrice` of fresh input (0.1 for most hosted providers). */
 export const replayUnits = (c: ReplayCost, cachedPrice = 0.1): number => Math.round(c.prompt - c.cached + c.cached * cachedPrice);
 
-export type ReplayReport = { cost: ReplayCost; run: number; turns: number; recorded: string[]; replayed: string[]; onlyRecorded: string[]; onlyReplayed: string[]; same: boolean; result: RunResult };
+export type ReplayReport = { cost: ReplayCost; run: number; turns: number; recorded: string[]; replayed: string[]; onlyRecorded: string[]; onlyReplayed: string[]; same: boolean; result: RunResult; /** the replay's own trace lines (the Advanced view opens them) */ lines: TraceLine[] };
 
 /** Feed one recorded run back through the harness with `o` as its options (the thing you changed). */
 export async function replayRun(run: TraceRun, o: Partial<Options> = {}): Promise<ReplayReport> {
@@ -48,12 +53,14 @@ export async function replayRun(run: TraceRun, o: Partial<Options> = {}): Promis
     return models.shift() ?? { role: "assistant", content: "(replay: the recorded trace ends here)" };
   };
   const tools: Tool[] = run.tools.map((name) => defineTool({ name, description: "", schema: { type: "object" }, readOnly: true, run: (args: unknown) => results.get(canonicalCall(name, args))?.shift() ?? "ERROR: (replay) no recorded result for this call: the harness diverged from the recording here" }));
-  const replayed: TraceLine[] = [], tracer = new Tracer({ sessionId: "replay", sink: (l) => replayed.push(l) });
-  const result = await createHarness({ maxSteps: 60, approve: () => true, ...o, model, tools, onEvent: (e: Event) => tracer.event(e) }).run("", { resume: run.messages });
-  const A = run.lines.map(sig), B = replayed.filter((l) => SIGNIFICANT.has(l.kind)).map(sig);
+  const replayed: TraceLine[] = [], tracer = new Tracer({ sessionId: "replay", sink: (l) => replayed.push(l), full: () => true });
+  const result = await createHarness({ maxSteps: 60, approve: () => true, ...o, model, tools, onEvent: (e: Event) => { tracer.event(e); o.onEvent?.(e); }, onRequest: (r) => { tracer.request(r); o.onRequest?.(r); } }).run("", { resume: run.messages });
+  // The claims ledger belongs to the code agent: without one in \`o\`, its audit lines are not something the replay could repeat, so they are not compared.
+  const comparable = (l: TraceLine) => !(l.kind === "audit" && !o.ledger);
+  const A = run.lines.filter(comparable).map(sig), B = replayed.filter((l) => SIGNIFICANT.has(l.kind) && comparable(l)).map(sig);
   const left = (xs: string[], ys: string[]) => { const c = new Map<string, number>(); for (const y of ys) c.set(y, (c.get(y) ?? 0) + 1); return xs.filter((x) => { const n = c.get(x) ?? 0; if (n > 0) { c.set(x, n - 1); return false; } return true; }); };
   const onlyRecorded = left(A, B), onlyReplayed = left(B, A);
-  return { cost, run: 0, turns: run.models.length, recorded: A, replayed: B, onlyRecorded, onlyReplayed, same: !onlyRecorded.length && !onlyReplayed.length, result };
+  return { cost, run: 0, turns: run.models.length, recorded: A, replayed: B, onlyRecorded, onlyReplayed, same: !onlyRecorded.length && !onlyReplayed.length, result, lines: replayed };
 }
 
 export async function replayFile(file: string, o: Partial<Options> = {}): Promise<ReplayReport[]> {

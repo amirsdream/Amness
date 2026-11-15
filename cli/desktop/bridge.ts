@@ -64,7 +64,7 @@ export type AdvancedAction =
   | { op: "open"; file?: string } | { op: "close" } | { op: "picker" }
   | { op: "go"; i: number } | { op: "move"; d: 1 | -1 } | { op: "step"; d: 1 | -1 } | { op: "chat"; d: 1 | -1 } | { op: "home" } | { op: "end" }
   | { op: "box"; box: Box } | { op: "focus"; box: Box } | { op: "filter"; box?: Box } | { op: "pause"; box: Box } | { op: "pauseNext" } | { op: "play" }
-  | { op: "edit" } | { op: "params" } | ({ op: "act" } & { act: PauseOp });
+  | { op: "edit" } | { op: "params" } | { op: "subagents" } | { op: "replay" } | { op: "fork" } | ({ op: "act" } & { act: PauseOp });
 
 /** An App overlay as plain data (the window and the API show the same dialogs). */
 export function dialogView(o: object, id: number): DialogView | undefined {
@@ -209,6 +209,9 @@ export class DesktopBridge {
       case "close": a.closeAdvanced(); break;
       case "picker": void a.openAdvancedPicker(); break;
       case "pauseNext": a.pauses.next = !a.pauses.next; break;
+      case "subagents": a.pauses.subagents = !a.pauses.subagents; break;
+      case "replay": void a.replayChat().then(() => this.changed()); break;
+      case "fork": a.forkHere(); this.fullSync(); break;
       case "pause": a.pauses.cycle(b.box); break;
       case "edit": void editMain(a); break;
       case "params": void editParams(a); break;

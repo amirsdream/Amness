@@ -179,12 +179,14 @@ export type HookRun = { command: string; ms: number; outcome: "ok" | "block" | "
 
 /** Where a run can be paused (Options.pause): before a model call, after its reply, before and after a tool call, and when the model calls `finish`. */
 export type PauseAt = "model" | "reply" | "tool" | "result" | "finish";
-export type PausePoint =
+export type PausePoint = (
   | { at: "model"; step: number; max: number; messages: readonly Message[]; tools: string[] }
   | { at: "reply"; step: number; content: string | null; calls: { id: string; name: string; args: string }[] }
   | { at: "tool"; step: number; id: string; name: string; args: Record<string, unknown> }
   | { at: "result"; step: number; id: string; name: string; args: Record<string, unknown>; result: string }
-  | { at: "finish"; step: number; summary: string };
+  | { at: "finish"; step: number; summary: string })
+  /** set when a subagent pauses (its name); the main agent's points have none */
+  & { agent?: string };
 /**
  * What the user changed at a pause. Loop settings (`maxSteps`, `off`, `on`) apply at any point; the rest only where they make sense:
  * `note` and `tools` before a model call, `content` and `calls` to a reply, `args`, `skip` and `deny` before a tool call, `result` after it, `reject` and `accept` at a finish.
@@ -345,7 +347,7 @@ export type Options = {
   /** Model for the handoff note written when the context rolls over (often a cheaper one). Default: `model`. */
   compactModel?: Model;
   /** Emit `run` and `model` events with full message content, so a trace can be replayed later (see `replay`). Larger traces; off unless asked. */
-  record?: boolean;
+  record?: boolean | (() => boolean);
   /** Lifecycle hooks (see `Hooks`). PreToolUse can block or rewrite a call, PostToolUse can add context to a result, Stop can reject a finish, PreCompact can veto trimming. */
   hooks?: { run(event: "PreToolUse" | "PostToolUse" | "PreCompact" | "Stop" | "SessionStart" | "UserPromptSubmit" | "PreModel" | "PostModel", payload: Record<string, unknown>): Promise<{ runs?: HookRun[]; block?: string; context?: string; args?: Record<string, unknown>; tools?: string[]; then?: string; warnings: string[] }> };
   /** Interrupt the run: it stops at the next safe point (history stays consistent, so it can be resumed). */
@@ -598,7 +600,8 @@ export function createHarness(o: Options) {
   /** Agent loop. Resolves with the model's final answer (`finish` summary or accepted plain-text reply). */
   async function run(task: string, opts: { resume?: Message[] } = {}): Promise<RunResult> {
     const msgs: Message[] = opts.resume ? [...opts.resume] : [{ role: "system", content: o.system ?? DEFAULT_SYSTEM }, { role: "user", content: task }];
-    if (o.record) emit({ kind: "run", messages: msgs.map((m) => ({ ...m, raw: undefined })) });
+    const recording = () => (typeof o.record === "function" ? o.record() : !!o.record);
+    if (recording()) emit({ kind: "run", messages: msgs.map((m) => ({ ...m, raw: undefined })) });
     const seen = new Map<string, number>(), history: string[] = [];
     const untrustedPool: { source: string; text: string }[] = []; let poolSize = 0;
     world++;            // files may have changed since the last run
@@ -784,7 +787,7 @@ export function createHarness(o: Options) {
       if (o.pause) { const pe = await paused({ at: "reply", step, content: m.content ?? null, calls: (m.tool_calls ?? []).map((c) => ({ id: c.id, name: c.function.name, args: c.function.arguments })) });
         if (pe?.content !== undefined) m.content = pe.content;
         if (pe?.calls) m.tool_calls = pe.calls.length ? pe.calls.map((c, i) => ({ id: c.id || `user-${step}-${i}`, type: "function" as const, function: { name: c.name, arguments: c.args } })) : undefined; }
-      if (o.record) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
+      if (recording()) emit({ kind: "model", message: { role: m.role, content: m.content, ...(m.tool_calls && { tool_calls: m.tool_calls }), ...(m.usage && { usage: m.usage }) } });
       emit({ kind: "turn", step, tokens, prompt: m.usage?.prompt_tokens ?? 0, completion: m.usage?.completion_tokens ?? 0, cached: m.usage?.cached_tokens ?? 0, reasoning: m.usage?.reasoning_tokens ?? 0 });
       if (m.content?.trim()) emit({ kind: "assistant", text: m.content, streamed });
       msgs.push({ role: "assistant", content: m.content ?? null, ...(m.tool_calls?.length && { tool_calls: m.tool_calls }), ...(m.raw !== undefined && { raw: m.raw }) });

@@ -1379,6 +1379,9 @@ function drawAdvanced() {
     h("div", { class: "adv-top" }, h("span", { class: "adv-title" }, h("span", { class: "logo", text: "◆" }), " Advanced"), h("span", { class: "muted", text: a.title }),
       h("span", { class: "adv-where", text: a.total ? `chat ${a.chat || "–"}/${a.chats.length} · step ${cur?.step || "–"} · frame ${a.cur + 1}/${a.total}` : "nothing recorded yet" }), state,
       a.next ? h("span", { class: "adv-chip warn", text: "pausing at next point" }) : null, h("span", { class: "grow" }),
+      tbtn("Replay chat", { op: "replay" }, "Feed this chat's recorded replies back through the harness as it is set now: no model calls. Shows what it would do differently (r)"),
+      tbtn("Fork here", { op: "fork" }, "A new chat that starts from exactly what the model saw at this step. Your files stay as they are (F)"),
+      tbtn(a.subagents ? "Subagents pause" : "Subagents run on", { op: "subagents" }, "Whether pauses also stop subagents (u)"),
       tbtn("Open…", { op: "picker" }, "Open a saved session of this project"), tbtn(a.next ? "Cancel pause at next" : "Pause at next", { op: "pauseNext" }, "Stop at the next pause point, whatever box it is in (.)"), h("button", { class: "ghost", title: "Close (Esc)", onclick: () => advAct({ op: "close" }) }, "✕")),
     h("div", { class: "adv-svgwrap" }, advDiagram(a)),
     h("div", { class: "adv-bar" },
@@ -1399,6 +1402,7 @@ document.addEventListener("keydown", (e) => {
   const k = e.key, go = (body) => { e.preventDefault(); e.stopPropagation(); advAct(body); };
   if (k === "Escape") go({ op: "close" }); else if (k === "ArrowLeft") go({ op: "move", d: -1 }); else if (k === "ArrowRight") go({ op: "move", d: 1 });
   else if (k === "[") go({ op: "step", d: -1 }); else if (k === "]") go({ op: "step", d: 1 }); else if (k === "PageUp") go({ op: "chat", d: -1 }); else if (k === "PageDown") go({ op: "chat", d: 1 });
+  else if (k === "r") go({ op: "replay" }); else if (k === "F") go({ op: "fork" }); else if (k === "u") go({ op: "subagents" });
   else if (k === "Home") go({ op: "home" }); else if (k === "End") go({ op: "end" }); else if (k === " ") go({ op: "play" }); else if (k === ".") go({ op: "pauseNext" });
   else if (adv.paused && (k === "c" || k === "C")) go({ op: "act", act: { op: "continue" } }); else if (adv.paused && (k === "n" || k === "N")) go({ op: "act", act: { op: "next" } });
 }, true);

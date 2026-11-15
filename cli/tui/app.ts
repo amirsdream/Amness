@@ -5,7 +5,7 @@ import { join, resolve as resolvePath, sep } from "node:path";
 import { homedir } from "node:os";
 import { onRateLimitWait } from "../model.ts";
 import { applySandboxEngine, sandboxBackends, type CommandRisk, explainCommand, type OutsideRequest, STRATEGIES, setShell, shellFallbackNote, describeProjectPlugins, promptPlugin, loadPlugins, pluginFingerprint, runShell, type Plugin, type PluginCtx } from "../../src/index.ts";
-import { type RequestRecord, pickFor, onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, pruneTraces, readTraceLines, type TraceLine, type PausePoint, type PauseEdit, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
+import { type RequestRecord, pickFor, onAdapterWarning, quarantineReader, visionLikely, Budget, MemoryStore, Snapshots, Tracer, pruneTraces, readTraceLines, readRequests, traceRuns, replayRun, formatReplay, type Options, type TraceLine, type PausePoint, type PauseEdit, irreversibleReason, loadProfile, type Profile, sandboxKind, type Roles, createCodeAgent, Hooks, Permissions, projectConfigFingerprint, openaiEmbedder, riskOf, startLive, type Approve, type Event, type Guard, type Message, type Model, type PermMode, type Tool } from "../../src/index.ts";
 import { detectWindow } from "../models.ts";
 import { hubOptions, mcpEntries } from "../mcpconfig.ts";
 import { McpHub, type McpElicitation } from "../../src/mcp.ts";
@@ -206,7 +206,7 @@ export class App {
     this.model = w.model; this.roles = w.roles; this.wired = w;
     this.agent = createCodeAgent({
       model: this.model, modelById: (id) => w.byRef(id), cwd: this.cwd, chat: true, plans: this.cfg.plans || undefined, contextWindow: () => windowFor(this.cfg), onWindow: (w, id) => { rememberWindow(this.cfg, w, id); this.notify("info", `context window learned: ${w.toLocaleString()} tokens`, [dim(`  context window learned: ${w.toLocaleString()} tokens`)]); }, permissions: { mode: () => this.mode }, approve: this.approve, inbox: () => this.drainQueue(),
-      toolPicks: () => this.cfg.tools, onRequest: (r) => { this.requests.push(r); if (this.requests.length > 50) this.requests.shift(); this.ensureTracer().request(r); }, pause: (p) => this.pauseAt(p), signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, exploreRanges: this.cfg.exploreRanges || undefined, stableTools: this.cfg.stableTools || undefined, advisor: nativeAdvisor(this.cfg) ? "native" : w.advisor, ladder: w.ladder, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer ? (w.approve ? { model: w.approve } : true) : undefined, quarantine: this.cfg.quarantine ? (w.quarantine ? quarantineReader(w.quarantine) : true) : undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: this.persist || undefined, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
+      toolPicks: () => this.cfg.tools, onRequest: (r) => { this.requests.push(r); if (this.requests.length > 50) this.requests.shift(); this.ensureTracer().request(r); }, pause: (p) => this.pauseAt(p), signal: () => this.ac?.signal, budget: this.budget, verify: this.verify, check: this.check, review: this.cfg.review || undefined, exploreRanges: this.cfg.exploreRanges || undefined, stableTools: this.cfg.stableTools || undefined, advisor: nativeAdvisor(this.cfg) ? "native" : w.advisor, ladder: w.ladder, lsp: this.cfg.lsp || undefined, approvalReviewer: this.cfg.approvalReviewer ? (w.approve ? { model: w.approve } : true) : undefined, quarantine: this.cfg.quarantine ? (w.quarantine ? quarantineReader(w.quarantine) : true) : undefined, dirs: this.allowedDirs, outside: (r) => this.askOutside(r), beforeShell: (cmd) => this.beforeShell(cmd), record: () => this.persist || !!this.cfg.fullTrace || !!this.advanced, models: this.roles, sandbox: () => this.cfg.sandbox ?? "off", hooks: this.hooks?.count() ? this.hooks : undefined, plugins: this.activePlugins().length ? this.activePlugins() : undefined, rules: this.rules, ...this.harnessOptions(), editedPlan: () => { const p = this.planEdit; this.planEdit = undefined; return p; }, embedder: this.cfg.embeddings && this.cfg.provider !== "anthropic" ? openaiEmbedder({ apiKey: this.cfg.apiKey, baseUrl: this.cfg.baseUrl }) : undefined, onEvent: (e) => this.onEvent(e as Ev), meta: { provider: this.cfg.provider, model: this.cfg.model },
     });
     for (const m of this.mcp) this.agent.registry.add(...m.tools);                       // attached MCP servers survive rebuilds
     this.mcpNamesAdded.clear(); this.syncMcpTools();
@@ -719,6 +719,45 @@ export class App {
     }
     this.full?.invalidate(); this.render();
   }
+  /** Open the Advanced view on lines made here (a replay). */
+  openAdvancedLines(lines: TraceLine[], title: string) { this.advanced?.close(); this.advanced = new AdvancedView(lines, { live: false, title }); this.advanced.home(); this.full?.invalidate(); this.render(); }
+  /**
+   * Replay the chat of the current frame through the harness as it is configured now: the recorded model replies and tool results are fed back, so no model
+   * is called and nothing runs. Opens the replay in the Advanced view, with what the current harness did differently first.
+   */
+  async replayChat() {
+    const v = this.advanced; if (!v) return;
+    const c = v.lc.chats.find((x) => x.n === (v.frame?.chat ?? 0));
+    if (!c || c.run === undefined) return this.toast("this chat has no recorded run to replay (recording was off when it ran)", "warn");
+    const run = traceRuns(v.lc.lines)[c.run]; if (!run || !run.models.length) return this.toast("this chat's run has no recorded model replies to replay", "warn");
+    this.toast(`replaying chat ${c.n} with the current harness…`);
+    try {
+      const { off, maxSteps, stagnationTurns, contextBudget, governRewrites } = this.harnessOptions() as Partial<Options>;
+      const rep = await replayRun(run, { off, maxSteps, stagnationTurns, contextBudget, governRewrites });
+      const head: TraceLine = { t: new Date().toISOString(), ms: 0, kind: "replay", same: rep.same, detail: formatReplay([{ ...rep, run: c.n }]) };
+      const chat: TraceLine = { t: head.t, ms: 0, kind: "chat", text: c.title };
+      this.openAdvancedLines([head, chat, ...rep.lines], `replay of chat ${c.n}: ${rep.same ? "same as recorded" : `${rep.onlyRecorded.length + rep.onlyReplayed.length} difference(s)`}`);
+    } catch (e) { this.toast(`replay failed: ${(e as Error).message}`, "error"); }
+  }
+  /**
+   * Fork here: a new chat that starts from exactly what the model saw at the current frame (the nearest recorded request at or before it). Your files stay
+   * as they are now. Type a message (for example "continue") to go on from there.
+   */
+  forkHere() {
+    const v = this.advanced; if (!v || !v.frame) return;
+    const reqs = readRequests(v.lc.lines); let at: number | undefined;
+    for (let i = v.cur; i >= 0; i--) { const f = v.frames[i]; if (f.kind === "request" && !f.agent && reqs.has(f.line)) { at = f.line; break; } }
+    if (at === undefined) return this.toast("no recorded request at or before this frame: full recording was off then (it is on while Advanced is open, or with /set fullTrace on)", "warn");
+    const r = reqs.get(at)!, from = this.session.title || "a chat", step = r.step + 1;
+    if (this.running) return this.toast("wait until the run ends (or stop it) before forking", "warn");
+    this.closeAdvanced(); this.newConversation();
+    this.session.messages = r.messages.map((m) => ({ ...m }));
+    this.session.title = `Fork of ${one(from, 40)} at step ${step}`;
+    this.session.turns.push({ at: this.session.messages.length, text: `(forked from "${from}" at step ${step})`, t: Date.now(), snaps: {} });
+    this.rebuildBlocks(); this.saveSession();
+    this.notify("info", `forked at step ${step}: the model will see exactly what it saw then. Your files are as they are now. Type a message to go on.`, [dim(`  ⑂ forked from "${from}" at step ${step}: type a message to go on`)]);
+    this.render();
+  }
   closeAdvanced() {
     if (this.pauses.waiting && this.advanced?.live) { this.toast("the run is still paused: /advanced and c lets it go on; Ctrl+C stops it", "warn"); }
     this.advanced?.close(); this.advanced = null; this.full?.invalidate(); this.render();
@@ -733,8 +772,15 @@ export class App {
     this.openAdvanced(pick || undefined, pick ? titles.get(basename(pick, ".jsonl")) : undefined);
   }
   /** The harness asks at each pause point: go on at once unless a pause is set there (or at the next point). */
+  private pauseQueue: Promise<unknown> = Promise.resolve();
   pauseAt(p: PausePoint): Promise<PauseEdit | undefined> | undefined {
-    if (!this.pauses.any || !this.pauses.take(p)) return undefined;
+    if (!this.pauses.any || (p.agent && !this.pauses.subagents) || !this.pauses.take(p)) return undefined;
+    // Subagents run in parallel: their pauses wait in line, one at a time.
+    const next = this.pauseQueue.then(() => this.pauseNow(p)); this.pauseQueue = next.catch(() => undefined);
+    return next;
+  }
+  private pauseNow(p: PausePoint): Promise<PauseEdit | undefined> {
+    if (this.ac?.signal.aborted) return Promise.resolve(undefined);
     return new Promise<PauseEdit | undefined>((resolve) => {
       const sig = this.ac?.signal, box = boxOfPause(p.at);
       this.pauses.waiting = { point: p, box, edit: {}, since: Date.now(), resolve: (e) => { sig?.removeEventListener("abort", stop); resolve(e); this.render(); } };

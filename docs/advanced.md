@@ -7,6 +7,7 @@ In this page you will learn:
 - how to open the Advanced view and move through a session, forward and back
 - what each box shows, with full details
 - how to pause the run at a box and change the next step
+- how to replay a chat with your current settings, or fork a new chat from any step
 - how much is recorded, and how to limit the space it takes
 
 <p align="center"><img src="images/advanced.png" alt="The Advanced view in the desktop app: eight boxes, the Tools box paused, the result open for editing, the list of steps and the details" width="900"></p>
@@ -73,6 +74,8 @@ Below are two panels: the list of frames, and the **details** of the current fra
 | `f` | Show only the chosen box (press again to show all) |
 | `Space` | Play: move forward one frame at a time |
 | `↑` `↓` | Scroll the details (`Shift` for 10 lines) |
+| `r` | Replay this chat with the harness as it is set now (see below) |
+| `F` | Fork: a new chat from exactly what the model saw at this step (see below) |
 | `o` | Open another session |
 | `Esc` | Close the view |
 
@@ -83,7 +86,7 @@ With the mouse, you can click a box, a frame or the timeline, and scroll the det
 **Limits and common problems.**
 
 - While a run is going, the view follows the newest frame. When you step back, it stops following. Press `End` to follow again.
-- Frames of a subagent show in the list with its name ("explore: Call read_file"). Their boxes are counted, but you cannot pause a subagent.
+- Frames of a subagent show in the list with its name ("explore: Call read_file").
 - A session recorded before this feature (or without full recording) has no exact requests, thinking or diffs. The details then say "not recorded".
 
 ## Pause the run and change the next step
@@ -104,7 +107,7 @@ You can pause at three boxes:
 
 1. Open `/advanced`.
 2. Choose a box with `Tab`, then press `b`. Press `b` again to pause only **once**, and a third time to remove the pause. In the desktop app, click the small pause dot on the box.
-3. Press `.` to pause at the next pause point, whatever box it is in.
+3. Press `.` to pause at the next pause point, whatever box it is in. Press `u` to choose whether pauses also stop subagents (on by default).
 4. Send your message. When the run reaches the box, it stops, and the view opens if it was closed. The box shows "waiting".
 5. Change what you want (see the table below), then press `c` to continue, or `n` to continue and pause again at the next point.
 
@@ -127,9 +130,46 @@ You can pause at three boxes:
 - Safety stays on. Changed arguments go through the same permission rules, hooks and approvals as the model's own. A change that does not match the tool's schema is refused with the reason.
 - A guard you switch off stays off for the rest of the session's agent, until the agent is rebuilt (for example by `/model` or a settings change).
 - To interrupt a paused run, press `Ctrl+C` in the view (in the desktop app, close the view and click the stop button). The pause ends and the run stops.
+- Subagents pause too. The view says which one ("subagent explore: before read_file runs"). Several subagents run at the same time, so their pauses wait in line: you answer one, then the next appears.
 - Pauses work in the terminal and the desktop app. `amness run`, `amness acp` and `amness serve` never pause.
 - Every change is written to the trace as an `override` event, so you can see later what you changed.
-- Pausing is tested with automated tests in both front ends. It has not been used on real tasks yet.
+- Status: tested with automated tests in both front ends and in the real desktop window. Tried once on a real task (`gpt-6-luna`, a one-file bug fix, 7 model calls, about $0.0004): a note before the first call was followed, and a rejected finish made the model run the test again and quote its output.
+
+## Replay a chat with your current settings
+
+**What it is.** Press `r` on any frame of a chat. Amness feeds that chat's recorded model replies and tool results back through the harness as it is set now: your guards, step limit and other `/harness` settings. No model is called and nothing runs.
+
+**Why you would use it.** To see what a settings change would do on a real session, for free. For example, switch a guard off with `/harness off loop`, then replay the chat where it stepped in.
+
+**How to use it.**
+
+1. Open `/advanced` and move to a frame of the chat.
+2. Press `r` (in the desktop app, **Replay chat**).
+3. The view opens on the replay. Its first frame, **Replay report**, lists what the current harness did differently, for example `- recorded only: loop · cycle of 2 calls` (it happened then, not now) or `+ replay only: nudge` (it would happen now). The title says "same as recorded" when nothing changed.
+
+**Limits and common problems.**
+
+- A replay needs the recorded run of the chat. Chats saved without recording (an unsaved session, before full recording was on) cannot be replayed.
+- After the first difference, the model would have seen something else, so its recorded replies no longer fit. Later lines are only an indication.
+- The replay runs the bare loop with your guard settings. Checks that need the project (the `verify` command, the reviewer, the claims ledger) are not repeated, and their lines are left out of the comparison.
+
+## Fork a new chat from any step
+
+**What it is.** Press `F` on a frame. Amness starts a new chat whose conversation is exactly what the model saw in the nearest recorded request at or before that frame: the system prompt, every message and tool result.
+
+**Why you would use it.** To try another path from the middle of a run: a different instruction, another model (`/model`), or other settings, without starting from the beginning.
+
+**How to use it.**
+
+1. Open `/advanced` and move to the step you want to start from.
+2. Press `F` (in the desktop app, **Fork here**). The view closes and a new chat opens, named "Fork of … at step N".
+3. Type a message to go on, for example `continue`, or a new instruction.
+
+**Limits and common problems.**
+
+- Your files are **not** put back. The fork starts from the conversation of that step, but the files are as they are now. Use `/undo` or git first if the model should see the files as they were.
+- It needs a recorded request, so full recording must have been on at that step. The view says so when it was not.
+- You cannot fork while a run is going. Stop it or wait for the end.
 
 ## Choose how much is recorded
 
@@ -154,7 +194,7 @@ Traces of a project are kept under a **size limit**: 200 MB by default. When a n
 
 **Limits and common problems.**
 
-- With full recording, a trace is larger. How much larger depends on the session. It is not measured yet.
+- With full recording, a trace is larger. **Measured** on 84 recorded sessions of this project (696 model requests), replayed offline with and without full recording: 11.1 MB normal, 18.1 MB full, so **1.6 times larger**, about 10 KB more per request. Without the deduplication, the requests alone would take 21.1 MB instead of 8.3 MB. Thinking and diffs were not in this measurement (a replay cannot make them), so a session with a thinking model will be larger. Run it on your own traces: `node scripts/trace-size.ts .amness/traces/*.jsonl`.
 - Secrets are masked in the trace, as before (API keys, tokens, private keys).
 - Long texts are cut in the trace (for example a request message at 60,000 characters). The details then say "… more".
 

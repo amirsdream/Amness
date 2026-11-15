@@ -27,7 +27,7 @@ export type Frame = {
   /** chat number (1-based; 0 = before any chat) and loop step (1-based; 0 = outside a step) */ chat: number; step: number;
   /** a subagent's frames carry its name */ agent?: string;
 };
-export type Chat = { n: number; title: string; first: number; last: number };
+export type Chat = { n: number; title: string; first: number; last: number; /** which recorded run of the trace this chat is (0-based, main agent only), for replay */ run?: number };
 export type Section = { title: string; body: string; kind?: "text" | "json" | "diff" | "md" };
 
 const one = (s: unknown, n = 120) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
@@ -39,6 +39,7 @@ const bad = (r: unknown) => /^(ERROR|DENIED|REJECTED|BLOCKED|REFUSED|SKIPPED)/.t
 /** Where each kind of trace line goes, and how it reads in one line. Undefined = not shown (bookkeeping lines). Every harness event kind has an entry (a test checks). */
 export const KIND: Record<string, ((l: TraceLine) => Pick<Frame, "box" | "title" | "summary" | "tone">) | null> = {
   chat: (l) => ({ box: "you", title: "Your message", summary: one(l.text), tone: "you" }),
+  replay: (l) => ({ box: "you", title: "Replay report", summary: one(String(l.detail ?? "").split("\n")[0]), tone: l.same ? "ok" : "warn" }),
   run: (l) => { const ms = (l.messages as { role: string; content?: string }[] | undefined) ?? [], u = [...ms].reverse().find((m) => m.role === "user"); return { box: "you", title: "Run starts", summary: `${ms.length} messages${u ? ` · last: ${one(u.content, 80)}` : ""}`, tone: "you" }; },
   steer: (l) => ({ box: "you", title: "You steered", summary: one(l.text ?? l.detail), tone: "you" }),
   override: (l) => ({ box: boxOfPause(String(l.at)), title: "You changed", summary: one(l.detail), tone: "you" }),
@@ -79,14 +80,14 @@ export const KIND: Record<string, ((l: TraceLine) => Pick<Frame, "box" | "title"
 /** Build frames from trace lines, one line at a time (live lines are fed as they come). */
 export class Lifecycle {
   lines: TraceLine[] = []; frames: Frame[] = []; chats: Chat[] = [];
-  private step = 0; private chatOpen = false; private reqs?: ReturnType<typeof readRequests>;
+  private step = 0; private chatOpen = false; private runs = 0; private reqs?: ReturnType<typeof readRequests>;
   constructor(lines: TraceLine[] = []) { for (const l of lines) this.add(l); }
   add(l: TraceLine) {
     const i = this.lines.push(l) - 1, sub = typeof l.agent === "string" && l.agent !== "lead" ? l.agent : undefined;
     if (l.kind === "request") this.reqs = undefined;
     if (!sub) {
       if (l.kind === "chat" || (l.kind === "run" && !this.chatOpen)) { const f = KIND[l.kind]!(l); this.chats.push({ n: this.chats.length + 1, title: f.summary, first: this.frames.length, last: this.frames.length }); this.step = 0; }
-      if (l.kind === "chat") this.chatOpen = true; else if (l.kind === "run") this.chatOpen = false;
+      if (l.kind === "chat") this.chatOpen = true; else if (l.kind === "run") { this.chatOpen = false; const c = this.chats.at(-1); if (c && c.run === undefined) c.run = this.runs; this.runs++; }
       if ((l.kind === "phase" && l.phase === "model") || l.kind === "request") { const s = (Number(l.step) || 0) + 1; if (s !== this.step) this.step = s; }
     }
     const fn = KIND[l.kind]; if (fn === null) return;
@@ -107,6 +108,7 @@ export class Lifecycle {
     const when = `${new Date(l.t).toLocaleTimeString()} · +${dur(l.ms)}${fr.step ? ` · step ${fr.step}` : ""}${fr.agent ? ` · subagent ${fr.agent}` : ""}`;
     out.push({ title: fr.title, body: `${fr.summary}\n${when}` });
     switch (l.kind) {
+      case "replay": text("What the current harness did differently", l.detail); break;
       case "chat": text("Message", l.text, "md"); if (l.attachments) text("Attached", (l.attachments as string[]).join("\n")); break;
       case "run": for (const m of (l.messages as { role: string; content?: string }[]) ?? []) text(m.role, m.content ?? ""); break;
       case "request": {
@@ -124,7 +126,7 @@ export class Lifecycle {
       case "tool": text("Result (as the model saw it)", l.result); break;
       case "edit": if (l.diff) text("Diff", l.diff, "diff"); else text("Diff", "not recorded (full recording was off)"); if (typeof l.before === "string") text("File before", l.before); break;
       case "hookrun": json("Input", l.input); for (const r of (l.runs as { command: string; ms: number; outcome: string; output?: string }[]) ?? []) text(`$ ${r.command}`, `${r.outcome} · ${dur(r.ms)}${r.output ? `\n${r.output}` : ""}`); json("Result", l.result); break;
-      default: { const { t: _t, ms: _m, kind: _k, agent: _a, detail, ...rest } = l; if (Object.keys(rest).length) json("Fields", rest); else if (detail) text("Detail", detail); }
+      default: { const { t: _t, ms: _m, kind: _k, agent: _a, detail, ...rest } = l; if (Object.keys(rest).length) json("Fields", rest); else if (detail && String(detail).replace(/\s+/g, " ").trim() !== fr.summary) text("Detail", detail); }
     }
     return out;
   }

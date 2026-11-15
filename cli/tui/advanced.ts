@@ -12,6 +12,7 @@ export type PauseMode = "always" | "once";
 export class PauseBook {
   boxes = new Map<Box, PauseMode>();
   /** pause at the next pause point, whatever box it is in ("." in the view) */ next = false;
+  /** pauses also stop subagents (on by default; "u" in the view) */ subagents = true;
   waiting?: { point: PausePoint; box: Box; edit: PauseEdit; since: number; resolve: (e?: PauseEdit) => void };
   get any() { return this.next || this.boxes.size > 0; }
   /** Does the run stop at this point? A "once" pause is used up by it. */
@@ -36,7 +37,7 @@ export class PauseBook {
 }
 
 /** Where the view reads from: the session running here (live), or a saved trace. */
-export type Source = { live: true; title: string } | { live: false; title: string; file: string };
+export type Source = { live: true; title: string } | { live: false; title: string; file?: string };
 
 export class AdvancedView {
   lc: Lifecycle; cur = 0; follow = true; focus: Box = "model"; filter?: Box; scroll = 0; playing = false; source: Source;
@@ -76,6 +77,9 @@ export class AdvancedView {
 const GUARDS = GUARD_NAMES as readonly string[];
 /** In words: where the run is waiting, and what you can change there. */
 export function pauseHelp(p: PausePoint): { where: string; edit: string } {
+  const h = pauseHelpOf(p); return p.agent ? { ...h, where: `subagent ${p.agent}: ${h.where}` } : h;
+}
+function pauseHelpOf(p: PausePoint): { where: string; edit: string } {
   switch (p.at) {
     case "model": return { where: `before model call (step ${p.step + 1} of at most ${p.max})`, edit: "add a note to the model, limit its tools for this call, change the step limit or the guards" };
     case "reply": return { where: `after the model's reply (step ${p.step + 1})`, edit: "edit the reply text or its tool calls" };
@@ -165,7 +169,10 @@ export function advancedKey(app: App, v: AdvancedView, k: Key): boolean {
   else if (ch === "f") { v.filter = v.filter === v.focus ? undefined : v.focus; app.toast(v.filter ? `showing only ${boxLabel(v.filter)}` : "showing every box"); if (v.frame && v.filter && v.frame.box !== v.filter) v.jumpBox(v.filter); }
   else if (ch === "b") { const m = book.cycle(v.focus); app.toast(m === undefined ? `${boxLabel(v.focus)} has no pause points: pauses work on ${Object.keys(PAUSABLE).map((b) => boxLabel(b as Box)).join(", ")}` : m === "off" ? `no pause on ${boxLabel(v.focus)}` : `pause on ${boxLabel(v.focus)} ${m === "once" ? "once" : "every time"}: ${PAUSABLE[v.focus]}`, m === undefined ? "warn" : "info"); }
   else if (ch === ".") { book.next = !book.next; app.toast(book.next ? "pausing at the next pause point" : "no pause at the next point"); }
+  else if (ch === "u") { book.subagents = !book.subagents; app.toast(book.subagents ? "pauses also stop subagents" : "subagents no longer pause"); }
   else if (ch === "o") void app.openAdvancedPicker();
+  else if (ch === "r") void app.replayChat();
+  else if (ch === "F") app.forkHere();
   else if (w && ch === "c") { book.release(); app.toast("going on"); }
   else if (w && ch === "n") { book.release({ next: true }); app.toast("going on to the next pause point"); }
   else if (w && ch === "s") say(pauseOp(book, { op: "skip" }), "skipped");
@@ -217,7 +224,7 @@ export type AdvancedData = {
   /** frames around the current one */ list: (Frame & { i: number })[];
   detail: ReturnType<Lifecycle["detailOf"]>;
   paused?: { box: Box; where: string; edit: string; changes: string; target: ReturnType<typeof editTarget>; at: PausePoint["at"]; calls?: string; tools?: string[]; max?: number; guards: string[] };
-  next: boolean;
+  next: boolean; subagents: boolean;
 };
 const RANK = { plain: 0, ok: 1, you: 2, warn: 3, err: 4 } as const;
 export function advancedData(v: AdvancedView, book: PauseBook, o: { around?: number } = {}): AdvancedData {
@@ -230,7 +237,7 @@ export function advancedData(v: AdvancedView, book: PauseBook, o: { around?: num
   }
   const around = o.around ?? 30, lo = Math.max(0, v.cur - around), list = v.frames.slice(lo, v.cur + around + 1).map((f, k) => ({ ...f, i: lo + k })).filter((f) => !v.filter || f.box === v.filter);
   return {
-    title: v.source.title, live: v.live, follow: v.follow, playing: v.playing, filter: v.filter, focus: v.focus, next: book.next,
+    title: v.source.title, live: v.live, follow: v.follow, playing: v.playing, filter: v.filter, focus: v.focus, next: book.next, subagents: book.subagents,
     boxes: BOXES.map((b) => ({ ...b, count: counts[b.id], pause: book.boxes.get(b.id), pausable: !!PAUSABLE[b.id], active: fr?.box === b.id, from: prev !== undefined && v.frames[prev].box === b.id && fr?.box !== b.id, paused: !!w && w.box === b.id && v.live })),
     cur: v.cur, total: n, chat: fr?.chat ?? 0, chats: v.lc.chats.map((c) => ({ n: c.n, title: c.title, first: c.first })), timeline, list,
     detail: v.lc.detailOf(v.cur),
