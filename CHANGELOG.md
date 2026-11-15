@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 (2026-11-15)
 
 - **Choose the agent's tools** (terminal and desktop), like the tools picker in VS Code's chat, with a third state. `/tools` (desktop: **Inspect → Tools…**) lists every tool in groups: the built-in kinds, each MCP server and each plugin. Each tool or group is **on** (listed in every request), **on demand** (found with `tool_search` when needed: almost free until then) or **off** (never offered; a call is refused). It shows each tool's token cost and what the list costs per request, filters as you type, and saves for this project, all your projects or this chat. A whole MCP server is saved as one entry, so its new tools follow. Subagents never get a tool you switched off. `/tools list` shows the tools in use now.
 - **See what the model sees** (terminal and desktop). `/context` shows the system prompt sent with the last request, the raw messages as JSON (one, or all), and each model call exactly as it was sent: the endpoint and the JSON body that the OpenAI-compatible or Claude adapter built (never the API key), then the reply, its tokens and time. `/context export` writes all of it to a file. Desktop: **System prompt**, **Raw messages** and **Requests** buttons in the Context section and in the Inspect menu.
