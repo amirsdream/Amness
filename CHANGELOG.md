@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.1 (2026-11-15)
 
 - **Reports look like the rest of the app.** `/status`, `/tokens`, `/tools list`, `/help`, `/permissions`, `/hooks`, `/mcp`, `/skills`, `/memory`, `/plugins`, `/models`, `/todos`, `/context` and the other reports are now structured content (key/value rows, tables, lists with status dots, meters, highlighted JSON). The desktop draws them as part of its interface instead of terminal text in a box; the terminal draws them as aligned, coloured columns that wrap once, at the window's width. A command's messages read as plain text. Copy still gives plain text. The desktop panel's section arrows are drawn crisply (a small "▸" read as a dot).
 
