@@ -649,7 +649,7 @@ The command does not run the plugin. The plugin still needs your approval the fi
 /plugins catalog remove <name>        forget a catalog (installed plugins stay)
 ```
 
-In the desktop app, the **Inspect** menu (`Ctrl/⌘ I`) has **Browse plugins…**.
+In the desktop app: **Preferences → Extend → Install plugins**.
 
 **Catalogs.** A catalog is a repository with a `.claude-plugin/marketplace.json` that lists plugins. This is the same format as Claude Code plugin marketplaces. No catalog is added for you. The first `/plugins browse` (or `/plugins catalog add` with no URL) offers these, and you choose:
 

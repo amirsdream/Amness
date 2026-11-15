@@ -318,10 +318,12 @@ export class App {
   private cmdOut: { name: string; lines: string[]; error: boolean } | null = null;
   /** Set while `captureCommand` runs: what the command says and reports goes here instead of the screen. */
   private capture: string[] | null = null;
+  /** With `capture`: the reports a command made, as blocks, for a front end that draws them (the desktop's Preferences). */
+  private captureReports: { title: string; blocks: ReportBlock[] }[] | undefined;
   /** Run a slash command for an API client (the desktop's Preferences, `amness serve`): nothing is shown, its output comes back as styled lines. */
-  async captureCommand(text: string): Promise<string[]> {
-    const before = this.blocks.blocks.length, cap: string[] = [], prev = this.capture; this.capture = cap;
-    try { await this.runCommand(text); } finally { this.capture = prev; }
+  async captureCommand(text: string, reports?: { title: string; blocks: ReportBlock[] }[]): Promise<string[]> {
+    const before = this.blocks.blocks.length, cap: string[] = [], prev = this.capture, prevR = this.captureReports; this.capture = cap; this.captureReports = reports;
+    try { await this.runCommand(text); } finally { this.capture = prev; this.captureReports = prevR; }
     const added = this.blocks.blocks.splice(before); this.blocks.version++;
     return [...added.flatMap((b) => (b.kind === "raw" ? b.lines : b.kind === "notice" ? [b.text] : [])), ...cap];
   }
@@ -343,7 +345,7 @@ export class App {
       const first = strip(body[0] ?? "").trim().toLowerCase();
       if (first && title.toLowerCase().startsWith(first)) body = body.slice(body[1] === "" ? 2 : 1);       // the report's own heading repeats the window title
     }
-    if (this.capture) { this.capture.push(title, ...(blocks ? plainBlocks(blocks) : body)); return; }
+    if (this.capture) { this.capture.push(title, ...(blocks ? plainBlocks(blocks) : body)); this.captureReports?.push({ title, blocks: blocks ?? [{ kind: "text", text: body.map((l) => strip(l)).join("\n") }] }); return; }
     if (!this.structured && body.length > Math.max(6, this.screen.rows - 8)) return this.openPager(body, title, "top");
     void this.showText(body, title, { blocks });
   }

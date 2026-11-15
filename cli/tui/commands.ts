@@ -32,7 +32,7 @@ import type { ReportBlock } from "./report.ts";
 import { THEMES, getTheme, themeNames } from "./themes.ts";
 import { helpLines, renderDiff, toolCall, todoList } from "./view.ts";
 
-/** The reports `/inspect` (and the sidebar, the header chip, the desktop's Inspect menu) open, each as a window. */
+/** What /inspect (and the header chip, and the desktop's Inspect menu) lists: views of the session as it is now. Managing tools, plugins, MCP servers, skills, hooks, rules and memory is in /settings (the desktop's Preferences). */
 export const INSPECT: { label: string; cmd: string; tip: string }[] = [
   { label: "Tokens and cost", cmd: "/tokens", tip: "what fills the context window, usage, cache and cost" },
   { label: "Agent loop", cmd: "/loop", tip: "every step of the last run" },
@@ -41,18 +41,8 @@ export const INSPECT: { label: string; cmd: string; tip: string }[] = [
   { label: "System prompt", cmd: "/context system", tip: "the instructions the model gets first" },
   { label: "Raw messages", cmd: "/context messages", tip: "every message as stored, as JSON" },
   { label: "Requests", cmd: "/context requests", tip: "each model call exactly as it was sent, and its reply" },
-  { label: "Tools", cmd: "/tools", tip: "the tools the agent can use now" },
-  { label: "Harness", cmd: "/harness", tip: "guards, step limit, context budget" },
-  { label: "Permission rules", cmd: "/permissions", tip: "allow, ask and deny rules" },
   { label: "Policy decisions", cmd: "/policy", tip: "why recent actions were allowed or refused" },
-  { label: "Hooks", cmd: "/hooks", tip: "lifecycle hooks in effect" },
   { label: "Cache", cmd: "/cache", tip: "what was reused instead of repeated" },
-  { label: "MCP servers", cmd: "/mcp", tip: "servers, their tools and status" },
-  { label: "Skills", cmd: "/skills", tip: "skills and which ones were used" },
-  { label: "Subagents", cmd: "/agents", tip: "built-in and custom subagents" },
-  { label: "Memory", cmd: "/memory", tip: "saved notes" },
-  { label: "Plugins", cmd: "/plugins", tip: "plugins loaded and installed" },
-  { label: "Browse plugins…", cmd: "/plugins browse", tip: "install one from a catalog (some catalogs are offered)" },
   { label: "Background tasks", cmd: "/bg", tip: "tasks in their own worktree" },
   { label: "Processes", cmd: "/procs", tip: "commands left running" },
 ];
@@ -892,7 +882,7 @@ export function buildCommands(): Cmd[] {
       a.say(`${green("✓")} ${arg}\n${dim(h.tools.length + " tools: " + h.tools.slice(0, 6).map((t) => t.name).join(", ") + (h.tools.length > 6 ? "…" : "") + ". Tools that change things will ask first.")}`);
     } },
     { name: "init", help: "have the agent write AGENTS.md for this repo", run: (a) => a.turn(INIT_PROMPT) },
-    { name: "inspect", help: "open a report as a window: tokens, tools, status, MCP servers, skills, hooks and more", live: true, run: async (a) => {
+    { name: "inspect", help: "look at the session: tokens and cost, the agent loop, status, what the model sees, policy decisions, cache, background work", live: true, run: async (a) => {
       const c = await a.pick("Inspect", INSPECT.map((x) => ({ label: x.label, value: x.cmd, hint: `${x.cmd} · ${x.tip}` })));
       if (c) await a.runCommand(c);
     } },

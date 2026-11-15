@@ -233,11 +233,13 @@ export class DesktopBridge {
     return { results, settings: this.settings() };
   }
   /** Run a terminal command without showing its output in the conversation (Preferences uses this); returns what it said, as plain lines. */
-  async command(text: string): Promise<string[]> {
+  async command(text: string): Promise<string[]> { return (await this.commandWithReports(text)).lines; }
+  /** The same, with the reports the command made as blocks (Preferences draws them like the report windows). */
+  async commandWithReports(text: string): Promise<{ lines: string[]; reports: { title: string; blocks: ReportBlock[] }[] }> {
     if (!/^\/[a-z-]+(\s|$)/.test(text)) throw new Error("not a command");
-    const lines = await this.app.captureCommand(text);
+    const reports: { title: string; blocks: ReportBlock[] }[] = [], lines = await this.app.captureCommand(text, reports);
     this.fullSync(); this.changed();
-    return lines.map((l) => strip(l).trim()).filter(Boolean);
+    return { lines: lines.map((l) => strip(l).trim()).filter(Boolean), reports };
   }
 
   // ------------------------------------------------------------------ window -> App

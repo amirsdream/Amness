@@ -29,7 +29,7 @@
 
   model.click(); await until(() => !!$(".popover"));
   const items = $$(".popover .opt");
-  r.everyMenuItemHasTip = items.length >= 9 && items.every((x) => x.dataset.tip || x.getAttribute("title"));
+  r.everyMenuItemHasTip = items.length >= 6 && items.every((x) => x.dataset.tip || x.getAttribute("title"));
   const effort = items.find((x) => /Reasoning effort/.test(x.textContent)); over(effort);
   r.menuTip = await until(shown) && /thinks before it answers/.test(tip().textContent) && tip().querySelector(".kbd") === null;
   const er = effort.getBoundingClientRect(), tr = tip().getBoundingClientRect();

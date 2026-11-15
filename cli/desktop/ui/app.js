@@ -20,28 +20,17 @@ const run = (text) => tryApi("/api/send", { text });
 /** What the Inspect menu opens: each is the terminal's own report, shown as a window (never in the conversation). `ws`: also a button in the Workspace section. */
 const INSPECT = [
   { group: "This conversation" },
-  { label: "Tokens and cost", cmd: "/tokens", tip: "What fills the context window, tokens in and out, cache and an estimated cost", ws: true },
-  { label: "Agent loop", cmd: "/loop", tip: "Every step of the last run: model calls, tools and what the guards did", ws: true },
+  { label: "Tokens and cost", cmd: "/tokens", tip: "What fills the context window, tokens in and out, cache and an estimated cost" },
+  { label: "Agent loop", cmd: "/loop", tip: "Every step of the last run: model calls, tools and what the guards did" },
   { label: "Todos", cmd: "/todos", tip: "The agent's checklist for this task" },
-  { label: "Status", cmd: "/status", tip: "Model, mode, project and session", ws: true },
+  { label: "Status", cmd: "/status", tip: "Model, mode, project and session" },
+  { group: "What the model sees" },
   { label: "System prompt", cmd: "/context system", tip: "The instructions the model gets first, as sent with the last request" },
   { label: "Raw messages", cmd: "/context messages", tip: "Every message of this conversation as stored, as JSON: pick one or see them all" },
   { label: "Requests", cmd: "/context requests", tip: "Each model call exactly as it was sent (the JSON body, without the key) and its reply" },
-  { group: "Agent" },
-  { label: "Tools…", cmd: "/tools", tip: "Choose the agent's tools: on, on demand (found when needed) or off, per tool or per MCP server", ws: true },
-  { label: "Harness", cmd: "/harness", tip: "The agent loop's settings: guards, step limit, context budget" },
-  { label: "Permission rules", cmd: "/permissions", tip: "What runs without asking, what asks and what is refused" },
+  { group: "Activity" },
   { label: "Policy decisions", cmd: "/policy", tip: "Why recent actions were allowed, asked about or refused" },
-  { label: "Hooks", cmd: "/hooks", tip: "Lifecycle hooks in effect" },
   { label: "Cache", cmd: "/cache", tip: "What the harness reused instead of repeating, and the server's prefix cache" },
-  { group: "Extensions" },
-  { label: "MCP servers", cmd: "/mcp", tip: "Connected MCP servers, their tools and status", ws: true },
-  { label: "Skills", cmd: "/skills", tip: "Skills the agent can load, and which ones it used", ws: true },
-  { label: "Subagents", cmd: "/agents", tip: "Built-in and custom subagents" },
-  { label: "Memory", cmd: "/memory", tip: "Saved memory notes", ws: true },
-  { label: "Plugins", cmd: "/plugins", tip: "Plugins loaded and installed from a source" },
-  { label: "Browse plugins…", cmd: "/plugins browse", tip: "Install a plugin or skills from a catalog of open-source plugins (you choose which catalogs)" },
-  { group: "Running" },
   { label: "Background tasks", cmd: "/bg", tip: "Tasks running in their own worktree" },
   { label: "Processes", cmd: "/procs", tip: "Commands the agent left running, such as a dev server" },
 ];
@@ -602,15 +591,13 @@ function renderPanel() {
   out.push(sec("Context", d.series?.length > 1 ? `${d.series.length} requests` : "", d.requests?.length > 1 ? requestChart(d.requests, d.ctxMax) : d.series?.length > 1 ? spark(d.series, 248, 26) : null,
     d.map?.length ? h("div", { class: "ctxbar" }, d.map.filter((m) => m.pct > 0).map((m) => h("span", { title: `${m.label} ${m.pct}%`, style: `width:${m.pct}%;background:${themeColor(m.color)}` }))) : null,
     d.map?.length ? h("div", { class: "ctxmap" }, d.map.filter((m) => m.pct > 0).map((m) => h("div", { class: "cm" }, h("span", { class: "sw", style: `background:${themeColor(m.color)}` }), h("span", { text: m.label }), h("span", { class: "faint", text: `${m.pct}%` })))) : null,
-    kv([u.reasoning ? ["reasoning", fmtTokens(u.reasoning)] : null, b !== null ? ["budget", `${b}% of ${fmtTokens(d.budget.max)}`] : null, ["requests", String(u.calls)]]),
-    h("div", { class: "row-btns" }, [["System prompt", "/context system", "The instructions the model gets first"], ["Raw messages", "/context messages", "Every message as stored, as JSON"], ["Requests", "/context requests", "Each model call exactly as sent, and its reply"]].map(([l, c, tip]) => h("button", { class: "btn xs", title: `${tip} (${c})`, onclick: () => run(c) }, l)))));
+    kv([u.reasoning ? ["reasoning", fmtTokens(u.reasoning)] : null, b !== null ? ["budget", `${b}% of ${fmtTokens(d.budget.max)}`] : null, ["requests", String(u.calls)]])));
   out.push(sec("Session", d.model, kv([["model", d.model], d.api && ["api", d.api], d.effort && ["effort", d.effort], ...Object.entries(d.roles || {}).map(([r, l]) => [r, l]), ["branch", d.branch || "no git"], ["mode", { default: "Ask", acceptEdits: "Auto-edit", plan: "Plan", yolo: "Yolo" }[d.mode] || d.mode], d.sandbox && d.sandbox !== "off" && ["sandbox", d.sandbox]])));
   if (d.tasks?.length) out.push(sec("Tasks", String(d.tasks.filter((x) => x.status === "running").length || d.tasks.length), ...d.tasks.map((x) => h("div", { class: "proc", title: `/bg show ${x.id}` }, h("span", { class: `dot ${x.status === "running" ? "on" : ""}` }), h("span", { text: `${x.id}. ${x.task.slice(0, 48)}` }), h("span", { class: "faint", text: x.status === "running" ? `${x.secs}s` : x.changed ? `${x.status} · ${x.changed} files · /bg apply ${x.id}` : x.status })))));
   if (d.procs?.length) out.push(sec("Background", String(d.procs.length), ...d.procs.map((p) => h("div", { class: "proc" }, h("span", { class: `dot ${p.status === "running" ? "on" : ""}` }), h("span", { class: "mono", text: p.name }), h("span", { class: "faint", text: `${p.status} · ${p.secs}s` })))));
   if (d.skills?.length) { const used = d.skills.filter((x) => x.uses > 0).length; out.push(sec("Skills", `${used ? used + " used · " : ""}${d.skills.length}`, h("div", { class: "chips" }, d.skills.map((x) => h("button", { class: `chip-s ${x.uses ? "on" : x.off ? "off" : ""}`, title: x.off ? "switched off" : x.uses ? `used ${x.uses}×` : "available", onclick: () => run(`/skills show ${x.name}`) }, x.name, x.uses ? h("span", { class: "n", text: ` ${x.uses}` }) : null))))); }
   if (d.pluginStatus?.length) out.push(sec("Plugins", String(d.pluginStatus.length), ...d.pluginStatus.map((p) => h("div", { class: "small muted", text: p }))));
-  out.push(sec("Workspace", `${d.tools} tools`, kv([["tools", String(d.tools)], ["MCP servers", String(d.mcp)], ["memory notes", String(d.memory)]]),
-    h("div", { class: "row-btns" }, INSPECT.filter((x) => x.ws).map((x) => h("button", { class: "btn xs", title: `${x.tip} (${x.cmd})`, onclick: () => run(x.cmd) }, x.label)))));
+  out.push(sec("Workspace", `${d.tools} tools`, kv([["tools", String(d.tools)], ["MCP servers", String(d.mcp)], ["memory notes", String(d.memory)]])));
   out.push(sec("Project", s.project, h("div", { class: "small muted wrap", text: s.cwd }),
     h("div", { class: "row-btns" }, h("button", { class: "btn xs", onclick: openProjectPicker }, "Open another…"), window.amnessDesktop ? h("button", { class: "btn xs", onclick: () => window.amnessDesktop.reveal(s.cwd) }, "Show in folder") : null)));
   if (d.tip) out.push(h("div", { class: "tip" }, h("b", { text: "Tip · " }), d.tip));
@@ -955,10 +942,7 @@ function modelMenu() {
     popItem("Providers and API keys…", () => run("/connect"), undefined, "Add, replace or remove a key for each provider, local servers included (/connect)"),
     popItem("Switch provider…", () => run("/provider"), undefined, "Use another provider: Claude, OpenAI, OpenRouter, Ollama or any OpenAI-compatible server (/provider)"),
     h("div", { class: "sep" }), popItem("Models for roles (explore, review…)", () => run("/models"), undefined, "A different model of the same provider for one job, such as a cheaper one for exploring (/models)"),
-    popItem("Fallback model", () => run("/models"), undefined, "The model to answer from when the main one is overloaded or not reachable (/models fallback)"),
-    popItem("Budget…", () => run("/budget"), undefined, "The most tokens this conversation may use before Amness stops and asks (/budget)"),
-    popItem("Token use", () => run("/tokens"), undefined, "What fills the context window now: system prompt, tools, messages, file reads (/tokens)"),
-    popItem("Cache", () => run("/cache"), undefined, "How much of each request the provider read from its prompt cache, and what that saved (/cache)")]);
+    popItem("Fallback model", () => run("/models"), undefined, "The model to answer from when the main one is overloaded or not reachable (/models fallback)")]);
 }
 function renameSession() {
   const inp = h("input", { type: "text", value: state?.session.title || "", autofocus: true });
@@ -1131,6 +1115,21 @@ const row = (label, desc, ...ctl) => h("div", { class: "pref" }, h("div", { clas
 async function setting(cmd) { try { const r = await api("/api/command", { text: cmd }); if (r.lines?.length) toast("ok", r.lines[0].slice(0, 160)); } catch (e) { toast("error", e.message); } }
 const onoff = (v) => (v ? "on" : "off");
 
+/** Line icons for the Preferences tabs, in the toolbar's style (24×24, 2px stroke). Fixed markup, never user text. */
+const TAB_ICONS = {
+  appearance: '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  model: '<path d="M12 3 3 8l9 5 9-5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  limits: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 16v-3M12 16V9M17 16v-6"/>',
+  harness: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
+  safety: '<path d="M12 21s7-3.5 7-9.5V5.5L12 3 5 5.5v6c0 6 7 9.5 7 9.5z"/><path d="m9 12 2 2 4-4"/>',
+  folders: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  advanced: '<path d="M4 21v-6M4 11V3M12 21v-9M12 8V3M20 21v-4M20 13V3M2 15h4M10 8h4M18 17h4"/>',
+  extend: '<path d="M10 3h4v3a2 2 0 1 0 4 0V3h3v7h-3a2 2 0 1 0 0 4h3v7h-7v-3a2 2 0 1 0-4 0v3H3v-7h3a2 2 0 1 0 0-4H3V3z"/>',
+  about: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/>',
+};
+function tabIcon(id) { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", "ico ic"); s.setAttribute("aria-hidden", "true"); s.innerHTML = TAB_ICONS[id] ?? '<circle cx="12" cy="12" r="3"/>'; return s; }
 async function showPrefs() {
   let s = (await tryApi("/api/settings")) || {};
   const nav = h("nav", { class: "prefs-nav" }), body = h("div", { class: "prefs-body" }), foot = h("footer", { class: "prefs-foot" });
@@ -1182,15 +1181,20 @@ async function showPrefs() {
     if (it.kind === "choice") return sel(it.options.map((o) => [o.value, o.label]), String(v), stage(it.id));
     if (it.kind === "action") {
       // Runs here, quietly: a dialog it opens (a picker, a key prompt) appears above Preferences, and its printed result shows under the button. Preferences stays open, on this tab, with your drafts.
-      const shown = outputs.get(it.id), out = h("div", { class: `pout${shown ? "" : " hidden"}` }, ...(shown ? [shown.err ? h("div", { class: "err small", text: shown.text }) : shown.text ? h("pre", { class: "term dialog-term", text: shown.text }) : h("div", { class: "faint small", text: "done" })] : []));
+      // The result goes under the whole row, full width, drawn like the report windows (key/value rows, tables, lists); plain messages as text.
+      const shown = outputs.get(it.id), close = () => { outputs.delete(it.id); out.classList.add("hidden"); out.replaceChildren(); };
+      const body = (o) => o.err ? [h("div", { class: "err small", text: o.text })] : o.reports?.length ? o.reports.map((r) => reportView(r.blocks)) : o.text ? [h("div", { class: "rtext" }, o.text.split("\n").map((l) => h("p", { text: l })))] : [];
+      const out = h("div", { class: `pout${shown ? "" : " hidden"}` }, ...(shown ? [h("button", { class: "pout-close", title: "Hide", "aria-label": "Hide", onclick: close }, "✕"), ...body(shown)] : []));
       const btn = h("button", { class: "btn small", onclick: async () => {
-        btn.disabled = true; out.classList.remove("hidden"); out.replaceChildren(h("div", { class: "faint small", text: "running…" }));
-        try { const r = await api("/api/command", { text: it.command }); outputs.set(it.id, { text: (r.lines ?? []).join("\n") }); }
+        btn.disabled = true; out.classList.remove("hidden"); out.replaceChildren(h("div", { class: "faint small", text: "Running…" }));
+        try { const r = await api("/api/command", { text: it.command }); if ((r.lines ?? []).length || r.reports?.length) outputs.set(it.id, { text: (r.lines ?? []).join("\n"), reports: r.reports }); else outputs.delete(it.id); }   // a button that only opened a window leaves nothing under the row
         catch (e) { outputs.set(it.id, { text: e.message, err: true }); }
         const n = await tryApi("/api/settings"); if (n) s = n;
-        refreshValues();                                                            // fresh values, the result under the button, the same tab, your drafts kept
+        refreshValues();                                                            // fresh values, the result under the row, the same tab, your drafts kept
+        requestAnimationFrame(() => document.querySelector(`.pref[data-key="${it.id}"] .pout`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));   // the result can be below the visible part
       } }, it.button ?? "Open…");
-      return h("div", { class: "pact" }, btn, out);
+      const pact = h("div", { class: "pact" }, btn); pact._out = out;              // the row puts the output under itself (see shared())
+      return pact;
     }
     if (it.kind === "secret") { const i = h("input", { type: "password", placeholder: v ? `${v} · type to replace, or clear` : it.placeholder ?? "", autocomplete: "off" }); if (draft.has(it.id)) i.value = String(draft.get(it.id)); i.onchange = () => stage(it.id)(i.value.trim()); return i; }
     if (it.kind === "list") {
@@ -1209,12 +1213,12 @@ async function showPrefs() {
   };
   const SCOPE = { chat: "this chat", project: "this project", team: "team", user: "all projects" };
   const SCOPE_TIP = { chat: "Set for this chat only: not saved.", project: "Set for this project only (.amness/settings.local.json, yours, kept out of git).", team: "Set by the project's team file (.amness/settings.json). A change here is saved for you in this project.", user: "Set for all your projects (~/.amness/config.json)." };
-  const shared = (id) => { const g = (s.groups ?? []).find((x) => x.id === id); return g ? g.items.map((it) => { const r = prow(it.id, false, it.label, it.help, control(it)); if (SCOPE[it.scope]) r.querySelector(".pl").append(h("span", { class: `scope scope-${it.scope}`, text: SCOPE[it.scope], "data-tip": SCOPE_TIP[it.scope] })); return r; }) : []; };
+  const shared = (id) => { const g = (s.groups ?? []).find((x) => x.id === id); return g ? g.items.map((it) => { const c = control(it), r = prow(it.id, false, it.label, it.help, c); if (c._out) r.append(c._out); if (SCOPE[it.scope]) r.querySelector(".pl").append(h("span", { class: `scope scope-${it.scope}`, text: SCOPE[it.scope], "data-tip": SCOPE_TIP[it.scope] })); return r; }) : []; };
   const draw = () => {
     const groups = (s.groups ?? []).filter((g) => g.id !== "chat");
-    const TABS = [["appearance", "◐", "Appearance"], ["chat", "✉", "Chat"], ...groups.map((g) => [g.id, { model: "◆", limits: "▤", harness: "⟳", safety: "⛨", folders: "▣", search: "⌕", advanced: "⚙", extend: "✚" }[g.id] ?? "·", g.label]), ["about", "ⓘ", "About"]];
+    const TABS = [["appearance", "Appearance"], ["chat", "Chat"], ...groups.map((g) => [g.id, g.label]), ["about", "About"]];
     if (!TABS.some((t) => t[0] === prefsTab)) prefsTab = "appearance";
-    nav.replaceChildren(...TABS.map(([id, ic, l]) => h("button", { class: id === prefsTab ? "on" : "", dataset: { tab: id }, onclick: () => { prefsTab = id; draw(); } }, h("span", { class: "ic", text: ic }), l, h("span", { class: "dot" }))));
+    nav.replaceChildren(...TABS.map(([id, l]) => h("button", { class: id === prefsTab ? "on" : "", dataset: { tab: id }, onclick: () => { prefsTab = id; draw(); } }, tabIcon(id), l, h("span", { class: "dot" }))));
     const lead = (g) => h("div", { class: "lead", text: g?.lead ?? "" });
     const sections = {
       appearance: [h("h2", { text: "Appearance" }), h("div", { class: "lead", text: "How this window looks. You see changes at once; they are kept when you apply." }),

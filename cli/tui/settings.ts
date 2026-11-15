@@ -49,7 +49,7 @@ export const GROUPS: { id: string; label: string; lead: string }[] = [
   { id: "folders", label: "Folders and trust", lead: "Which folders Amness may work in." },
   { id: "search", label: "Search and memory", lead: "Web search and the agent's notes." },
   { id: "advanced", label: "Advanced", lead: "Rarely needed." },
-  { id: "extend", label: "Extend", lead: "Your own code and tools: plugins, hooks, skills, subagents, MCP servers, per-model profiles. Each opens its own view." },
+  { id: "extend", label: "Extend", lead: "The agent's tools and what extends it: plugins (yours or from a catalog), MCP servers, skills, subagents, hooks and per-model profiles." },
   { id: "terminal", label: "Terminal", lead: "How the terminal app looks and types." },
 ];
 
@@ -117,7 +117,7 @@ const DEFS: Def[] = [
   { group: "safety", id: "approvalReviewer", label: "Approval reviewer", help: "A second model pre-approves clearly safe risky calls (never the safety floor).", kind: "toggle", read: (a) => ({ value: !!a.cfg.approvalReviewer }), write: (_, v) => `/approver ${onoff(v)}` },
   { group: "safety", id: "quarantine", label: "Read untrusted content separately", help: "Dual LLM: web pages and MCP results are read by a separate model call that has no tools; the agent sees only its digest, so instructions hidden in the content cannot reach it. One extra (cheap-model) call per untrusted result.", kind: "toggle",
     read: (a) => ({ value: !!a.cfg.quarantine }), write: (_, v) => (a) => { a.cfg.quarantine = !!v || undefined; a.saveConfig(); a.buildAgent(); return `untrusted content ${v ? "is read by a separate, tool-less reader first" : "goes to the agent directly (marked untrusted)"}`; } },
-  { group: "safety", id: "permissions", label: "Permission rules", help: "Allow, ask and deny rules for tools and commands.", kind: "action", command: "/permissions", button: "Show…" },
+  { group: "safety", id: "permissions", label: "Permission rules", help: "Allow, ask and deny rules for tools and commands.", kind: "action", command: "/permissions", button: "Show" },
   // folders and trust
   { group: "folders", id: "dirs", label: "Folders outside this project", help: "The file tools may use these too. Saved ones stay for this project; the others end with the session.", kind: "list", placeholder: "/path/to/folder",
     read: (a) => ({ entries: [...a.savedDirs.map((d) => ({ value: d, hint: "saved" })), ...a.sessionDirs.map((d) => ({ value: d, hint: "this session" }))] }),
@@ -135,7 +135,7 @@ const DEFS: Def[] = [
   { group: "search", id: "tavilyKey", label: "Tavily key", help: "Better web search (tavily.com). Kept in your system's key store. Empty removes it.", kind: "secret", placeholder: "not set",
     read: (a) => ({ value: a.cfg.tavilyKey ? mask(a.cfg.tavilyKey) : "" }), write: (_, v) => (a) => { a.cfg.tavilyKey = String(v) || undefined; a.saveConfig(); a.buildAgent(); return v ? "Tavily key saved: web search uses Tavily" : "Tavily key removed"; } },
   { group: "search", id: "embeddings", label: "Semantic memory", help: "Find notes by meaning: note text and your messages are sent to your provider's embeddings endpoint (not Claude).", kind: "toggle", read: (a) => ({ value: !!a.cfg.embeddings }), write: (_, v) => `/memory embeddings ${onoff(v)}` },
-  { group: "search", id: "memory", label: "Memory notes", help: "What the agent remembered across sessions: list, add or forget notes.", kind: "action", command: "/memory", button: "Show…" },
+  { group: "search", id: "memory", label: "Memory notes", help: "What the agent remembered across sessions: list, add or forget notes.", kind: "action", command: "/memory", button: "Show" },
   // advanced
   { group: "advanced", id: "shell", label: "Shell", help: "Which shell runs the agent's commands.", kind: "choice", read: (a) => ({ value: a.cfg.shell ?? "auto", options: ["auto", ...SHELL_CHOICES.filter((x) => x !== "auto")].map((x) => ({ value: x, label: x })) }), write: (_, v) => `/shell ${v}` },
   { group: "advanced", id: "strategy", label: "Loop strategy", help: "Plan first, explore then act, or none.", kind: "choice", read: (a) => ({ value: a.cfg.strategy ?? "off", options: ["off", ...Object.keys(STRATEGIES)].map((x) => ({ value: x, label: x })) }), write: (_, v) => `/strategy ${v}` },
@@ -153,13 +153,15 @@ const DEFS: Def[] = [
   { group: "terminal", id: "diffMode", label: "Diff layout", help: "How edits are shown: side by side when there is room, stacked, or split.", kind: "choice", only: "terminal", read: (a) => (a.full ? { value: a.full.diffMode, options: ["auto", "stacked", "split"].map((x) => ({ value: x, label: x })) } : null), write: (_, v) => `/diffmode ${v}` },
   { group: "terminal", id: "vim", label: "Vim keys", help: "Vim-style editing in the input box (Esc for normal mode).", kind: "toggle", only: "terminal", read: (a) => ({ value: !!a.cfg.vim }), write: (_, v) => `/vim ${onoff(v)}` },
   // extend: views of your own code and tools (each a command with its own dialog)
-  { group: "extend", id: "plugins", label: "Plugins", help: "Code in .amness/plugins (and ~/.amness/plugins) that adds tools, hooks, gates, routing, memory, commands and eval graders.", kind: "action", command: "/plugins", button: "Show…" },
-  { group: "extend", id: "hooks", label: "Hooks", help: "Commands that run before or after tool calls and model turns (.amness/hooks.json, ~/.amness/hooks.json).", kind: "action", command: "/hooks", button: "Show…" },
-  { group: "extend", id: "skills", label: "Skills", help: "SKILL.md instructions the agent loads when a task matches: list, add, switch on or off, review drafts.", kind: "action", command: "/skills", button: "Show…" },
-  { group: "extend", id: "agents", label: "Subagents", help: "Custom subagents in .amness/agents/*.md that the agent can hand work to.", kind: "action", command: "/agents", button: "Show…" },
-  { group: "extend", id: "mcp", label: "MCP servers", help: "Tool servers attached to this session. Attach one with /mcp <command>.", kind: "action", command: "/mcp list", button: "Show…" },
-  { group: "extend", id: "profile", label: "Model profile", help: "Settings for this model only (~/.amness/profile.json, .amness/profile.json): guards off, limits, tool choice.", kind: "action", command: "/profile", button: "Show…" },
-  { group: "extend", id: "tools", label: "Tools", help: "Choose the agent's tools: on, on demand (found when it needs them) or off, per tool or per MCP server.", kind: "action", command: "/tools", button: "Choose…" },
+  { group: "extend", id: "tools", label: "Tools", help: "Choose the agent's tools: on, on demand (found when it needs them) or off, per tool or per MCP server. Shows what the tool list costs in every request.", kind: "action", command: "/tools", button: "Choose…" },
+  { group: "extend", id: "pluginsBrowse", label: "Install plugins", help: "Plugins and skills from open-source catalogs (Claude Code plugins and Amness plugins). You choose the catalogs; nothing installs without showing what it brings.", kind: "action", command: "/plugins browse", button: "Browse…" },
+  { group: "extend", id: "plugins", label: "Plugins", help: "What is loaded and installed: code plugins in .amness/plugins (and ~/.amness/plugins), and plugins installed from a source.", kind: "action", command: "/plugins", button: "Show" },
+  { group: "extend", id: "catalogs", label: "Plugin catalogs", help: "Repositories that list plugins (a .claude-plugin/marketplace.json). Add one, or pick from known ones.", kind: "action", command: "/plugins catalog add", button: "Add…" },
+  { group: "extend", id: "mcp", label: "MCP servers", help: "Tool servers: yours (all projects or this project) and the project's .mcp.json once you trust it. Add one with /mcp add <name> <command | url>.", kind: "action", command: "/mcp list", button: "Show" },
+  { group: "extend", id: "skills", label: "Skills", help: "SKILL.md instructions the agent loads when a task matches. Add, switch on or off, and review drafts with /skills.", kind: "action", command: "/skills", button: "Show" },
+  { group: "extend", id: "agents", label: "Subagents", help: "Custom subagents in .amness/agents/*.md (or .claude/agents) that the agent can hand work to.", kind: "action", command: "/agents", button: "Show" },
+  { group: "extend", id: "hooks", label: "Hooks", help: "Commands that run before or after tool calls and model turns (.amness/hooks.json, ~/.amness/hooks.json).", kind: "action", command: "/hooks", button: "Show" },
+  { group: "extend", id: "profile", label: "Model profile", help: "Settings for this model only (~/.amness/profile.json, .amness/profile.json): guards off, limits, tool choice.", kind: "action", command: "/profile", button: "Show" },
 ];
 
 /** Set (or with undefined, remove) one field of `model`'s entry in the user's profile file, keeping everything else in it. */
