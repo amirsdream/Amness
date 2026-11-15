@@ -158,6 +158,8 @@ In the full-screen view, the **most recent** tool call stays open. A shell comma
 
 **Sessions.** `/rename <name>` names the current conversation. `/resume` shows a preview of each conversation, and you can type to search. `amness chat --resume <name>` starts with a named conversation.
 
+Conversations are saved in `.amness/chats/<id>.jsonl`, one JSON object per line. The first line holds the whole conversation; each save after it adds only what changed (new messages and turns, a cut after `/rewind` or a compaction, a new title). So a crash during a save loses at most that save, never the conversation. When the added lines grow larger than the first one, Amness writes the file again as one line. `index.json` in the same folder keeps the list for `/resume` and the desktop's chat list, so the list stays fast with many conversations. You can delete it: Amness builds it again. Conversations saved by an older Amness (`<id>.json`) still open, and become `.jsonl` the next time they are saved. To read one by hand: `jq -c . .amness/chats/<id>.jsonl`.
+
 **Example.**
 
 ```text

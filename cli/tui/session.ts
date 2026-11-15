@@ -1,7 +1,7 @@
 // Conversation persistence per project, plus undo/rewind of the file changes each turn made.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import type { Message } from "../../src/index.ts";
 import type { Snapshots } from "../../src/index.ts";
 
@@ -29,24 +29,110 @@ export const newSession = (cwd: string, model: string): SessionData => ({
 
 const contentHash = (s: SessionData) => createHash("sha1").update(JSON.stringify([s.messages, s.turns])).digest("hex");
 
+/** Write a file in one step: a crash leaves the old file or the new one, never half of one. */
+function writeAtomic(file: string, text: string) { const tmp = `${file}.${process.pid}.tmp`; writeFileSync(tmp, text); renameSync(tmp, file); }
+
+/** One line of a conversation file. The first is a whole snapshot; later ones only say what changed (append-only, like Claude Code's transcripts). */
+type Line =
+  | { k: "head"; s: Omit<SessionData, "messages" | "turns">; messages: Message[]; turns: Turn[] }
+  | { k: "meta"; set: Partial<Omit<SessionData, "messages" | "turns">> }
+  | { k: "msg"; m: Message } | { k: "cut"; messages: number }
+  | { k: "turn"; t: Turn } | { k: "cutTurns"; turns: number };
+/** What was last written for a conversation, so the next save appends only the difference. */
+type Written = { msgs: string[]; turns: string[]; meta: Record<string, string>; bytes: number; snap: number };
+const metaOf = (s: SessionData): Record<string, string> => { const { messages: _m, turns: _t, ...rest } = s; void _m; void _t; return Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, JSON.stringify(v)])); };
+const infoOf = (s: SessionData): SessionInfo => ({ id: s.id, title: s.title, updated: s.updated, turns: s.turns.length, model: s.model });
+
+/** Replay a conversation file. A line that does not parse (a crash cut the last one short) ends the replay: everything before it is kept. */
+export function replay(text: string): SessionData | undefined {
+  let s: SessionData | undefined;
+  for (const raw of text.split("\n")) {
+    if (!raw.trim()) continue;
+    let l: Line; try { l = JSON.parse(raw); } catch { break; }
+    if (l.k === "head") s = { ...(l.s as SessionData), messages: l.messages, turns: l.turns };
+    else if (!s) return undefined;
+    else if (l.k === "meta") Object.assign(s, l.set);
+    else if (l.k === "msg") s.messages.push(l.m);
+    else if (l.k === "cut") s.messages.length = Math.min(s.messages.length, l.messages);
+    else if (l.k === "turn") s.turns.push(l.t);
+    else if (l.k === "cutTurns") s.turns.length = Math.min(s.turns.length, l.turns);
+  }
+  return s;
+}
+
+/**
+ * Conversations of one project, in `.amness/chats/<id>.jsonl`. A save appends what changed since the last one (new messages, a cut after a
+ * rewind or a compaction, new turns, changed details), so a crash in the middle of a save loses at most that save, never the conversation.
+ * When the appended lines outgrow the snapshot, the file is written again as one snapshot (atomically). `index.json` keeps the list's
+ * details, checked against each file's time and size, so listing does not read every conversation. Older `<id>.json` files still load
+ * and become `.jsonl` at their next save.
+ */
 export class SessionStore {
   dir: string;
   constructor(cwd: string) { this.dir = join(cwd, ".amness", "chats"); }
-  private file(id: string) { return join(this.dir, id.replace(/[^\w-]/g, "") + ".json"); }
+  private safe(id: string) { return id.replace(/[^\w-]/g, ""); }
+  private file(id: string) { return join(this.dir, this.safe(id) + ".jsonl"); }
+  private legacy(id: string) { return join(this.dir, this.safe(id) + ".json"); }
   /** A hash of each conversation's content as last loaded or saved, so a save that changed nothing keeps its place in the list. */
   private seen = new Map<string, string>();
+  private written = new Map<string, Written>();
   /** Save `s`. Its time (`updated`, which orders the conversation list) moves only when its messages or turns changed: opening another conversation, renaming or a settings change saves too, and must not move it to the top. */
   save(s: SessionData) {
     mkdirSync(this.dir, { recursive: true });
     const h = contentHash(s); if (this.seen.get(s.id) !== h) s.updated = new Date().toISOString();
-    this.seen.set(s.id, h); writeFileSync(this.file(s.id), JSON.stringify(s));
+    this.seen.set(s.id, h);
+    const file = this.file(s.id), w = this.written.get(s.id), msgs = s.messages.map((m) => JSON.stringify(m)), turns = s.turns.map((t) => JSON.stringify(t)), meta = metaOf(s);
+    if (!w || !existsSync(file) || w.bytes > Math.max(256 << 10, w.snap)) { this.snapshot(s, msgs, turns, meta); return; }
+    const out: string[] = [], same = (a: string[], b: string[]) => { let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; };
+    const pm = same(w.msgs, msgs); if (pm < w.msgs.length) out.push(JSON.stringify({ k: "cut", messages: pm })); for (const m of msgs.slice(pm)) out.push(`{"k":"msg","m":${m}}`);
+    const pt = same(w.turns, turns); if (pt < w.turns.length) out.push(JSON.stringify({ k: "cutTurns", turns: pt })); for (const t of turns.slice(pt)) out.push(`{"k":"turn","t":${t}}`);
+    const set: Record<string, unknown> = {}; for (const [k, v] of Object.entries(meta)) if (w.meta[k] !== v) set[k] = JSON.parse(v);
+    if (Object.keys(set).length) out.push(JSON.stringify({ k: "meta", set }));
+    if (!out.length) return;
+    const text = out.join("\n") + "\n"; appendFileSync(file, text);
+    this.written.set(s.id, { msgs, turns, meta, bytes: w.bytes + text.length, snap: w.snap });
+    this.indexPut(s);
   }
-  load(id: string): SessionData | undefined { try { const s = JSON.parse(readFileSync(this.file(id), "utf8")) as SessionData; this.seen.set(s.id, contentHash(s)); return s; } catch { return undefined; } }
+  /** Write the whole conversation as one snapshot line, replacing the file in one step. */
+  private snapshot(s: SessionData, msgs: string[], turns: string[], meta: Record<string, string>) {
+    const { messages: _m, turns: _t, ...head } = s; void _m; void _t;
+    const text = `{"k":"head","s":${JSON.stringify(head)},"messages":[${msgs.join(",")}],"turns":[${turns.join(",")}]}\n`;
+    writeAtomic(this.file(s.id), text); rmSync(this.legacy(s.id), { force: true });
+    this.written.set(s.id, { msgs, turns, meta, bytes: 0, snap: text.length });
+    this.indexPut(s);
+  }
+  load(id: string): SessionData | undefined {
+    let s: SessionData | undefined;
+    try { s = replay(readFileSync(this.file(id), "utf8")); } catch { try { s = JSON.parse(readFileSync(this.legacy(id), "utf8")) as SessionData; } catch { return undefined; } }
+    if (!s) return undefined;
+    this.seen.set(s.id, contentHash(s)); this.written.delete(s.id);        // the next save writes a fresh snapshot: the file may have been written by another window
+    return s;
+  }
+  // ---------------------------------------------------------------- the list, from an index checked against the files
+  private indexFile() { return join(this.dir, "index.json"); }
+  private index(): Record<string, SessionInfo & { mtime: number; size: number; file: string }> { try { return JSON.parse(readFileSync(this.indexFile(), "utf8")).items ?? {}; } catch { return {}; } }
+  private indexPut(s: SessionData) {
+    try { const ix = this.index(), f = this.file(s.id), st = statSync(f); ix[s.id] = { ...infoOf(s), mtime: st.mtimeMs, size: st.size, file: basename(f) }; writeAtomic(this.indexFile(), JSON.stringify({ v: 1, items: ix })); } catch { /* the index is only a cache */ }
+  }
   list(): SessionInfo[] {
     if (!existsSync(this.dir)) return [];
-    return readdirSync(this.dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
-      try { const s = JSON.parse(readFileSync(join(this.dir, f), "utf8")) as SessionData; return s.turns.length ? [{ id: s.id, title: s.title, updated: s.updated, turns: s.turns.length, model: s.model }] : []; } catch { return []; }
-    }).sort((a, b) => b.updated.localeCompare(a.updated));
+    const ix = this.index(), out: SessionInfo[] = [], fresh: typeof ix = {};
+    let changed = false;
+    const names = readdirSync(this.dir), jsonl = new Set(names.filter((f) => f.endsWith(".jsonl")).map((f) => f.slice(0, -6)));
+    for (const f of names) {
+      const isNew = f.endsWith(".jsonl"), isOld = f.endsWith(".json") && f !== "index.json" && !jsonl.has(f.slice(0, -5));
+      if (!isNew && !isOld) continue;
+      const p = join(this.dir, f); let st; try { st = statSync(p); } catch { continue; }
+      const id = f.replace(/\.jsonl?$/, ""), hit = ix[id];
+      let info: SessionInfo | undefined;
+      if (hit && hit.file === f && hit.mtime === st.mtimeMs && hit.size === st.size) info = hit;
+      else { changed = true; try { const s = isNew ? replay(readFileSync(p, "utf8")) : (JSON.parse(readFileSync(p, "utf8")) as SessionData); if (s) info = infoOf(s); } catch { /* unreadable: left out */ } }
+      if (!info) continue;
+      fresh[id] = { ...info, mtime: st.mtimeMs, size: st.size, file: f };
+      if (info.turns) out.push({ id: info.id, title: info.title, updated: info.updated, turns: info.turns, model: info.model });
+    }
+    if (changed || Object.keys(fresh).length !== Object.keys(ix).length) try { writeAtomic(this.indexFile(), JSON.stringify({ v: 1, items: fresh })); } catch { /* read-only folder */ }
+    return out.sort((a, b) => b.updated.localeCompare(a.updated));
   }
   /** A conversation by its name: the exact title first (any case), else the only one whose title contains `q`. */
   find(q: string): SessionData | undefined {
@@ -55,7 +141,7 @@ export class SessionStore {
     return hit ? this.load(hit.id) : undefined;
   }
   latest() { const l = this.list()[0]; return l ? this.load(l.id) : undefined; }
-  remove(id: string) { rmSync(this.file(id), { force: true }); }
+  remove(id: string) { rmSync(this.file(id), { force: true }); rmSync(this.legacy(id), { force: true }); this.written.delete(id); this.seen.delete(id); }
 }
 
 /** Record the pre-edit content for `path` the first time this turn touches it. */
